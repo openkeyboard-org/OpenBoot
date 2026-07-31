@@ -2,7 +2,7 @@ use super::*;
 use crate::image::Image;
 use crate::proto::consts::{
     OB_BOOT_APP, OB_CMD_BOOT, OB_CMD_COMMIT, OB_CMD_CRC, OB_CMD_ERASE, OB_CMD_HELLO, OB_CMD_WRITE,
-    OB_DET_NONE, OB_E_NOT_ERASED, OB_FEAT_CRC_LIVE, OB_OK,
+    OB_DET_NONE, OB_E_NOT_ERASED, OB_FEAT_CRC_LIVE, OB_MAX_WRITE_DATA, OB_OK,
 };
 use crate::proto::{self};
 use crate::testutil::*;
@@ -19,8 +19,8 @@ fn happy_flash_flow() {
         assert_eq!(req.payload, proto::erase_req_payload(0x2000, 4096));
         vec![status_ok(req)]
     });
-    for (i, chunk) in image.bytes.chunks(48).enumerate() {
-        let expected = proto::write_req_payload(0x2000 + (i * 48) as u32, chunk);
+    for (i, chunk) in image.bytes.chunks(OB_MAX_WRITE_DATA).enumerate() {
+        let expected = proto::write_req_payload(0x2000 + (i * OB_MAX_WRITE_DATA) as u32, chunk);
         mock.expect(move |req| {
             assert_eq!(req.cmd, OB_CMD_WRITE);
             assert_eq!(req.payload, expected);
