@@ -49,6 +49,11 @@ impl Frame {
     /// Encode to bytes: header + payload, then CRC-32/ISO-HDLC (LE) over
     /// everything before it. `flags` is always 0 in v0.1.
     pub fn encode(&self) -> Vec<u8> {
+        assert!(
+            self.payload.len() <= OB_MAX_PAYLOAD,
+            "payload of {} bytes exceeds OB_MAX_PAYLOAD",
+            self.payload.len()
+        );
         let mut out = Vec::with_capacity(self.wire_len());
         out.push(self.cmd);
         out.push(self.seq);
@@ -598,6 +603,17 @@ mod tests {
             let f = Frame::new(0x42, len as u8, payload);
             assert_eq!(Frame::decode(&f.encode()).unwrap(), f);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds OB_MAX_PAYLOAD")]
+    fn encode_rejects_directly_constructed_oversized_frame() {
+        Frame {
+            cmd: 0x42,
+            seq: 0,
+            payload: vec![0; OB_MAX_PAYLOAD + 1],
+        }
+        .encode();
     }
 
     #[test]
