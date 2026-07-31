@@ -247,14 +247,14 @@ fn offset_base_rejected_for_flash() {
 #[test]
 fn verify_allows_offset_base_within_region() {
     let image = Image {
-        base: 0x2000,
+        base: 0x3000,
         bytes: vec![0xA5; 64],
     };
     let crc = image.crc32();
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     mock.expect(move |req| {
-        assert_eq!(req.payload, proto::crc_req_payload(0x2000, 64));
+        assert_eq!(req.payload, proto::crc_req_payload(0x3000, 64));
         let mut p = vec![OB_OK];
         p.extend_from_slice(&crc.to_le_bytes());
         vec![ok_resp(req, p)]
