@@ -60,6 +60,9 @@
 /* Erased-block bitmap: 1 bit per erase block of the largest app region
  * (CH592: 440 KiB / 4 KiB = 110 blocks). */
 #define OB_BITMAP_BYTES 16
+#if OB_FLASH_APP_END <= OB_FLASH_APP_START
+#error "application region must be non-empty"
+#endif
 #if (((OB_FLASH_APP_END - OB_FLASH_APP_START + OB_FLASH_ERASE_BLOCK - 1u) / \
       OB_FLASH_ERASE_BLOCK) > (OB_BITMAP_BYTES * 8u))
 #error "application erase-block count exceeds OB_BITMAP_BYTES capacity"
