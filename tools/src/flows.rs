@@ -203,7 +203,7 @@ fn read_device_crc(client: &mut BootClient, addr: u32, len: u32) -> Result<u32> 
 /// COMMIT rejections with E_VERIFY:mismatch mean "flash content does not
 /// match the attested CRC" — surface them as a VerifyMismatch, which
 /// `main` maps to exit code 2. VerifyMismatch must remain the anyhow error
-/// OBJECT (not a #[source] of one): anyhow's downcast sees through
+/// OBJECT (not a `#[source]` of one): anyhow's downcast sees through
 /// .context() layers but not through a nested source chain.
 fn map_commit_mismatch(e: ClientError, local_crc: u32) -> anyhow::Error {
     match &e {
