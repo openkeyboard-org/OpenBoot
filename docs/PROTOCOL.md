@@ -26,7 +26,7 @@ an implementation that cannot round-trip them is wrong.
 
 One logical frame format is used in both directions on both transports:
 
-```
+```text
 offset  size  field
 0       1     cmd      request 0x01..0x7F; response = request | 0x80;
                        0xFF = frame-error report
@@ -66,7 +66,7 @@ Rules:
 When the device receives a locatable candidate frame whose CRC does not
 match, it answers with a frame-error report instead of a command response:
 
-```
+```text
 cmd = 0xFF (OB_CMD_FRAME_ERR)   seq = best-effort echo   len = 2   flags = 0
 payload = [OB_E_CRC, 0x00]
 ```
@@ -129,7 +129,7 @@ response (`transport`: `OB_TRANSPORT_ID_USB = 0x01`,
 On-wire encoding: a 2-byte start-of-frame prefix, then the logical frame
 bytes. There is no end-of-frame marker and no byte escaping.
 
-```
+```text
 0xB0 0x07  cmd seq len flags payload... crc32
 ```
 
