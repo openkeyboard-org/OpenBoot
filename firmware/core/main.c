@@ -22,8 +22,11 @@
 #ifndef OB_IDLE_TIMEOUT_MS               /* board-overridable via build */
 #define OB_IDLE_TIMEOUT_MS 10000u
 #endif
-#define OB_IDLE_POLLS \
-    ((uint32_t)OB_IDLE_TIMEOUT_MS * (1000u / OB_POLL_INTERVAL_US))
+#define OB_IDLE_POLLS OB_MS_TO_POLLS(OB_IDLE_TIMEOUT_MS)
+#if OB_IDLE_TIMEOUT_MS != 0
+_Static_assert(OB_IDLE_POLLS > 0, "enabled idle timeout must take at least one poll");
+_Static_assert(OB_IDLE_POLLS <= UINT32_MAX, "idle timeout poll count exceeds uint32_t");
+#endif
 
 int main(void)
 {

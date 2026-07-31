@@ -24,7 +24,9 @@
 #define ST_COLLECT 2u   /* collecting header/payload/CRC    */
 
 /* Mid-frame inter-byte timeout expressed in tr_poll invocations. */
-#define UART_IDLE_POLLS ((OB_UART_INTERBYTE_MS * 1000u) / OB_POLL_INTERVAL_US)
+#define UART_IDLE_POLLS OB_MS_TO_POLLS(OB_UART_INTERBYTE_MS)
+_Static_assert(UART_IDLE_POLLS > 0, "UART timeout must take at least one poll");
+_Static_assert(UART_IDLE_POLLS <= UINT16_MAX, "UART timeout poll count exceeds uint16_t");
 
 /* FCR init per the EVT IAP: RX trigger 4 bytes, TX+RX FIFO reset, FIFO
  * enable. CH572SFR.h omits the FIFO-clear bit names, so numeric values

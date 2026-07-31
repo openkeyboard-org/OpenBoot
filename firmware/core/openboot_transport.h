@@ -13,7 +13,17 @@
 /* The main loop sleeps this long between tr_poll calls; transports may
  * convert milliseconds to poll counts with this (there is no other time
  * source — the bootloader never enables timers or interrupts). */
-#define OB_POLL_INTERVAL_US 20
+#ifndef OB_POLL_INTERVAL_US
+#define OB_POLL_INTERVAL_US 20u
+#endif
+#if OB_POLL_INTERVAL_US == 0
+#error "OB_POLL_INTERVAL_US must be nonzero"
+#endif
+
+/* Multiply before dividing and round up: a timeout shorter than one poll
+ * still takes one poll, and non-divisor intervals never expire early. */
+#define OB_MS_TO_POLLS(ms) \
+    (((uint64_t)(ms) * 1000u + OB_POLL_INTERVAL_US - 1u) / OB_POLL_INTERVAL_US)
 
 void tr_init(void);
 

@@ -16,6 +16,7 @@ OUT = FW / "build" / "host"
 
 CORE_SRC = [FW / "core" / n for n in ("crc32.c", "boot_core.c", "boot_decision.c")]
 HOST_SRC = [HERE / "ob_host.c"]
+POLL_TEST = HERE / "test_poll_conversion.c"
 
 CFLAGS = [
     "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
@@ -36,6 +37,7 @@ DEPS = CORE_SRC + HOST_SRC + [
     FW / "core" / "openboot_port.h",
     FW / "core" / "openboot_transport.h",
     FW / "core" / "main.c",
+    POLL_TEST,
     ROOT / "protocol" / "openboot_protocol.h",
     Path(__file__).resolve(),
 ]
@@ -56,6 +58,13 @@ def build(cc="cc"):
           "-fsyntax-only", FW / "core" / "boot_decision.c"])
     _run([cc, *CFLAGS, "-DOB_HOST_CH59X", "-Dmain=ob_fw_main",
           "-fsyntax-only", FW / "core" / "main.c"])
+    for interval, millis, expected in ((20, 50, 2500), (333, 1, 4), (1500, 1, 1)):
+        _run([
+            cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
+            f"-I{FW / 'core'}", f"-DOB_POLL_INTERVAL_US={interval}",
+            f"-DOB_TEST_MS={millis}", f"-DOB_EXPECTED_POLLS={expected}",
+            "-fsyntax-only", POLL_TEST,
+        ])
 
 
 def ensure_built(cc="cc"):
