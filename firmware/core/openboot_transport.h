@@ -16,8 +16,8 @@
 #ifndef OB_POLL_INTERVAL_US
 #define OB_POLL_INTERVAL_US 20u
 #endif
-#if OB_POLL_INTERVAL_US == 0
-#error "OB_POLL_INTERVAL_US must be nonzero"
+#if OB_POLL_INTERVAL_US <= 0 || OB_POLL_INTERVAL_US > UINT32_MAX
+#error "OB_POLL_INTERVAL_US must be in the uint32_t range"
 #endif
 
 /* Multiply before dividing and round up: a timeout shorter than one poll
