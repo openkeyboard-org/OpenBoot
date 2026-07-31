@@ -99,7 +99,12 @@ impl HexRecord {
                 offset: addr as u16,
                 bytes: hex_to_bytes(data_hex)?,
             }),
-            1 => Ok(HexRecord::Eof),
+            1 => {
+                if n != 0 || addr != 0 {
+                    bail!("intel hex: EOF record must have byte count 0 and address 0000");
+                }
+                Ok(HexRecord::Eof)
+            }
             2 => Ok(HexRecord::ExtendedSegment(extended_value(t, n, data_hex)?)),
             4 => Ok(HexRecord::ExtendedLinear(extended_value(t, n, data_hex)?)),
             _ => Ok(HexRecord::Ignored),
@@ -352,6 +357,18 @@ mod tests {
             HexRecord::parse_line(":020000021000EC").unwrap(),
             HexRecord::ExtendedSegment(0x1000)
         );
+    }
+
+    #[test]
+    fn eof_requires_zero_count_and_address() {
+        for line in [":0100000100FE", ":00000101FE"] {
+            let err = HexRecord::parse_line(line).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("EOF record must have byte count 0 and address 0000"),
+                "got: {err}"
+            );
+        }
     }
 
     #[test]
