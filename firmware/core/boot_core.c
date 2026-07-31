@@ -55,6 +55,8 @@ static struct {
 #define OB_REC_FRESH   2u  /* committed this power cycle: RAM says valid    */
 
 static uint8_t rec_state;                /* power-cycle-scoped, see above */
+static uint32_t committed_img_len;        /* valid only in OB_REC_FRESH */
+static uint32_t committed_img_crc;        /* exact replay key */
 
 /* WRITE classification against the sequential run. */
 #define WR_FOLD   0u   /* next chunk of the run: fold it on success */
@@ -136,6 +138,8 @@ static uint32_t mutation_begin(void)
      * invalidate leaves the page in an unknown state, and after a good one
      * F26 can keep serving the stale pre-erase record via XIP. */
     rec_state = OB_REC_INVALID;
+    committed_img_len = 0;
+    committed_img_crc = 0;
     r = ob_record_invalidate();
     if (r == 0)
         s.disarmed = 1;
@@ -223,11 +227,15 @@ static uint32_t stream_crc(void)
 static void record_begin_write(void)
 {
     rec_state = OB_REC_INVALID;          /* unknown until the write succeeds */
+    committed_img_len = 0;
+    committed_img_crc = 0;
 }
 
-static void record_note_committed(void)
+static void record_note_committed(uint32_t img_len, uint32_t img_crc)
 {
     rec_state = OB_REC_FRESH;
+    committed_img_len = img_len;
+    committed_img_crc = img_crc;
     s.disarmed = 0;                      /* a later mutation must re-disarm */
 }
 
@@ -256,6 +264,8 @@ void ob_core_init(void)
 {
     memset(&s, 0, sizeof s);
     rec_state = OB_REC_FLASH;
+    committed_img_len = 0;
+    committed_img_crc = 0;
 }
 
 int ob_core_session_active(void)
@@ -387,6 +397,15 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
     if (img_len > ob_app_end() - OB_FLASH_APP_START)
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
 
+    /* A lost success response is safe to retry. The record write itself
+     * makes CH57x XIP unsuitable for re-attestation, so remember the exact
+     * tuple that reached flash and acknowledge only that tuple without
+     * touching the controller again. HELLO deliberately preserves this
+     * power-cycle state; reset and every mutation clear it. */
+    if (rec_state == OB_REC_FRESH && committed_img_len == img_len &&
+        committed_img_crc == img_crc)
+        return ok_resp(resp, OB_CMD_COMMIT, seq);
+
     if (attest_via_xip()) {
         c = ob_xip_crc32(OB_FLASH_APP_START, img_len);
     } else {
@@ -411,7 +430,7 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
         record_note_write_failed();
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_FLASH, (uint8_t)r);
     }
-    record_note_committed();
+    record_note_committed(img_len, img_crc);
     return ok_resp(resp, OB_CMD_COMMIT, seq);
 }
 

@@ -459,6 +459,67 @@ def test_ch57x_bless_via_xip_despite_f26(dev57):
     assert dev57.violations() == 0
 
 
+def test_commit_retry_is_idempotent(dev):
+    """An exact replay after a lost OK must not rewrite the boot record."""
+    image = bytes(range(1, 97))
+    full_update(dev, image)
+    after_first = dev.op_total()
+
+    commit(dev, image, 0x40)
+    assert dev.op_total() == after_first
+    assert dev.record_raw() == expected_record(image)
+
+    hello(dev, 0x41)                    # replay state survives a new session
+    commit(dev, image, 0x42)
+    assert dev.op_total() == after_first
+
+
+def test_bless_commit_retry_is_idempotent(dev):
+    """The CH57x failure mode: record writes dirty XIP after a bless."""
+    image = bytes(range(1, 97))
+    full_update(dev, image)
+    dev.power_cycle()                   # coherent out-of-band image history
+    hello(dev)
+    commit(dev, image, 1)
+    after_bless = dev.op_total()
+
+    commit(dev, image, 2)
+    assert dev.op_total() == after_bless
+    hello(dev, 3)
+    commit(dev, image, 4)
+    assert dev.op_total() == after_bless
+
+
+def test_commit_replay_requires_exact_tuple(dev):
+    image = bytes(range(1, 97))
+    full_update(dev, image)
+    before = dev.op_total()
+    cmd_err(dev, CMD_COMMIT, 0x40,
+            u32(len(image)) + u32(zlib.crc32(image) ^ 1),
+            E_VERIFY, DET_MISMATCH)
+    assert dev.op_total() == before
+
+
+def test_mutation_invalidates_commit_replay(dev):
+    image = bytes(range(1, 97))
+    full_update(dev, image)
+    erase(dev, APP_START, BLOCK, seq=0x40)
+    before = dev.op_total()
+    cmd_err(dev, CMD_COMMIT, 0x41,
+            u32(len(image)) + u32(zlib.crc32(image)), E_VERIFY)
+    assert dev.op_total() == before
+
+
+def test_power_cycle_forgets_commit_replay_cache(dev):
+    image = bytes(range(1, 97))
+    full_update(dev, image)
+    dev.power_cycle()
+    hello(dev)
+    before = dev.op_total()
+    commit(dev, image, 1)
+    assert dev.op_total() == before + 1
+
+
 def test_ch59x_nonseq_commit_ok(dev59):
     """CRC_LIVE: XIP is authoritative, write order is irrelevant."""
     image = bytes(range(16, 80))

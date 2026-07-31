@@ -173,7 +173,7 @@ set is available. There is no session timeout or return to IDLE except reset.
 | `E_FLASH` during mutation | Fail-safe partial state described in section 7 |
 | UART inter-byte gap > 50 ms | RX parser resynchronized only; session untouched |
 | First ERASE or WRITE | Boot record invalidated before the mutation |
-| COMMIT with status OK | Boot record written |
+| COMMIT with status OK | New tuple: boot record written; exact successful replay: existing record remains valid without another write |
 | BOOT mode 0 | Respond, stop transport, reset, and launch the app through the boot decision |
 | BOOT mode 1 | Respond, set the RAM request, and reset back into OpenBoot |
 
@@ -398,11 +398,13 @@ On match the device writes the boot record (section 8) and answers
 is written** — the device never converts an unverified image into a
 bootable one, and a previously invalidated record stays invalid.
 
-The bless path is not retry-idempotent: writing the record dirties flash,
-so if the `[OB_OK]` of a successful bless COMMIT is lost, a retried
-COMMIT answers `E_VERIFY`/nonseq even though the record was installed.
-Hosts recover by power-cycling and re-blessing (or verifying via a fresh
-session's CRC command).
+COMMIT is retry-idempotent. After a successful record write, the device
+remembers the committed `(img_len, img_crc32)` tuple until reset or the next
+flash mutation. An exact replay, including after another HELLO, answers
+`[OB_OK]` without re-attesting or rewriting the record. A different tuple
+follows the normal attestation path. This rule is required for the CH57x
+bless path, where the first record write makes XIP unsuitable for a second
+attestation in the same power cycle.
 
 ### 6.6 BOOT (`0x06`)
 
@@ -647,7 +649,8 @@ Host retry/timeout guidance (matches the reference `openboot` tool):
 | CRC / COMMIT | 3 s |
 
 At most 3 attempts per request, each with a fresh `seq`; responses with a
-stale `seq` are discarded. **BOOT is never retried** (section 6.6).
+stale `seq` are discarded. COMMIT exact-replay behavior is defined in
+section 6.5. **BOOT is never retried** (section 6.6).
 
 ## 12. USB identity
 
