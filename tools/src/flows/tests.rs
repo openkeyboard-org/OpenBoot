@@ -269,9 +269,12 @@ fn erase_all_is_chunked_at_32_kib() {
     // -> 13 full chunks + one 6-block tail = 14 ERASE requests.
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
-    for _ in 0..14 {
-        mock.expect(|req| {
+    for i in 0u32..14 {
+        let addr = 0x2000 + i * ERASE_CHUNK;
+        let len = if i == 13 { 6 * 4096 } else { ERASE_CHUNK };
+        mock.expect(move |req| {
             assert_eq!(req.cmd, OB_CMD_ERASE);
+            assert_eq!(req.payload, proto::erase_req_payload(addr, len));
             vec![status_ok(req)]
         });
     }
@@ -279,11 +282,6 @@ fn erase_all_is_chunked_at_32_kib() {
 
     let erases = mock.sent(OB_CMD_ERASE);
     assert_eq!(erases.len(), 14);
-    assert_eq!(erases[0].payload, proto::erase_req_payload(0x2000, 32768));
-    assert_eq!(
-        erases[13].payload,
-        proto::erase_req_payload(0x6A000, 6 * 4096)
-    );
 }
 
 #[test]
