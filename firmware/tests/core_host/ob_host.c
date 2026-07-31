@@ -24,8 +24,8 @@ static uint8_t  sim_flash[OB_FLASH_APP_END]; /* true content, [0, app_end) */
 static uint8_t  sim_stale[OB_FLASH_APP_END]; /* pre-modification snapshots */
 static uint8_t  blk_erased[SIM_BLOCKS];      /* erased this power cycle */
 static uint8_t  blk_dirty[SIM_BLOCKS];       /* modified this power cycle */
-static uint8_t  sim_record[16];
-static uint8_t  sim_record_stale[16];        /* pre-modification snapshot */
+static uint8_t  sim_record[sizeof(ob_boot_record_t)];
+static uint8_t  sim_record_stale[sizeof(ob_boot_record_t)]; /* pre-modification snapshot */
 static uint8_t  record_dirty;                /* record mutated this power cycle */
 static uint32_t violations;
 static uint32_t op_total;

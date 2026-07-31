@@ -28,6 +28,7 @@
 #ifndef OPENBOOT_PROTOCOL_H
 #define OPENBOOT_PROTOCOL_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* --- protocol version ------------------------------------------------- */
@@ -122,6 +123,26 @@ typedef struct {
     uint32_t img_crc32;  /* CRC-32/ISO-HDLC over [app_start, app_start+img_len) */
     uint32_t rec_crc32;  /* CRC-32/ISO-HDLC over the 12 bytes above */
 } ob_boot_record_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(ob_boot_record_t) == 16, "boot record wire size must be 16 bytes");
+static_assert(alignof(ob_boot_record_t) >= alignof(uint32_t),
+              "boot record must retain uint32_t alignment");
+static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
+              offsetof(ob_boot_record_t, img_len) == 4 &&
+              offsetof(ob_boot_record_t, img_crc32) == 8 &&
+              offsetof(ob_boot_record_t, rec_crc32) == 12,
+              "boot record field offsets must match the stored format");
+#else
+_Static_assert(sizeof(ob_boot_record_t) == 16, "boot record wire size must be 16 bytes");
+_Static_assert(_Alignof(ob_boot_record_t) >= _Alignof(uint32_t),
+               "boot record must retain uint32_t alignment");
+_Static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
+               offsetof(ob_boot_record_t, img_len) == 4 &&
+               offsetof(ob_boot_record_t, img_crc32) == 8 &&
+               offsetof(ob_boot_record_t, rec_crc32) == 12,
+               "boot record field offsets must match the stored format");
+#endif
 
 /* --- app -> bootloader entry request ------------------------------------ */
 /* The application writes OB_BOOTREQ_MAGIC to the reserved top-of-RAM word
