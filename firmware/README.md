@@ -63,14 +63,15 @@ line.
 |---|---|---|
 | `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
 | `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
-| `OB_IDLE_TIMEOUT_MS` | `10000` | Approximate idle auto-boot interval; `0` disables it |
+| `OB_IDLE_TIMEOUT_MS` | `10000` | Nominal idle auto-boot setting; `0` disables it |
 | `OB_BOOT_IMAGE_CRC` | off | Check the complete image CRC on every boot |
 | `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
 The idle timeout counts poll iterations, so it is a lower bound rather than a
-wall-clock deadline under load.
+wall-clock deadline under load. On CH570 USB at 100 MHz, the default `10000`
+setting measured about 273 seconds.
 
 ## Flash the bootloader
 

@@ -29,8 +29,8 @@
 # `return 0` (~82 bytes saved). A board whose package DOES expose a spare pin
 # may set it; ch57x has port A only, so OB_BOOT_PIN_PORT_B must stay 0.
 
-# Idle auto-boot: with a valid boot record and no HELLO received, jump to the
-# app after this many milliseconds. 0 disables the timeout.
+# Idle auto-boot: with a valid boot record and no HELLO received, convert this
+# nominal millisecond setting to a poll count. 0 disables the timeout.
 # NOTE: this counts poll iterations, not wall-clock time. Measured on
 # ch570-usb at 100 MHz the real timeout was ~273 s for this 10000 setting.
 OB_IDLE_TIMEOUT_MS := 10000

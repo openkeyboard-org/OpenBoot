@@ -596,11 +596,11 @@ full image against the record before jumping. This is off by default because
 of its startup cost; record integrity is always checked.
 
 **Idle auto-boot:** a device that stays in the bootloader with a *valid*
-boot record starts a timer (default 10 s, board-overridable via
-`OB_IDLE_TIMEOUT_MS`). If the timer expires while still in IDLE — no
-successful HELLO this power cycle — the device boots the app, so a device
-that entered the bootloader by strap glitch or stray boot request recovers
-by itself.
+boot record starts a poll-iteration counter. Its limit is derived from the
+board's `OB_IDLE_TIMEOUT_MS` setting (default `10000`). If the counter expires
+while still in IDLE — no successful HELLO this power cycle — the device boots
+the app, so a device that entered the bootloader by strap glitch or stray boot
+request recovers by itself.
 
 A held strap does not inhibit idle auto-boot because it is not sampled again;
 it provides a connection window, not permanent residency.
