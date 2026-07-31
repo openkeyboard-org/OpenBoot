@@ -75,9 +75,13 @@ pub fn load_image(path: &Path, base_override: Option<u32>) -> Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEMP_FILE: AtomicUsize = AtomicUsize::new(0);
 
     fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let id = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("openboot-{}-{id}-{name}", std::process::id()));
         fs::write(&p, content).unwrap();
         p
     }
