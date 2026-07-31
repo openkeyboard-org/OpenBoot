@@ -106,7 +106,7 @@ fn three_timeouts_exhaust_the_retry_budget() {
     let mut client = BootClient::new(&mut mock);
     let err = client.hello().unwrap_err();
     assert!(
-        format!("{err:#}").contains("3 attempts"),
+        format!("{err:#}").contains(&format!("{MAX_ATTEMPTS} attempts")),
         "expected an attempts-exhausted error, got: {err:#}"
     );
     assert_eq!(mock.log.len(), MAX_ATTEMPTS);
