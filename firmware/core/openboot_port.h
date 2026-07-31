@@ -88,7 +88,7 @@ uint32_t ob_record_invalidate(void);
 
 /* Boot strap pin, debounced by the caller. Returns nonzero when the
  * stay-in-bootloader strap is asserted. Compiled to `return 0` when the
- * board disables it (OB_BOOT_PIN undefined). */
+ * board disables it (OB_BOOT_PIN_MASK undefined). */
 int ob_bootpin_asserted(void);
 
 /* Chip identity for HELLO. */
