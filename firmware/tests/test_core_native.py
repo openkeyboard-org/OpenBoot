@@ -216,7 +216,7 @@ def test_full_update_flow(dev):
     full_update(dev, image, whole_app=True)
     assert dev.flash_read(APP_START, len(image)) == image
     assert dev.record_raw() == expected_record(image)
-    pl, act = cmd_ok(dev, CMD_BOOT, 0x50, bytes([0]))
+    _pl, act = cmd_ok(dev, CMD_BOOT, 0x50, bytes([0]))
     # Reset-to-launch on every family: no stay magic, the post-reset boot
     # decision (coherent XIP) is the single launch authority.
     assert act == ACT_RESET
@@ -242,12 +242,12 @@ def test_boot_requires_session(dev):
     cmd_err(dev, CMD_BOOT, 1, bytes([0]), E_STATE, 0)
     cmd_err(dev, CMD_BOOT, 2, bytes([1]), E_STATE, 0)
     hello(dev, 3)
-    pl, act = cmd_ok(dev, CMD_BOOT, 4, bytes([0]))
+    _pl, act = cmd_ok(dev, CMD_BOOT, 4, bytes([0]))
     assert act == ACT_RESET
     # The bootreq magic is the ONLY observable mode-0/mode-1 difference:
     # mode 0 must not write it (so the reset launches the app) ...
     assert dev.get_bootreq() != BOOTREQ_MAGIC
-    pl, act = cmd_ok(dev, CMD_BOOT, 5, bytes([1]))
+    _pl, act = cmd_ok(dev, CMD_BOOT, 5, bytes([1]))
     assert act == ACT_RESET
     # ... and mode 1 must (so the reset stays in the bootloader).
     assert dev.get_bootreq() == BOOTREQ_MAGIC
@@ -464,7 +464,7 @@ def test_ch57x_bless_via_xip_despite_f26(dev57):
     full_update(dev57, image)
     dev57.power_cycle()                  # image now "SWD-flashed" history
     hello(dev57)
-    pl, act = commit(dev57, image, 1)    # write_count == 0 -> XIP path
+    _pl, act = commit(dev57, image, 1)   # write_count == 0 -> XIP path
     assert act == ACT_NONE
     assert dev57.record_raw() == expected_record(image)
     assert dev57.violations() == 0
@@ -562,7 +562,7 @@ def test_ch57x_boot_after_commit_despite_stale_record_view(dev57):
     on dirty CH57x flash is a reset-to-launch, not a direct jump."""
     image = bytes(range(48))
     full_update(dev57, image)                    # f26 poisoning active
-    pl, act = cmd_ok(dev57, CMD_BOOT, 0x60, bytes([0]))
+    _pl, act = cmd_ok(dev57, CMD_BOOT, 0x60, bytes([0]))
     assert act == ACT_RESET                      # never execute stale XIP
     assert dev57.get_bootreq() != BOOTREQ_MAGIC  # no stay magic: boots app
     dev57.power_cycle()
@@ -577,7 +577,7 @@ def test_ch57x_bless_then_boot_resets(dev57):
     dev57.power_cycle()                          # image is now history
     hello(dev57)
     commit(dev57, image, 1)                      # bless: no app mutation
-    pl, act = cmd_ok(dev57, CMD_BOOT, 2, bytes([0]))
+    _pl, act = cmd_ok(dev57, CMD_BOOT, 2, bytes([0]))
     assert act == ACT_RESET
 
 
@@ -588,7 +588,7 @@ def test_ch57x_clean_boot_resets_to_launch(dev57):
     full_update(dev57, image)
     dev57.power_cycle()                          # committed history, clean
     hello(dev57)
-    pl, act = cmd_ok(dev57, CMD_BOOT, 1, bytes([0]))
+    _pl, act = cmd_ok(dev57, CMD_BOOT, 1, bytes([0]))
     assert act == ACT_RESET
     assert dev57.get_bootreq() != BOOTREQ_MAGIC  # no stay magic: boots app
     dev57.power_cycle()
