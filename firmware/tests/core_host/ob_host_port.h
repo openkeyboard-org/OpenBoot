@@ -12,13 +12,11 @@
 #define OB_ERASED_WORD     0xF3F9BDA9u
 #define OB_CHIP_FAMILY     OB_FAMILY_CH570
 #define OB_FEATURES        0x00000000u          /* F26: no live CRC */
-#define OB_RAM_SIZE        (12u * 1024u)
 #elif defined(OB_HOST_CH59X)
 #define OB_FLASH_APP_END   0x00070000u
 #define OB_ERASED_WORD     0xF3F9BDA9u   /* bench-verified on CH592A */
 #define OB_CHIP_FAMILY     OB_FAMILY_CH592
 #define OB_FEATURES        OB_FEAT_CRC_LIVE
-#define OB_RAM_SIZE        (26u * 1024u)
 #else
 #error "define OB_HOST_CH57X or OB_HOST_CH59X"
 #endif
@@ -26,7 +24,6 @@
 #define OB_FLASH_APP_START   OB_APP_BASE
 #define OB_FLASH_ERASE_BLOCK 4096u
 #define OB_FLASH_WRITE_PAGE  256u
-#define OB_RAM_BASE          0x20000000u
 #define OB_CPU_HZ            6400000u
 
 /* Boot-request word lives in a harness variable, not at a fixed address. */

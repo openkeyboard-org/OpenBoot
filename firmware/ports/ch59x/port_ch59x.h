@@ -45,8 +45,6 @@
                                             * (0xF5F9BDA9 from the EVT lore was
                                             * WRONG: real erased XIP reads the
                                             * same word as CH57x) */
-#define OB_RAM_BASE           0x20000000u
-#define OB_RAM_SIZE           (26u * 1024u)
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH59X
 #define OB_FEATURES           OB_FEAT_CRC_LIVE
 

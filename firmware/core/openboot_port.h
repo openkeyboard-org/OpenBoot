@@ -21,8 +21,6 @@
  * OB_FLASH_ERASE_BLOCK 4096
  * OB_FLASH_WRITE_PAGE  256
  * OB_ERASED_WORD       XIP value of an erased word (0xF3F9BDA9, both families)
- * OB_RAM_BASE          0x20000000
- * OB_RAM_SIZE          12K / 26K
  * OB_CPU_HZ            6400000 (UART), 100000000 (ch57x USB), or
  *                      60000000 (ch59x USB)
  * OB_CHIP_FAMILY       OB_FAMILY_* — injected per VARIANT by the Makefile

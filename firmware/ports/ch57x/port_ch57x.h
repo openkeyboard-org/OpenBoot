@@ -35,8 +35,6 @@
 #define OB_FLASH_ERASE_BLOCK  4096u
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u
-#define OB_RAM_BASE           0x20000000u
-#define OB_RAM_SIZE           (12u * 1024u)
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH57X
 #define OB_FEATURES           0u   /* no OB_FEAT_CRC_LIVE: XIP may serve stale
                                     * data after controller writes (F26) */
