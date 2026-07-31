@@ -35,7 +35,8 @@ export MRS_TOOLCHAIN=/path/to/toolchain/bin
 ```
 
 If the toolchain path causes Make quoting problems, use a space-free symlink.
-`make check-deps` verifies the pinned SDK revisions and expected compiler.
+`make check-deps` verifies the pinned SDK revisions and GCC 12 toolchain. It
+warns when the compiler binary differs from the reference-build fingerprint.
 
 ## Build
 
