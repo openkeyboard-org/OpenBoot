@@ -44,6 +44,7 @@ RUST_TYPES = {
         "OB_MAX_WRITE_DATA",
         "OB_HELLO_REQ_LEN",
         "OB_HELLO_RESP_LEN",
+        "OB_BOOT_RECORD_SIZE",
     },
     "u32": {
         "OB_UART_BAUD",

@@ -24,8 +24,10 @@ static uint8_t  sim_flash[OB_FLASH_APP_END]; /* true content, [0, app_end) */
 static uint8_t  sim_stale[OB_FLASH_APP_END]; /* pre-modification snapshots */
 static uint8_t  blk_erased[SIM_BLOCKS];      /* erased this power cycle */
 static uint8_t  blk_dirty[SIM_BLOCKS];       /* modified this power cycle */
-static uint8_t  sim_record[sizeof(ob_boot_record_t)];
-static uint8_t  sim_record_stale[sizeof(ob_boot_record_t)]; /* pre-modification snapshot */
+static uint8_t  sim_record[OB_BOOT_RECORD_SIZE];
+static uint8_t  sim_record_stale[OB_BOOT_RECORD_SIZE]; /* pre-modification snapshot */
+_Static_assert(sizeof sim_record == sizeof(ob_boot_record_t),
+               "simulated record must match ob_boot_record_t");
 static uint8_t  record_dirty;                /* record mutated this power cycle */
 static uint32_t violations;
 static uint32_t op_total;
@@ -176,7 +178,7 @@ uint32_t ob_record_write(const ob_boot_record_t *rec)
 {
     if (op_cut()) {
         touch_record();
-        memcpy(sim_record, rec, 8);      /* torn write: half the record lands */
+        memcpy(sim_record, rec, sizeof sim_record / 2u); /* half the record lands */
         return 0xE6;
     }
     touch_record();
@@ -289,12 +291,12 @@ void host_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
     memcpy(buf, &sim_flash[addr], len);
 }
 
-void host_record_raw(uint8_t out[16])
+void host_record_raw(uint8_t out[OB_BOOT_RECORD_SIZE])
 {
     memcpy(out, sim_record, sizeof sim_record);
 }
 
-void host_set_record_raw(const uint8_t in[16])
+void host_set_record_raw(const uint8_t in[OB_BOOT_RECORD_SIZE])
 {
     memcpy(sim_record, in, sizeof sim_record);
 }

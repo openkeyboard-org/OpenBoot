@@ -25,7 +25,7 @@ from ob_consts import (
     OB_DET_VERIFY_NORECORD, OB_E_ADDR, OB_E_ARG, OB_E_CMD, OB_E_CRC,
     OB_E_FLASH, OB_E_LEN, OB_E_NOT_ERASED, OB_E_PROTO, OB_E_STATE,
     OB_E_VERIFY, OB_FAMILY_CH570, OB_FAMILY_CH592, OB_FEAT_CRC_LIVE,
-    OB_MAX_WRITE_DATA, OB_OK, OB_RECORD_MAGIC,
+    OB_BOOT_RECORD_SIZE, OB_MAX_WRITE_DATA, OB_OK, OB_RECORD_MAGIC,
 )
 
 APP_START = OB_APP_BASE
@@ -149,12 +149,12 @@ class OpenBootNative:
         return buf.raw
 
     def record_raw(self) -> bytes:
-        buf = ctypes.create_string_buffer(16)
+        buf = ctypes.create_string_buffer(OB_BOOT_RECORD_SIZE)
         self._lib.host_record_raw(buf)
         return buf.raw
 
     def set_record_raw(self, raw: bytes):
-        assert len(raw) == 16
+        assert len(raw) == OB_BOOT_RECORD_SIZE
         self._lib.host_set_record_raw(raw)
 
     def set_fail_after(self, n: int):

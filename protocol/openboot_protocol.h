@@ -115,6 +115,7 @@
 
 /* --- boot record (16 bytes, stored by the bootloader at COMMIT) --------- */
 /* CH57x: code flash 0x3B000; CH59x: DataFlash offset 0x7000 (last block). */
+#define OB_BOOT_RECORD_SIZE  0x10
 #define OB_RECORD_MAGIC       0x3152424Fu  /* "OBR1" read as u32 LE */
 
 typedef struct {
@@ -125,7 +126,8 @@ typedef struct {
 } ob_boot_record_t;
 
 #ifdef __cplusplus
-static_assert(sizeof(ob_boot_record_t) == 16, "boot record wire size must be 16 bytes");
+static_assert(sizeof(ob_boot_record_t) == OB_BOOT_RECORD_SIZE,
+              "boot record wire size must match OB_BOOT_RECORD_SIZE");
 static_assert(alignof(ob_boot_record_t) >= alignof(uint32_t),
               "boot record must retain uint32_t alignment");
 static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
@@ -134,7 +136,8 @@ static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
               offsetof(ob_boot_record_t, rec_crc32) == 12,
               "boot record field offsets must match the stored format");
 #else
-_Static_assert(sizeof(ob_boot_record_t) == 16, "boot record wire size must be 16 bytes");
+_Static_assert(sizeof(ob_boot_record_t) == OB_BOOT_RECORD_SIZE,
+               "boot record wire size must match OB_BOOT_RECORD_SIZE");
 _Static_assert(_Alignof(ob_boot_record_t) >= _Alignof(uint32_t),
                "boot record must retain uint32_t alignment");
 _Static_assert(offsetof(ob_boot_record_t, magic) == 0 &&

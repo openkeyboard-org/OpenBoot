@@ -59,6 +59,7 @@ pub const OB_FEAT_READ: u32 = 0x1;
 pub const OB_FEAT_CRC_LIVE: u32 = 0x2;
 pub const OB_BOOT_APP: u8 = 0x0;
 pub const OB_BOOT_STAY: u8 = 0x1;
+pub const OB_BOOT_RECORD_SIZE: usize = 0x10;
 pub const OB_RECORD_MAGIC: u32 = 0x3152424F;
 pub const OB_BOOTREQ_MAGIC: u32 = 0xB007CA11;
 pub const OB_BOOTREQ_ADDR_CH57X: u32 = 0x20002FF0;
