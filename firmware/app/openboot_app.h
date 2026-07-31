@@ -12,6 +12,10 @@
 
 #include "../../protocol/openboot_protocol.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Read the boot record the bootloader stored at COMMIT (CH57x: code flash
  * 0x3B000; CH59x: DataFlash offset 0x7000 — needs libISP592 linked).
@@ -29,5 +33,9 @@ int openboot_get_record(ob_boot_record_t *out);
  * magic survives until the bootloader reads it.
  */
 void openboot_request_update(void) __attribute__((noreturn));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* OPENBOOT_APP_H */
