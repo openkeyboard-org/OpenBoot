@@ -68,15 +68,18 @@ def main() -> int:
         return 1
 
     bad = []
+    checked = 0
     for elf in elfs:
-        m = re.match(r"openboot-(ch\d{3})-(usb|uart)", elf.stem)
+        m = re.fullmatch(r"openboot-(ch\d{3})-(usb|uart)", elf.stem)
         if not m:
+            bad.append(f"{elf.name}: unexpected OpenBoot artifact name")
             continue
         chip, transport = m.groups()
         family = PORT.get(chip)
         if family is None:
             bad.append(f"{elf.name}: unknown chip {chip}")
             continue
+        checked += 1
         size = symbol_size(args.nm, elf, "ob_bootpin_asserted")
         if size is None:
             # Never pass silently on a toolchain/inlining change.
@@ -98,7 +101,7 @@ def main() -> int:
         for b in bad:
             print(f"  {b}", file=sys.stderr)
         return 1
-    print(f"board policy ok: {len(elfs)} images, no boot strap on any "
+    print(f"board policy ok: {checked} images, no boot strap on any "
           "(ROM ISP is the recovery path)")
     return 0
 
