@@ -249,8 +249,8 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CPU_HZ        per transport (boot clock vs PLL).
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
-# The board knobs below are #ifdef-tested, so a knob left unset (or set to
-# a literal 0) must emit NO line at all.
+# The Boolean board knobs further below are #ifdef-tested, so a knob left
+# unset (or set to a literal 0) must emit NO line at all.
 CONFIG_H := $(BUILD)/openboot_config.h
 
 CONFIG_LINES := \
@@ -261,6 +261,20 @@ CONFIG_LINES := \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)'
+# CH57x crystal load capacitance. Leave this absent to use the port's
+# vendor-reference default; emit an explicit board override when supplied.
+ifneq ($(strip $(OB_HSE_CAP_LOAD)),)
+ifneq ($(PORT),ch57x)
+$(error OB_HSE_CAP_LOAD is only valid for CH57x)
+endif
+ifneq ($(words $(strip $(OB_HSE_CAP_LOAD))),1)
+$(error OB_HSE_CAP_LOAD must be one value from 0 to 7)
+endif
+ifeq ($(filter 0 1 2 3 4 5 6 7,$(strip $(OB_HSE_CAP_LOAD))),)
+$(error OB_HSE_CAP_LOAD must be one value from 0 to 7)
+endif
+CONFIG_LINES += '\#define OB_HSE_CAP_LOAD $(OB_HSE_CAP_LOAD)'
+endif
 # A board that wants no strap leaves OB_BOOT_PIN_MASK unset and the port
 # compiles ob_bootpin_asserted() to `return 0`.
 ifneq ($(strip $(OB_BOOT_PIN_MASK)),)
