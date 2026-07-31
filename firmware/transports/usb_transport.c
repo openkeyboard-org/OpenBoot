@@ -238,7 +238,6 @@ static void usb_process(void)
             default:
                 break;
             }
-            R8_USB_INT_FG = RB_UIF_TRANSFER;
         }
         if (R8_USB_INT_ST & RB_UIS_SETUP_ACT)
             ep0_setup();
