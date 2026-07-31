@@ -49,10 +49,11 @@ use crate::proto::Frame;
 /// send each frame in one write when the link is known good.
 const UART_WRITE_CHUNK: usize = 16;
 
-/// Parse an `OPENBOOT_UART_CHUNK` value. `None` means "send each frame in one
-/// write". Pure so the table below is testable without touching the ambient
-/// environment — a test that reads the real variable fails for whoever has it
-/// set, which is exactly the escape hatch this fix documents.
+/// Parse an `OPENBOOT_UART_CHUNK` value. `None` selects the safe paced default;
+/// only an explicit `0` sends each frame in one write. Pure so the table below
+/// is testable without touching the ambient environment — a test that reads the
+/// real variable fails for whoever has it set, which is exactly the escape hatch
+/// this fix documents.
 fn parse_chunk(v: Option<&str>) -> Option<usize> {
     match v {
         None => Some(UART_WRITE_CHUNK),
