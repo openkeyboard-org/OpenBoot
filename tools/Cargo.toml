@@ -1,0 +1,22 @@
+[package]
+name = "openboot"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Host tool for the OpenBoot IAP bootloader on WCH CH570/CH572/CH591/CH592 (OBP v0.1 over USB HID or UART)"
+license = "Apache-2.0"
+
+[[bin]]
+name = "openboot"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1"
+hidapi = "2"
+serialport = "4"
+thiserror = "2"
+
+[profile.release]
+strip = true
