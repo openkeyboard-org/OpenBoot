@@ -163,6 +163,17 @@ ifeq ($(NEEDS_TOOLCHAIN),1)
   endif
 endif
 
+# Preserve the caller's host-compiler choice before CC becomes the
+# cross-compiler. HOST_CC wins; an incoming CC is the compatibility fallback.
+ifeq ($(strip $(HOST_CC)),)
+  ifneq ($(filter default undefined,$(origin CC)),)
+    HOST_CC := cc
+  else
+    HOST_CC := $(CC)
+  endif
+endif
+export HOST_CC
+
 CC := $(MRS_TOOLCHAIN)/riscv-wch-elf-gcc
 AS := $(CC)
 LD := $(CC)

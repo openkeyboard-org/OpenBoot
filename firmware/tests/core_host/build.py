@@ -3,8 +3,10 @@
 against the mock port into firmware/build/host/ob_{ch57x,ch59x}.so.
 
 main.c is excluded (it needs a transport); it and the OB_BOOT_IMAGE_CRC
-path are still syntax-checked so they cannot rot.
+path are still syntax-checked so they cannot rot. The compiler selection is
+HOST_CC, then CC, then cc.
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -47,7 +49,12 @@ def _run(cmd):
     subprocess.run([str(c) for c in cmd], check=True)
 
 
-def build(cc="cc"):
+def host_compiler():
+    return os.environ.get("HOST_CC") or os.environ.get("CC") or "cc"
+
+
+def build(cc=None):
+    cc = cc or host_compiler()
     OUT.mkdir(parents=True, exist_ok=True)
     for fam, dflag in FAMILIES.items():
         so = OUT / f"ob_{fam}.so"
@@ -67,7 +74,7 @@ def build(cc="cc"):
         ])
 
 
-def ensure_built(cc="cc"):
+def ensure_built(cc=None):
     sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES]
     if all(so.exists() for so in sos):
         newest_src = max(p.stat().st_mtime for p in DEPS)
