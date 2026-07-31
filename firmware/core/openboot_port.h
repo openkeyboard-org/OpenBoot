@@ -40,6 +40,9 @@
 #ifndef OB_FLASH_ERASE_BLOCK
 #error "port must define OB_FLASH_ERASE_BLOCK"
 #endif
+#ifndef OB_FLASH_WRITE_PAGE
+#error "port must define OB_FLASH_WRITE_PAGE"
+#endif
 #ifndef OB_ERASED_WORD
 #error "port must define OB_ERASED_WORD"
 #endif
