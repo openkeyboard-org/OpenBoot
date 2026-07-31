@@ -136,6 +136,8 @@ BOARD ?= generic-$(PORT)
 include boards/$(BOARD).mk
 # Fallback if a board file omits the timeout; 0 disables idle auto-boot.
 OB_IDLE_TIMEOUT_MS ?= 10000
+# A board that defines only a strap mask selects port A by default.
+OB_BOOT_PIN_PORT_B ?= 0
 
 # ---------------------------------------------------------------------------
 # Toolchain: MounRiver GCC12 (riscv-wch-elf-*). The caller must point
