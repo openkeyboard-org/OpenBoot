@@ -174,7 +174,7 @@ fn boot_is_never_retried() {
 
 #[test]
 fn oversize_image_rejected_before_any_mutation() {
-    // App region 0x2000..0x70000 holds 0x6E000 bytes; one more must fail.
+    // App region [0x2000, 0x70000) holds 0x6E000 bytes; one more must fail.
     let image = Image {
         base: 0x2000,
         bytes: vec![0xA5; 0x6E004],
@@ -264,7 +264,7 @@ fn verify_allows_offset_base_within_region() {
 
 #[test]
 fn erase_all_is_chunked_at_32_kib() {
-    // 0x2000..0x70000 = 110 blocks of 4 KiB; 8 blocks per 32 KiB chunk
+    // [0x2000, 0x70000) = 110 blocks of 4 KiB; 8 blocks per 32 KiB chunk
     // -> 13 full chunks + one 6-block tail = 14 ERASE requests.
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);

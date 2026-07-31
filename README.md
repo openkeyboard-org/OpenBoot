@@ -6,11 +6,11 @@ tool.
 
 | Chip | App region | RAM | Transports |
 |---|---|---|---|
-| CH570 / CH572 | `0x2000..0x3B000` | 12 KiB | USB, UART |
-| CH591 | `0x2000..0x30000` | 26 KiB | USB, UART |
-| CH592 | `0x2000..0x70000` | 26 KiB | USB, UART |
+| CH570 / CH572 | `[0x2000, 0x3B000)` | 12 KiB | USB, UART |
+| CH591 | `[0x2000, 0x30000)` | 26 KiB | USB, UART |
+| CH592 | `[0x2000, 0x70000)` | 26 KiB | USB, UART |
 
-The bootloader occupies `0x0000..0x1FFF`; applications are linked at
+The bootloader occupies `[0x0000, 0x2000)`; applications are linked at
 `0x2000`. Each chip and transport combination produces a separate image.
 
 OpenBoot prevents protocol requests from modifying the bootloader, requires a

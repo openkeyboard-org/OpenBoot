@@ -135,7 +135,7 @@ int ob_bootpin_asserted(void)
 /* ---- app-region clamp -------------------------------------------------- */
 /* This is the case that matters: CH591 is a 192 KiB part and CH592 a 448 KiB
  * one, and they share this port. Flashing the ch592 image onto a CH591 would
- * otherwise advertise app 0x2000..0x70000 on a die that ends at 0x30000, and
+ * otherwise advertise app [0x2000, 0x70000) on a die that ends at 0x30000, and
  * the host would erase and write a range that does not exist. */
 #define OB_CHIP_ID_CH591  0x91u
 #define OB_CHIP_ID_CH592  0x92u

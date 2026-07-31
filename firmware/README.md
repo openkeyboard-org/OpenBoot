@@ -1,7 +1,7 @@
 # OpenBoot firmware
 
 The firmware builds one bootloader image for each supported chip and
-transport. Each image occupies flash `0x0000..0x1FFF`; the application starts
+transport. Each image occupies flash `[0x0000, 0x2000)`; the application starts
 at `0x2000`.
 
 > [!WARNING]
