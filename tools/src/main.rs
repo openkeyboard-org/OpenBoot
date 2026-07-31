@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(parse_u16_auto("0x0001").unwrap(), 1);
         assert!(parse_u16_auto("0x1FFFF").is_err());
         assert_eq!(parse_u32_auto("0x70000").unwrap(), 0x70000);
-        assert!(parse_u32_auto("0x1_0000_0000").is_err());
+        assert!(parse_u32_auto("0x100000000").is_err());
     }
 
     #[test]
