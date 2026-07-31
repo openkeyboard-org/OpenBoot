@@ -104,8 +104,6 @@ def expected_record(image):
 def dev(request):
     d = get_device(request.param)
     d.reset()
-    if d.family == "ch57x":
-        d.set_f26(1)                     # default poisoning back on
     return d
 
 
@@ -113,7 +111,6 @@ def dev(request):
 def dev57():
     d = get_device("ch57x")
     d.reset()
-    d.set_f26(1)
     return d
 
 
@@ -417,6 +414,20 @@ def test_crc_cmd_after_write(dev):
     assert int.from_bytes(pl[1:5], "little") == zlib.crc32(image)
 
 
+def test_reset_restores_ch57x_f26_default(dev57):
+    image = bytes(range(1, 49))
+    dev57.set_f26(0)
+    dev57.reset()
+    hello(dev57)
+    erase(dev57, APP_START, BLOCK)
+    write(dev57, APP_START, image, 2)
+
+    pl, _ = cmd_ok(dev57, CMD_CRC, 3, u32(APP_START) + u32(len(image)))
+    observed = int.from_bytes(pl[1:5], "little")
+    assert observed == zlib.crc32(dev57.erased(APP_START, len(image)))
+    assert observed != zlib.crc32(image)
+
+
 def test_ch57x_nonseq_commit_rejected(dev57):
     image = bytes(range(16, 80))
     hello(dev57)
@@ -681,8 +692,6 @@ def test_boot_applies_full_app_validation(dev):
     app was wiped out-of-band) must not be jumped into."""
     image = bytes(range(1, 49))
     dev.reset()
-    if dev.family == "ch57x":
-        dev.set_f26(1)
     dev.set_record_raw(expected_record(image))   # valid record, erased app
     hello(dev)
     cmd_err(dev, CMD_BOOT, 1, bytes([0]), E_VERIFY, DET_NORECORD)

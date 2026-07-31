@@ -32,12 +32,12 @@ static uint32_t op_total;
 static int32_t  fail_after = -1;
 static int32_t  bootpin;
 static uint32_t sim_silicon_app_end;   /* 0 = unknown chip id */
-static int32_t  f26_mode =
 #if defined(OB_HOST_CH57X)
-    1;
+#define OB_HOST_F26_DEFAULT 1
 #else
-    0;
+#define OB_HOST_F26_DEFAULT 0
 #endif
+static int32_t  f26_mode = OB_HOST_F26_DEFAULT;
 
 uint32_t ob_host_bootreq;
 
@@ -251,6 +251,7 @@ void host_reset(void)
     op_total = 0;
     fail_after = -1;
     bootpin = 0;
+    f26_mode = OB_HOST_F26_DEFAULT;
     sim_silicon_app_end = OB_FLASH_APP_END;   /* matching part by default */
     ob_host_bootreq = 0;
     ob_core_init();
