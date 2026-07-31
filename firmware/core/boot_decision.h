@@ -6,9 +6,10 @@
 #include "../../protocol/openboot_protocol.h"
 
 /* Returns only when staying in the bootloader; otherwise calls
- * ob_jump_app(). Order: strap pin (debounced), RAM boot-request magic
- * (cleared when seen), boot record, optional full image CRC
- * (OB_BOOT_IMAGE_CRC), erased first app word. */
+ * ob_jump_app(). The RAM boot-request magic is read and cleared first, so it
+ * is always consumed. Decision priority is then: strap pin (debounced), boot
+ * request, boot record, optional full image CRC (OB_BOOT_IMAGE_CRC), erased
+ * first app word. */
 void ob_boot_decide(void);
 
 /* Record + image checks only (no strap/bootreq, no side effects). Used by

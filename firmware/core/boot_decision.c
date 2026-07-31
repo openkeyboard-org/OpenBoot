@@ -32,18 +32,10 @@ int ob_boot_app_valid(void)
 
 void ob_boot_decide(void)
 {
-    /* App-requested entry: magic word at reserved top-of-RAM. Read and
-     * clear it BEFORE anything else can return, because the request is
-     * one-shot: whichever reason keeps us in the bootloader must consume
-     * it, or the stale word sits in RAM and swallows the next BOOT — the
-     * host would be told OK and the reset would land back here.
-     *
-     * Only the strap below can return before the request is examined, and
-     * no shipped board configures one (OB_BOOT_PIN_MASK is unset, so
-     * ob_bootpin_asserted() is a `return 0` stub — see
-     * boards/generic-ch5?x.mk and `make board-policy`). The ordering is
-     * kept because the knob is still supported for a product board that
-     * wants a hold-a-key update mode, and it costs nothing. */
+    /* App-requested entry: magic word at reserved top-of-RAM. Read and clear
+     * it before evaluating any boot decision because the request is one-shot.
+     * A strap or invalid application may still keep us in the bootloader, but
+     * must not leave a stale request that swallows the next BOOT. */
     volatile uint32_t *req = (volatile uint32_t *)(uintptr_t)(OB_BOOTREQ_ADDR);
     int requested = (*req == OB_BOOTREQ_MAGIC);
 
