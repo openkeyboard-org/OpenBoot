@@ -174,7 +174,8 @@ fn boot_is_never_retried() {
 
 #[test]
 fn oversize_image_rejected_before_any_mutation() {
-    // App region [0x2000, 0x70000) holds 0x6E000 bytes; one more must fail.
+    // App region [0x2000, 0x70000) holds 0x6E000 bytes; the smallest
+    // 4-byte-aligned oversized image is four bytes larger.
     let image = Image {
         base: 0x2000,
         bytes: vec![0xA5; 0x6E004],
