@@ -199,6 +199,31 @@ fn oversize_image_rejected_before_any_mutation() {
 }
 
 #[test]
+fn oversized_device_write_limit_rejected_before_any_mutation() {
+    let image = test_image(16);
+    let mut mock = MockTransport::new();
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_HELLO);
+        let mut payload = info_payload(OB_FEAT_CRC_LIVE, 0x70000);
+        payload[23] = 52;
+        vec![ok_resp(req, payload)]
+    });
+
+    let err = flash(
+        &mut mock,
+        &image,
+        &FlashOpts {
+            force: true,
+            verify: true,
+            boot: true,
+        },
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("protocol maximum"), "{err:#}");
+    assert_eq!(mock.log.len(), 1, "nothing after HELLO may be sent");
+}
+
+#[test]
 fn offset_base_rejected_for_flash() {
     let image = Image {
         base: 0x3000,

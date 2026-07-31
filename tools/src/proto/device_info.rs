@@ -6,7 +6,7 @@ use anyhow::{bail, Result};
 
 use super::consts::{
     OB_FAMILY_CH570, OB_FAMILY_CH572, OB_FAMILY_CH591, OB_FAMILY_CH592, OB_FEAT_CRC_LIVE,
-    OB_FEAT_READ, OB_HELLO_RESP_LEN, OB_TRANSPORT_ID_UART, OB_TRANSPORT_ID_USB,
+    OB_FEAT_READ, OB_HELLO_RESP_LEN, OB_MAX_WRITE_DATA, OB_TRANSPORT_ID_UART, OB_TRANSPORT_ID_USB,
 };
 
 /// Parsed HELLO device info (response payload offsets 1..36; offset 0 is the
@@ -86,6 +86,13 @@ impl DeviceInfo {
             bail!(
                 "device reported an unusable max_write_data of {} bytes",
                 info.max_write_data
+            );
+        }
+        if usize::from(info.max_write_data) > OB_MAX_WRITE_DATA {
+            bail!(
+                "device reported max_write_data of {} bytes, above the protocol maximum of {}",
+                info.max_write_data,
+                OB_MAX_WRITE_DATA
             );
         }
         Ok(info)
@@ -259,12 +266,28 @@ mod tests {
         assert!(DeviceInfo::parse(&p).is_err());
 
         let mut p = valid_payload();
-        p[23] = 7; // max_write_data not a multiple of 4
-        assert!(DeviceInfo::parse(&p).is_err());
-
-        let mut p = valid_payload();
         p[12..16].copy_from_slice(&0x2000u32.to_le_bytes()); // app_end == app_start
         assert!(DeviceInfo::parse(&p).is_err());
+    }
+
+    #[test]
+    fn max_write_data_geometry_is_enforced() {
+        for value in [0, 7] {
+            let mut p = valid_payload();
+            p[23] = value;
+            let err = DeviceInfo::parse(&p).unwrap_err();
+            assert!(err.to_string().contains("unusable max_write_data"), "{err}");
+        }
+
+        for value in [52, 56] {
+            let mut p = valid_payload();
+            p[23] = value;
+            let err = DeviceInfo::parse(&p).unwrap_err();
+            assert!(err.to_string().contains("protocol maximum"), "{err}");
+        }
+
+        let info = DeviceInfo::parse(&valid_payload()).unwrap();
+        assert_eq!(usize::from(info.max_write_data), OB_MAX_WRITE_DATA);
     }
 
     #[test]

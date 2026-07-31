@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::client::{BootClient, BootMode, ClientError};
 use crate::image::Image;
-use crate::proto::consts::{OB_DET_VERIFY_MISMATCH, OB_E_VERIFY, OB_MAX_WRITE_DATA};
+use crate::proto::consts::{OB_DET_VERIFY_MISMATCH, OB_E_VERIFY};
 use crate::proto::device_info::DeviceInfo;
 use crate::transport::Transport;
 
@@ -170,10 +170,10 @@ fn check_committable(info: &DeviceInfo, image: &Image) -> Result<()> {
     check_in_region(info, image.base, image.bytes.len())
 }
 
-/// Bytes per WRITE frame: the device-reported maximum, capped at the
-/// protocol ceiling (48 B).
+/// Bytes per WRITE frame. DeviceInfo parsing has already enforced the
+/// protocol ceiling.
 fn write_chunk_len(info: &DeviceInfo) -> usize {
-    usize::from(info.max_write_data).min(OB_MAX_WRITE_DATA)
+    usize::from(info.max_write_data)
 }
 
 fn erase_region(client: &mut BootClient, start: u32, total: u32, block: u32) -> Result<()> {
