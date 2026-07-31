@@ -248,9 +248,6 @@ pub struct FlashOpts {
     pub boot: bool,
 }
 
-/// Full flash flow: HELLO -> bounds check -> plan (dry run unless forced)
-/// -> chunked ERASE -> sequential WRITEs -> COMMIT -> optional CRC
-/// cross-check -> BOOT.
 /// What `flash` intends to do, computed once from the image and the
 /// device's HELLO. Printing it and executing it then read from the same
 /// values — the dry run cannot describe a different operation than the
@@ -403,6 +400,9 @@ fn execute_flash(
     Ok(())
 }
 
+/// Full flash flow: HELLO -> bounds check -> plan (dry run unless forced)
+/// -> chunked ERASE -> sequential WRITEs -> COMMIT -> optional CRC
+/// cross-check -> BOOT.
 pub fn flash(transport: &mut dyn Transport, image: &Image, opts: &FlashOpts) -> Result<()> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
