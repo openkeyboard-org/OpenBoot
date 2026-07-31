@@ -31,7 +31,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Optional
+from typing import NoReturn, Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -61,7 +61,7 @@ REQUIRED_TOOLS = (
 )
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise RuntimeError(message)
 
 
