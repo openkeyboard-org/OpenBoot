@@ -954,3 +954,23 @@ def test_unknown_chip_id_falls_back_to_the_build(dev):
     dev.set_silicon_app_end(0)
     pl = hello(dev)
     assert int.from_bytes(pl[12:16], "little") == dev.app_end
+
+
+# --- board-clamped build bound: the build is tighter than the silicon -----
+
+def test_a_board_clamped_build_bound_holds_on_larger_silicon(dev):
+    """The OpenDongle ch570 board sets APP_END below the silicon end so the
+    dongle's bond page (0x3A000) and the boot record page (0x3B000) are
+    outside OBP reach. min(silicon, build) must let the BUILD bound win —
+    the mirror image of the silicon-clamp tests above."""
+    dev.set_silicon_app_end(dev.app_end + 0x1000)
+    pl = hello(dev)
+    assert int.from_bytes(pl[12:16], "little") == dev.app_end
+    # the last in-bound block still works...
+    erase(dev, dev.app_end - BLOCK, BLOCK, seq=1)
+    write(dev, dev.app_end - MAX_WRITE, bytes(MAX_WRITE), seq=2)
+    # ...but nothing at or past the build bound does, silicon or not
+    cmd_err(dev, CMD_WRITE, 3, u32(dev.app_end) + bytes(4), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_ERASE, 4, u32(dev.app_end) + u32(BLOCK), E_ADDR, DET_RANGE)
+    over = dev.app_end - APP_START + 4
+    cmd_err(dev, CMD_COMMIT, 5, u32(over) + u32(0), E_ADDR, DET_RANGE)
