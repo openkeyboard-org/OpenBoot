@@ -5,9 +5,11 @@
 # Idle auto-boot: with a valid boot record and no HELLO received, convert this
 # nominal millisecond setting to a poll count. 0 disables the timeout.
 # NOTE: this counts poll iterations, not wall-clock time. A dongle must never
-# sit dead in the bootloader, so the timeout stays enabled; the value is
-# nominal until bench-calibrated on ch592-usb (see the ch570-usb measurement
-# in generic-ch57x.mk for how far a nominal setting can drift).
+# sit dead in the bootloader, so the timeout stays enabled. Bench-measured on
+# the OpenDongle CH592 board (2026-08-02): this nominal 10000 gives ~86 s of
+# real time on ch592-usb (drift ~8.6x). Kept as-is for now; retuning toward
+# ~10 s real means ~1160 here and moves the shipped image digest, so it rides
+# with the next re-pin.
 OB_IDLE_TIMEOUT_MS := 10000
 
 # Full image-CRC check at every boot. The dongle's release discipline pins
