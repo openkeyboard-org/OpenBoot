@@ -54,6 +54,18 @@ make test                       # host-native core tests
 
 Every binary is limited to 8192 bytes by the linker and a post-build check.
 
+A project that packages the bootloader should ask where the image lands rather
+than reconstruct the directory name, which is a build-system detail:
+
+```sh
+make --no-print-directory CHIP=ch592 TRANSPORT=usb BOARD=myboard print-image-path
+```
+
+It prints one absolute path and nothing else, builds nothing, and needs no
+`MRS_TOOLCHAIN`. The `.elf`, `.hex`, and `.map` share the directory and stem.
+`--no-print-directory` matters when the result is captured: Make writes its own
+"Entering directory" lines to stdout.
+
 ## Board configuration
 
 Board settings live in `boards/*.mk` and may be overridden on the Make command
@@ -69,9 +81,20 @@ line.
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
-The idle timeout counts poll iterations, so it is a lower bound rather than a
-wall-clock deadline under load. On CH570 USB at 100 MHz, the default `10000`
-setting measured about 273 seconds.
+
+`OB_IDLE_TIMEOUT_MS` is a nominal setting, not a duration: it converts to a
+count of main-loop iterations, and an iteration is only nominally 20 µs. Real
+timeouts measured on silicon for the default `10000`:
+
+| Image | Real timeout | Drift |
+|---|---|---|
+| CH570 USB at 100 MHz | ~273 s | ~27x |
+| CH592 USB at 60 MHz | ~86 s | ~8.6x |
+
+The drift is per chip and transport, so a board that cares about the real
+figure has to measure it. Treat the setting as a lower bound in any case:
+frame handling stretches an iteration, and on USB a send against a host that
+is not draining can block for milliseconds while still crediting one slot.
 
 ## Flash the bootloader
 
