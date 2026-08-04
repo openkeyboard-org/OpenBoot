@@ -46,6 +46,11 @@ int ob_record_load(uint32_t slot, ob_boot_record_t *rec)
 
     if (slot >= OB_SLOT_COUNT)
         return 0;
+    /* Reject a slot the silicon cannot hold BEFORE reading it: its record
+     * address is a build constant and on a smaller die lands beyond physical
+     * flash, so the read itself would be out of bounds. */
+    if (ob_slot_capacity(slot) == 0)
+        return 0;
     /* Slots live in code flash on both families, so the record reads through
      * XIP like any other app word — no DataFlash path and no port hook. Read
      * as words: OB_XIP_READ32 is the only accessor every port provides, and
@@ -65,6 +70,11 @@ int ob_record_load(uint32_t slot, ob_boot_record_t *rec)
         if (rec->rsvd[i] != 0)
             return 0;
     }
+    /* generation 0 is reserved: it is what a wrapped counter or an erased
+     * field would produce, and accepting it would let such a record outrank
+     * nothing yet still be "valid". Real records start at 1. */
+    if (rec->generation == 0)
+        return 0;
     return rec->img_len != 0 && (rec->img_len % 4u) == 0 &&
            rec->img_len <= ob_slot_capacity(slot);
 }
@@ -104,7 +114,11 @@ uint32_t ob_next_generation(void)
         if (ob_record_load(slot, &rec) && rec.generation > best)
             best = rec.generation;
     }
-    return best + 1u;
+    /* Saturate rather than wrap: returning 0 would produce a record that
+     * ob_record_load rejects, silently bricking further updates. Reaching
+     * 2^32 updates is not a real scenario; wrapping into an invalid record
+     * would be a real bug. */
+    return best == 0xFFFFFFFFu ? 0xFFFFFFFFu : best + 1u;
 }
 
 uint32_t ob_boot_select(void)

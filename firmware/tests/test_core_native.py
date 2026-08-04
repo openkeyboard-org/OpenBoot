@@ -1118,3 +1118,35 @@ def test_next_generation_outranks_every_valid_record(dev):
 
     place_slot(dev, SLOT_B, bytes(range(1, 65)), 11)
     assert dev.next_generation() == 12
+
+
+# --- the simulator's flash model itself ----------------------------------
+# These guard the HARNESS, not the firmware. A model that lets a write set
+# bits, or that never tears a write, silently hides the exact defects the A/B
+# invariant is built to survive.
+
+def test_programming_can_only_clear_bits(dev):
+    """Writing over already-programmed bytes ANDs, as NOR flash does, so the
+    verify inside the write path must reject it."""
+    hello(dev)
+    erase(dev, APP_START, BLOCK)
+    write(dev, APP_START, bytes([0xF0] * 8), 2)
+    assert dev.flash_read(APP_START, 8) == bytes([0xF0] * 8)
+
+    # 0x0F needs bits 0-3 set, which programming cannot do
+    cmd_err(dev, CMD_WRITE, 3, u32(APP_START) + bytes([0x0F] * 8), E_FLASH)
+    assert dev.flash_read(APP_START, 8) == bytes([0xF0 & 0x0F] * 8)
+
+
+def test_a_cut_write_leaves_a_partial_prefix(dev):
+    """Row three of the invariant table depends on a torn write being
+    possible: a half-written record must fail its CRC, not vanish."""
+    hello(dev)
+    erase(dev, APP_START, BLOCK)
+    dev.set_fail_after(0)                    # next mutating op is cut
+
+    send(dev, CMD_WRITE, 2, u32(APP_START) + bytes([0xAA] * 16))
+    got = dev.flash_read(APP_START, 16)
+
+    assert got[:8] == bytes([0xAA] * 8), "no prefix landed; write was atomic"
+    assert got[8:] != bytes([0xAA] * 8), "whole write landed despite the cut"

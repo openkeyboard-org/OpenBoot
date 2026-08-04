@@ -91,8 +91,16 @@ is written or erased at any point in an update. That is the whole design.
 
 ## The invariant
 
-> At every instant, at least one slot holds a CRC-valid record describing a
-> CRC-valid image, and the bootloader boots the highest valid generation.
+> At every instant, at least one slot holds a CRC-valid record describing an
+> image that passes the boot check, and the bootloader boots the highest valid
+> generation.
+
+"Passes the boot check" is weaker than "CRC-valid" unless the board asks for
+more. By default the bootloader validates the record and that the slot's first
+word is not the erased pattern; with `OB_BOOT_IMAGE_CRC=1` it also recomputes
+the whole image CRC. Both product boards set that knob, and any board relying
+on A/B to survive out-of-band corruption should — the record alone proves the
+image was verified *at commit time*, not that it is still intact.
 
 Update order — erase inactive slot, write image, verify, **write that slot's
 record last**:
