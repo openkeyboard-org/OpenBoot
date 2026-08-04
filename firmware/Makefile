@@ -81,7 +81,13 @@ APP_END_ch570 := 0x0003B000
 APP_END_ch572 := 0x0003B000
 APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
-APP_END := $(APP_END_$(CHIP))
+# `override` on both assignments: a variable set on the make COMMAND LINE
+# normally beats every assignment in the makefile, so without it
+#   make BOARD=opendongle-ch570 APP_END=0x0003B000
+# would silently defeat the board's validated clamp and hand OBP the dongle's
+# RF bond page. APP_END is Makefile-internal; OB_APP_END is the knob, and it
+# is validated below.
+override APP_END := $(APP_END_$(CHIP))
 # The app base is fixed at OB_APP_BASE for every chip; used below to bound a
 # board override. The C side is the safety net (openboot_port.h and the port
 # headers #error on an empty or overlapping region) — this is only here to
@@ -167,7 +173,7 @@ ifneq ($(strip $(OB_APP_END)),)
             4096-aligned address above $(APP_BASE_BYTES) and no higher than \
             $(APP_END_$(CHIP)))
   endif
-  APP_END := $(OB_APP_END)
+  override APP_END := $(OB_APP_END)
 endif
 
 # ---------------------------------------------------------------------------

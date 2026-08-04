@@ -626,23 +626,22 @@ COMMIT attests a length and a CRC by design, so any conforming host can flash
 anything that fits the app region.
 
 **Idle auto-boot:** a device that stays in the bootloader with a *valid*
-boot record starts a poll-iteration counter. Its limit is derived from the
-board's `OB_IDLE_TIMEOUT_MS` setting (default `10000`). If the counter expires
-while still in IDLE — no successful HELLO this power cycle — the device boots
-the app, so a device that entered the bootloader by strap glitch or stray boot
-request recovers by itself.
+boot record anchors a deadline `OB_IDLE_TIMEOUT_MS` milliseconds ahead
+(default `10000`). If it passes while still in IDLE — no successful HELLO this
+power cycle — the device boots the app, so one that entered the bootloader by
+strap glitch or stray boot request recovers by itself.
 
 A held strap does not inhibit idle auto-boot because it is not sampled again;
 it provides a connection window, not permanent residency.
 
 The first successful HELLO disables auto-boot until the next reset;
-**no traffic of any kind resets the timer** — valid, rejected, malformed and
-CRC-corrupt frames alike all advance it, so nothing short of a session can
+**no traffic of any kind resets the deadline** — valid, rejected, malformed
+and CRC-corrupt frames alike leave it alone, so nothing short of a session can
 keep a device out of its app indefinitely.
 
-`OB_IDLE_TIMEOUT_MS` is wall-clock milliseconds, measured against a
-free-running hardware counter, so frame handling does not stretch it. A device
-without a valid record waits indefinitely.
+The deadline is wall-clock, measured against a free-running hardware counter,
+so frame handling does not stretch it. A device without a valid record waits
+indefinitely.
 
 ## 11. Versioning and discovery
 
