@@ -559,6 +559,27 @@ chip, so ordinary app flashing never touches it):
 | CH570 / CH572 | code flash `0x3B000` — the block immediately after the app region (no DataFlash on these chips) |
 | CH591 / CH592 | DataFlash offset `0x7000` — the **last** 4 KiB block of the 32 KiB DataFlash, leaving the bottom free for applications |
 
+**What the record does not say.** It describes exactly `img_len` bytes from
+`app_start` and says nothing about the flash beyond them. Within an OBP session
+that distinction never surfaces, because the record is invalidated at the first
+mutation and only COMMIT writes a new one. It surfaces when an image is written
+**out of band** — over SWD or ROM ISP — and an older record survives.
+
+What happens then depends on the build. **By default no image CRC is computed
+at all**: the boot decision checks record integrity and that the first app word
+is not the erased pattern (section 10), so a surviving record validates almost
+any out-of-band image. With `OB_BOOT_IMAGE_CRC=1` the bootloader also
+recomputes the CRC over the recorded length, and the record then still
+validates whenever the newly written bytes have the recorded image as a
+*prefix* — re-flashing the same build is the usual case, and a longer image
+sharing the old one's leading bytes is the same case. Bytes beyond `img_len`
+are never checked under either setting.
+
+A surviving record is the normal outcome on CH591/CH592, where the record lives
+in DataFlash and a code-flash erase does not reach it (`minichlink -E` does not
+touch DataFlash). On CH570/CH572 the record shares code flash, so a whole-chip
+erase takes it with the application and the device lands in the bootloader.
+
 ### 9.2 RAM boot request (app → bootloader entry)
 
 An application asks to re-enter the bootloader by writing
@@ -594,6 +615,15 @@ products may set `OB_BOOT_PIN_MASK`. It is sampled only at reset.
 With the build-time `OB_BOOT_IMAGE_CRC=1` setting, the device also checks the
 full image against the record before jumping. This is off by default because
 of its startup cost; record integrity is always checked.
+
+Be precise about what that buys. It proves the app region still holds the bytes
+COMMIT attested, which catches corruption and catches an out-of-band reflash
+that diverges from a surviving record (section 9.1). It is **not** an identity
+check: by the prefix property it also passes an image that merely begins with
+the recorded one, and nothing in the record names a product, a version, or a
+build. A device that must refuse foreign images needs a check above OBP —
+COMMIT attests a length and a CRC by design, so any conforming host can flash
+anything that fits the app region.
 
 **Idle auto-boot:** a device that stays in the bootloader with a *valid*
 boot record starts a poll-iteration counter. Its limit is derived from the

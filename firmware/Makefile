@@ -16,6 +16,7 @@
 #   make flash-isp                  write the current image via wchisp (ROM ISP)
 #   make test                       host-native core tests, no cross toolchain
 #   make check-deps                 verify pinned SDKs + toolchain
+#   make print-image-path           absolute path of the current .bin, nothing else
 #
 # Every image must fit the 8 KiB bootloader region. That is enforced three
 # ways: the linker script's FLASH MEMORY length, the post-objcopy byte gate in
@@ -324,9 +325,23 @@ LDLIBS := -l$(ISPLIB)
 # ---------------------------------------------------------------------------
 .DEFAULT_GOAL := image
 MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
-.PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp $(MATRIX)
+.PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
+        print-image-path $(MATRIX)
 
 image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
+
+# Where the current CHIP/TRANSPORT/BOARD image lands, for consumers that
+# package the bootloader (a superproject composing a factory image, say).
+# The build_dir template above is the only definition of that layout, and a
+# consumer hardcoding it breaks silently the day the template changes.
+#
+# Contract: prints one absolute path and NOTHING else, builds nothing, and is
+# deliberately absent from TOOLCHAIN_GOALS so it answers without
+# MRS_TOOLCHAIN set. The .elf/.hex/.map sit beside it under the same stem.
+# Callers must pass --no-print-directory, because make's own "Entering
+# directory" lines go to stdout and would otherwise land in $(shell ...).
+print-image-path:
+	@echo "$(abspath $(BUILD)/$(TARGET).bin)"
 
 # The full matrix, one recursive make per cell so each gets its own CHIP/
 # TRANSPORT (and thus its own flag set and build directory). The `+` marks
