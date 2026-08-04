@@ -32,8 +32,8 @@ HELLO, so the host tool needs no per-chip database.
 
 ## Build
 
-Requirements: GNU Make 4.3 or newer, a MounRiver "RISC-V Embedded GCC"
-toolchain (GCC 12 or GCC 15), Python 3, and Rust.
+Requirements: GNU Make 4.3 or newer, the MounRiver "RISC-V Embedded GCC 12"
+toolchain, Python 3, and Rust.
 
 ```sh
 git submodule update --init

@@ -18,7 +18,7 @@ See the [protocol specification](../docs/PROTOCOL.md),
 | Tool | Requirement |
 |---|---|
 | GNU Make | 4.3 or newer |
-| MounRiver GCC | "RISC-V Embedded GCC" 12 or 15 |
+| MounRiver GCC | "RISC-V Embedded GCC" 12 (15 builds but is unvalidated) |
 | Python | Python 3 and pytest for host tests |
 | WCH SDK files | Initialized repository submodules |
 
@@ -36,10 +36,20 @@ export MRS_TOOLCHAIN=/path/to/toolchain/bin
 
 If the toolchain path causes Make quoting problems, use a space-free symlink.
 
-GCC 12 and GCC 15 both build the whole matrix; GCC 15 renamed the tools from
-`riscv-wch-elf-*` to `riscv32-wch-elf-*` and the build detects either. The two
-emit slightly different code (−12 to +80 bytes per image here), so an image is
-only byte-reproducible against the compiler that built it.
+**Use GCC 12.** It is the only compiler validated on silicon.
+
+GCC 15 also builds the whole matrix, and the build detects its renamed tools
+(`riscv-wch-elf-*` became `riscv32-wch-elf-*`), so it is usable for
+development. It is not validated: on a CH572 it produced an idle auto-boot
+that fired early and erratically — 1.51 s, 1.71 s and 4.75 s against a
+configured 10 s — where GCC 12 on the same part gave 9.96 s every time, and it
+failed to return from a software reset 4 times in 32 against 0 in 32 for
+GCC 12. ch59x showed no such behaviour. The generated code for the timing
+functions is instruction-identical between the two, so the cause is elsewhere
+and unresolved. `check-deps` warns on it and builds anyway.
+
+The two also emit slightly different code (−12 to +80 bytes per image), so an
+image is only byte-reproducible against the compiler that built it.
 
 `make check-deps` treats the pinned SDK revisions as hard failures and the
 compiler as advisory: an unvalidated major and a SHA-256 that differs from the

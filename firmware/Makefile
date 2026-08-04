@@ -539,7 +539,7 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 # fails across it. compose_factory.py owns that rule and the tests pin it.
 FACTORY_BIN := $(BUILD)/$(TARGET)-factory.bin
 
-factory: $(BUILD)/$(TARGET).bin compose_factory.py
+factory: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).manifest compose_factory.py
 	@test -n "$(strip $(APP))" || { \
 	  echo "set APP=<application .bin> — factory needs an application to package" >&2; \
 	  exit 1; }
