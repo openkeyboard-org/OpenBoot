@@ -563,11 +563,17 @@ chip, so ordinary app flashing never touches it):
 `app_start` and says nothing about the flash beyond them. Within an OBP session
 that distinction never surfaces, because the record is invalidated at the first
 mutation and only COMMIT writes a new one. It surfaces when an image is written
-**out of band** — over SWD or ROM ISP — and an older record survives: the
-bootloader recomputes the CRC over the recorded length, so the record still
+**out of band** — over SWD or ROM ISP — and an older record survives.
+
+What happens then depends on the build. **By default no image CRC is computed
+at all**: the boot decision checks record integrity and that the first app word
+is not the erased pattern (section 10), so a surviving record validates almost
+any out-of-band image. With `OB_BOOT_IMAGE_CRC=1` the bootloader also
+recomputes the CRC over the recorded length, and the record then still
 validates whenever the newly written bytes have the recorded image as a
-*prefix*. Re-flashing the same build is the usual case; a longer image sharing
-the old one's leading bytes is the same case. Anything else mismatches.
+*prefix* — re-flashing the same build is the usual case, and a longer image
+sharing the old one's leading bytes is the same case. Bytes beyond `img_len`
+are never checked under either setting.
 
 A surviving record is the normal outcome on CH591/CH592, where the record lives
 in DataFlash and a code-flash erase does not reach it (`minichlink -E` does not
