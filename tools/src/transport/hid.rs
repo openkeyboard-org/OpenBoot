@@ -19,6 +19,28 @@ use crate::proto::Frame;
 pub const DEFAULT_VID: u16 = 0x1209;
 pub const DEFAULT_PID: u16 = 0x0001;
 
+/// The bootloader's HID report descriptor: vendor usage page 0xFF00, usage
+/// 0x01 (see PROTOCOL.md section 12).
+///
+/// VID:PID is not on its own enough to find the bootloader. A product may
+/// build it with its application's identity (`OB_USB_VID`/`OB_USB_PID`), so
+/// both modes enumerate the same and the application's other HID interfaces
+/// — keyboard, mouse, its own vendor interface — sit behind the same
+/// VID:PID. This pair is what separates them.
+pub const OB_USAGE_PAGE: u16 = 0xFF00;
+pub const OB_USAGE: u16 = 0x0001;
+
+/// Whether an enumerated interface looks like OpenBoot's.
+///
+/// Platforms that do not report a usage pass `0/0`; treat that as "cannot
+/// tell" and keep the entry rather than discarding the only candidate. On a
+/// device whose bootloader has its own VID:PID this changes nothing, and on
+/// a shared-identity device the caller still gets a clear multi-match error
+/// instead of silently opening a keyboard interface.
+fn looks_like_openboot(usage_page: u16, usage: u16) -> bool {
+    (usage_page == 0 && usage == 0) || (usage_page == OB_USAGE_PAGE && usage == OB_USAGE)
+}
+
 pub struct HidTransport {
     dev: HidDevice,
     /// Human-readable device path for logging.
@@ -34,6 +56,7 @@ impl HidTransport {
         let matches: Vec<_> = api
             .device_list()
             .filter(|d| d.vendor_id() == vid && d.product_id() == pid)
+            .filter(|d| looks_like_openboot(d.usage_page(), d.usage()))
             .filter(|d| match serial {
                 Some(sn) => d.serial_number() == Some(sn),
                 None => true,
@@ -47,14 +70,15 @@ impl HidTransport {
             };
             bail!(
                 "no HID device for VID=0x{vid:04X} PID=0x{pid:04X}{filter} \
+                 on usage page 0x{OB_USAGE_PAGE:04X} usage 0x{OB_USAGE:04X} \
                  (is the device in the bootloader? on Linux, check hidraw \
                  permissions / udev rules — see tools/README.md)"
             );
         };
 
-        // The bootloader exposes a single HID interface, so each physical
-        // device is one enumeration entry; multiple distinct paths mean
-        // multiple devices and the caller must disambiguate by serial.
+        // One HID interface per bootloader, so each physical device is one
+        // surviving enumeration entry; multiple distinct paths mean multiple
+        // devices and the caller must disambiguate by serial.
         let paths: BTreeSet<_> = matches.iter().map(|d| d.path()).collect();
         if paths.len() > 1 && serial.is_none() {
             let serials: Vec<String> = matches
@@ -118,5 +142,49 @@ impl FrameLink for HidTransport {
 impl Transport for HidTransport {
     fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
         xfer_link(self, req, timeout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_the_bootloader_usage() {
+        assert!(looks_like_openboot(OB_USAGE_PAGE, OB_USAGE));
+    }
+
+    #[test]
+    fn rejects_other_interfaces_behind_the_same_vid_pid() {
+        // A product may build its bootloader with the application's VID:PID,
+        // putting the application's interfaces in the same match set. These
+        // are OpenDongle's: keyboard, mouse/consumer, and its own two vendor
+        // pages. None may be mistaken for the bootloader.
+        for (page, usage) in [
+            (0x0001, 0x0006), // Generic Desktop / Keyboard
+            (0x0001, 0x0002), // Generic Desktop / Mouse
+            (0x000C, 0x0001), // Consumer Control
+            (0xFFFF, 0x0001), // application vendor page
+            (0xFF60, 0x0061), // application vendor page
+        ] {
+            assert!(
+                !looks_like_openboot(page, usage),
+                "0x{page:04X}/0x{usage:04X} must not match the bootloader"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_entries_from_platforms_that_report_no_usage() {
+        // hidapi reports 0/0 where a backend cannot parse the report
+        // descriptor. Filtering those out would discard the only candidate
+        // and make the tool unusable there, so "cannot tell" must pass.
+        assert!(looks_like_openboot(0, 0));
+    }
+
+    #[test]
+    fn a_partial_usage_match_is_not_enough() {
+        assert!(!looks_like_openboot(OB_USAGE_PAGE, 0x0002));
+        assert!(!looks_like_openboot(0xFF01, OB_USAGE));
     }
 }

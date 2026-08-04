@@ -116,6 +116,7 @@ line.
 | `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
+| `OB_USB_VID` / `OB_USB_PID` | `0x1209` / `0x0001` | USB identity; set both or neither |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
 
@@ -132,6 +133,14 @@ It used to be a poll count merely named after milliseconds, which drifted
 badly under load — the default `10000` measured about 273 seconds on CH570 USB
 and about 86 seconds on CH592 USB. The value is unchanged; what moved is that
 it now means what it says.
+
+`OB_USB_VID` / `OB_USB_PID` let a product enumerate its bootloader under its
+own USB identity instead of a bootloader-specific one, so a user sees one
+device changing mode rather than two. Set both or neither. Doing this makes
+VID:PID ambiguous — the application's own HID interfaces sit behind the same
+pair — so the host distinguishes the bootloader by its vendor usage page
+`0xFF00` usage `0x01`, and the application must not use that pair. The
+`openboot` CLI already filters this way.
 
 ## Flash the bootloader
 

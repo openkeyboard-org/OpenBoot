@@ -17,3 +17,11 @@ OB_IDLE_TIMEOUT_MS := 10000
 # must refuse to boot mismatched bytes rather than silently launch them.
 # Cost is milliseconds: on a USB build the CRC runs after clock init.
 OB_BOOT_IMAGE_CRC := 1
+
+# Enumerate under the dongle's own USB identity rather than a separate
+# bootloader one, so a user sees one device that changes mode rather than two
+# unrelated ones. VID:PID alone is then ambiguous: the host distinguishes the
+# bootloader by its vendor HID usage page 0xFF00 usage 0x01, which the
+# application's interfaces (0xFFFF and 0xFF60) deliberately do not use.
+OB_USB_VID := 0x0C45
+OB_USB_PID := 0xFEFE

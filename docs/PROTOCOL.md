@@ -686,12 +686,28 @@ section 6.5. **BOOT is never retried** (section 6.6).
 
 | Item | Value |
 |---|---|
-| VID:PID | `0x1209:0x0001` — the pid.codes **test PID**. Interim only: a permanent pid.codes allocation will be filed when the repository is public, and the PID will change. Hosts should select on VID:PID *plus* serial/HELLO identity, not PID alone. |
+| VID:PID | `0x1209:0x0001` by default — the pid.codes **test PID**, interim until a permanent allocation is filed. **Board-configurable** via `OB_USB_VID`/`OB_USB_PID`, and a product is expected to change it. Hosts MUST NOT select on VID:PID alone (see below). |
 | Class | HID, one interface, one configuration |
 | Report descriptor | vendor usage page `0xFF00`; 64-byte input and output reports; **no report IDs** |
 | Endpoints | EP1 IN + EP1 OUT, interrupt, 64 bytes |
 | `iSerial` | the 64-bit ROM UID as 16 hex digits, most-significant nibble first (`printf "%016X"` of the u64 reported in HELLO) — used by the host `--serial` selector |
 | `bcdDevice` | the bootloader version (= HELLO `bl_version`) |
+
+**Finding the device.** A product may build the bootloader with its
+*application's* VID:PID, so that a user sees one device changing mode rather
+than two unrelated ones. VID:PID is then ambiguous: the application's own
+interfaces — keyboard, mouse, its own vendor interface — enumerate behind the
+same pair. A host MUST therefore select on VID:PID **plus HID usage page
+`0xFF00` usage `0x01`**, which is what the report descriptor above declares.
+
+A product doing this MUST keep its application off that usage. (OpenDongle
+uses `0xFFFF` and `0xFF60` for its vendor interfaces, so the two never
+collide.)
+
+Where a platform's HID backend does not report a usage it yields `0x0000`
+for both fields. A host SHOULD treat that as "cannot tell" and keep the
+candidate rather than discarding it — the reference tool does — since
+discarding would leave nothing to open.
 
 ## 13. UART parameters
 

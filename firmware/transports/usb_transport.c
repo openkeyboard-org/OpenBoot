@@ -3,12 +3,21 @@
  * interrupts are never enabled; RB_UC_INT_BUSY auto-NAKs while an event
  * is pending, so the 20 us poll cadence loses nothing).
  *
- * Identity: VID 0x1209 PID 0x0001 (pid.codes test range), one vendor
- * usage-page HID interface, EP1 interrupt IN+OUT, 64-byte reports, no
- * report IDs. One OBP frame per report, zero-padded; the core does ALL
- * frame validation. iManufacturer and iProduct share one "OpenBoot"
- * string to save flash (a per-family product name would cost ~40 bytes
- * of rodata for no protocol value — HELLO reports the chip family).
+ * Identity: VID 0x1209 PID 0x0001 (pid.codes test range) by default,
+ * overridable per board with OB_USB_VID / OB_USB_PID so a product can
+ * enumerate under its own identity instead of a bootloader-specific one.
+ * One vendor usage-page HID interface, EP1 interrupt IN+OUT, 64-byte
+ * reports, no report IDs. One OBP frame per report, zero-padded; the core
+ * does ALL frame validation. iManufacturer and iProduct share one
+ * "OpenBoot" string to save flash (a per-family product name would cost
+ * ~40 bytes of rodata for no protocol value — HELLO reports the chip
+ * family), and it doubles as the human-visible signal that a device
+ * sharing its application's VID:PID is currently in the bootloader.
+ *
+ * A board that shares its application's VID:PID makes VID:PID alone
+ * ambiguous. The report descriptor below declares vendor usage page
+ * 0xFF00 usage 0x01, which is what a host adds to VID:PID to tell the two
+ * apart; a board doing this must keep its application off that usage.
  *
  * The USB device register block (0x40008000) is byte-identical on CH57x
  * and CH59x (verified against CH572SFR.h and CH592SFR.h), so the R8_ /
@@ -38,12 +47,23 @@
 
 #define REPORT_DESC_LEN 25u
 
+/* pid.codes test allocation; boards override via the Makefile knobs. */
+#ifndef OB_USB_VID
+#define OB_USB_VID 0x1209u
+#endif
+#ifndef OB_USB_PID
+#define OB_USB_PID 0x0001u
+#endif
+_Static_assert(OB_USB_VID <= 0xFFFFu, "OB_USB_VID must fit in 16 bits");
+_Static_assert(OB_USB_PID <= 0xFFFFu, "OB_USB_PID must fit in 16 bits");
+
 static const uint8_t dev_desc[18] = {
     18,   0x01,             /* bLength, DEVICE                       */
     0x10, 0x01,             /* bcdUSB 1.10                           */
     0x00, 0x00, 0x00,       /* class/subclass/protocol per interface */
     64,                     /* bMaxPacketSize0                       */
-    0x09, 0x12, 0x01, 0x00, /* idVendor 0x1209, idProduct 0x0001     */
+    (uint8_t)OB_USB_VID, (uint8_t)(OB_USB_VID >> 8),
+    (uint8_t)OB_USB_PID, (uint8_t)(OB_USB_PID >> 8),
     (uint8_t)OB_BL_VERSION,
     (uint8_t)(OB_BL_VERSION >> 8), /* bcdDevice = bootloader version */
     1, 2, 3,                /* iManufacturer, iProduct, iSerialNumber */

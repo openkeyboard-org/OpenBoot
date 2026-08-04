@@ -19,3 +19,8 @@ OB_BOOT_IMAGE_CRC := 1
 # larger silicon. Covered by test_core_native.py (build-side clamp) and
 # test_board_config.py (this file really lands in the generated config).
 OB_APP_END := 0x0003A000
+
+# Same USB identity as the CH592 dongle: see opendongle-ch592.mk for why the
+# bootloader shares the application's VID:PID and how a host tells them apart.
+OB_USB_VID := 0x0C45
+OB_USB_PID := 0xFEFE

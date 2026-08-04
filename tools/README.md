@@ -40,7 +40,8 @@ Global selectors:
 - `--transport usb|uart` (USB by default)
 - `--port PATH` (implies UART; there is no port auto-scan)
 - `--serial SN` (implies USB; serial is the 16-hex-digit ROM UID)
-- `--vid` and `--pid` (defaults `0x1209:0x0001`)
+- `--vid` and `--pid` (defaults `0x1209:0x0001`; a product may ship its
+  bootloader on its own identity, in which case pass both)
 
 Flat binaries default to base `0x2000`; use `--base` to override it. Intel HEX
 files use addresses from their records. Images are padded to a 4-byte boundary
@@ -54,8 +55,11 @@ mean the device already reset.
 
 ## USB permissions
 
-USB uses a vendor-page HID interface and needs no custom driver. Linux users
-may need a udev rule for the hidraw node:
+USB uses a vendor-page HID interface and needs no custom driver. The tool
+selects on VID:PID **plus** HID usage page `0xFF00` usage `0x01`, so a device
+whose bootloader shares its application's VID:PID is still found unambiguously.
+
+Linux users may need a udev rule for the hidraw node:
 
 ```udev
 # /etc/udev/rules.d/70-openboot.rules

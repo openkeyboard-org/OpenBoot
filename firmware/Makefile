@@ -358,6 +358,20 @@ endif
 ifneq ($(filter-out 0,$(strip $(OB_BOOT_IMAGE_CRC))),)
 CONFIG_LINES += '\#define OB_BOOT_IMAGE_CRC 1'
 endif
+# USB identity. Absent leaves the pid.codes test allocation compiled into
+# usb_transport.c. A product sets both so its bootloader enumerates under the
+# same identity as its application; the host then needs the HID usage page to
+# tell the two apart (docs/PROTOCOL.md section 12).
+ifneq ($(strip $(OB_USB_VID))$(strip $(OB_USB_PID)),)
+ifeq ($(strip $(OB_USB_VID)),)
+$(error set OB_USB_VID alongside OB_USB_PID, or neither)
+endif
+ifeq ($(strip $(OB_USB_PID)),)
+$(error set OB_USB_PID alongside OB_USB_VID, or neither)
+endif
+CONFIG_LINES += '\#define OB_USB_VID $(OB_USB_VID)' \
+                '\#define OB_USB_PID $(OB_USB_PID)'
+endif
 
 # Force-include the generated configuration ahead of every TU. Equivalent to
 # the -D forest it replaces: both establish the macros before line 1 of the
