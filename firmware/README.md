@@ -18,7 +18,7 @@ See the [protocol specification](../docs/PROTOCOL.md),
 | Tool | Requirement |
 |---|---|
 | GNU Make | 4.3 or newer |
-| MounRiver GCC | GCC 12 `riscv-wch-elf-*` toolchain |
+| MounRiver GCC | "RISC-V Embedded GCC" 12 or 15 |
 | Python | Python 3 and pytest for host tests |
 | WCH SDK files | Initialized repository submodules |
 
@@ -35,8 +35,17 @@ export MRS_TOOLCHAIN=/path/to/toolchain/bin
 ```
 
 If the toolchain path causes Make quoting problems, use a space-free symlink.
-`make check-deps` verifies the pinned SDK revisions and GCC 12 toolchain. It
-warns when the compiler binary differs from the reference-build fingerprint.
+
+GCC 12 and GCC 15 both build the whole matrix; GCC 15 renamed the tools from
+`riscv-wch-elf-*` to `riscv32-wch-elf-*` and the build detects either. The two
+emit slightly different code (−12 to +80 bytes per image here), so an image is
+only byte-reproducible against the compiler that built it.
+
+`make check-deps` treats the pinned SDK revisions as hard failures and the
+compiler as advisory: an unvalidated major and a SHA-256 that differs from the
+reference-build fingerprint both warn and build on. GCC 15's linker also warns
+once per image about the RWX `LOAD` segment — accurate for a no-MMU image, and
+GCC 12's linker rejects the option that would silence it.
 
 ## Build
 

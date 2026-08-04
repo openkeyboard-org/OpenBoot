@@ -8,11 +8,10 @@ Checks, in order:
      dirty: a stray header dropped into an SDK include path changes the build
      without moving HEAD, which is precisely what this gate exists to rule
      out.
-  2. The MounRiver GCC12 toolchain directory contains the riscv-wch-elf tools
-     the Makefile invokes and riscv-wch-elf-gcc reports the expected major.
-     A SHA-256 fingerprint difference is reported as a reproducibility
-     warning because equivalent GCC12 installations may package different
-     compiler bytes.
+  2. The MounRiver toolchain directory contains the tools the Makefile
+     invokes. The compiler itself is only ever REPORTED on: an unexpected
+     SHA-256 or an unvalidated major warns and the build proceeds. Only a
+     missing or unrunnable tool fails.
 
 Paths are resolved relative to this file, so it can be run from anywhere:
 
@@ -45,20 +44,24 @@ PINNED_SDKS = (
 
 # MounRiver "RISC-V Embedded GCC12" (xPack GNU RISC-V Embedded GCC 12.2.0).
 # The SHA-256 records the compiler used for the reference builds. It is a
-# reproducibility fingerprint rather than an installation requirement; the
-# major check below is the compatibility gate.
+# reproducibility fingerprint, not an installation requirement.
 PINNED_COMPILER_SHA256 = (
     "7f2d3c114b98fe9e48ac6abe6259a4574291a8e2aba960b21dce73528ece9ff2"
 )
-REQUIRED_GCC_MAJOR = 12
 
-# Every tool the Makefile invokes from $(MRS_TOOLCHAIN). Checked here so a
-# missing tool fails at check-deps with a clear message instead of mid-build.
-REQUIRED_TOOLS = (
-    "riscv-wch-elf-gcc",
-    "riscv-wch-elf-objcopy",
-    "riscv-wch-elf-size",
-)
+# Compiler majors OpenBoot has actually been built and validated with. Anything
+# else warns and proceeds (see the module docstring); this is a statement about
+# what has been qualified, not a permission list.
+SUPPORTED_GCC_MAJORS = (12, 15)
+
+# MounRiver renamed the tools at GCC15: riscv-wch-elf-* became
+# riscv32-wch-elf-*. Probe for either so neither install needs symlinks.
+TOOL_PREFIXES = ("riscv-wch-elf-", "riscv32-wch-elf-")
+
+# What the Makefile invokes, prefix-less. Checked here so a missing tool fails
+# at check-deps rather than mid-build (nm is only used by board-policy, which
+# runs after a full matrix build).
+REQUIRED_TOOLS = ("gcc", "objcopy", "size", "nm")
 
 
 def fail(message: str) -> NoReturn:
@@ -107,24 +110,42 @@ def validate_sdk(relative: str, revision: str) -> None:
         )
 
 
+def detect_tool_prefix(toolchain: Path) -> str:
+    """Which riscv*-wch-elf- prefix this directory uses. Mirrors the probe in
+    firmware/Makefile, which needs the same answer at parse time."""
+    for prefix in TOOL_PREFIXES:
+        candidate = toolchain / f"{prefix}gcc"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return prefix
+    listed = " or ".join(f"{p}gcc" for p in TOOL_PREFIXES)
+    fail(
+        f"no MounRiver compiler in {toolchain}\n"
+        f"expected {listed}\n"
+        "point MRS_TOOLCHAIN at the bin directory of a MounRiver "
+        "'RISC-V Embedded GCC' install"
+    )
+
+
 def validate_toolchain(toolchain_value: Optional[str]) -> None:
     if toolchain_value is None or not toolchain_value.strip():
         fail(
             "toolchain not specified; pass --toolchain BIN_DIR or set "
-            "MRS_TOOLCHAIN to the MounRiver GCC12 bin directory"
+            "MRS_TOOLCHAIN to a MounRiver riscv-wch-elf bin directory"
         )
     toolchain = Path(toolchain_value).expanduser().resolve()
     if not toolchain.is_dir():
         fail(
             f"toolchain directory does not exist: {toolchain}\n"
-            "install MounRiver Studio's 'RISC-V Embedded GCC12' or point "
-            "MRS_TOOLCHAIN at an equivalent riscv-wch-elf bin directory"
+            "install MounRiver Studio's 'RISC-V Embedded GCC12' or 'GCC15', "
+            "or point MRS_TOOLCHAIN at an equivalent riscv-wch-elf bin "
+            "directory"
         )
+    prefix = detect_tool_prefix(toolchain)
     for name in REQUIRED_TOOLS:
-        executable = toolchain / name
+        executable = toolchain / f"{prefix}{name}"
         if not executable.is_file() or not os.access(executable, os.X_OK):
             fail(f"MounRiver tool is missing or not executable: {executable}")
-    compiler = toolchain / "riscv-wch-elf-gcc"
+    compiler = toolchain / f"{prefix}gcc"
     digest = hashlib.sha256(compiler.read_bytes()).hexdigest()
     if digest != PINNED_COMPILER_SHA256:
         warn(
@@ -143,11 +164,15 @@ def validate_toolchain(toolchain_value: Optional[str]) -> None:
         ).stdout.splitlines()[0]
     except (OSError, subprocess.CalledProcessError, IndexError) as exc:
         fail(f"cannot identify compiler {compiler}: {exc}")
+    # Unparseable and unvalidated are the same situation: the compiler runs,
+    # but it is not one the reference builds were made with. Say so, build on.
     match = re.search(r"(\d+)\.\d+\.\d+", version)
-    if match is None or int(match.group(1)) != REQUIRED_GCC_MAJOR:
-        fail(
-            f"compiler is not the required GCC {REQUIRED_GCC_MAJOR}.x: "
-            f"{version}"
+    if match is None or int(match.group(1)) not in SUPPORTED_GCC_MAJORS:
+        supported = ", ".join(f"{m}.x" for m in SUPPORTED_GCC_MAJORS)
+        warn(
+            f"not a validated compiler ({version})\n"
+            f"OpenBoot is built and tested with GCC {supported}\n"
+            "building anyway; these are not the reference bytes"
         )
 
 
@@ -158,7 +183,7 @@ def main() -> int:
     parser.add_argument(
         "--toolchain",
         default=os.environ.get("MRS_TOOLCHAIN"),
-        help="MounRiver GCC12 bin directory "
+        help="MounRiver riscv-wch-elf bin directory "
         "(default: $MRS_TOOLCHAIN; required unless --skip-toolchain)",
     )
     parser.add_argument(

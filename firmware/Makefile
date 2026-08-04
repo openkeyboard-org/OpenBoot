@@ -141,10 +141,14 @@ OB_IDLE_TIMEOUT_MS ?= 10000
 OB_BOOT_PIN_PORT_B ?= 0
 
 # ---------------------------------------------------------------------------
-# Toolchain: MounRiver GCC12 (riscv-wch-elf-*). The caller must point
+# Toolchain: a MounRiver "RISC-V Embedded GCC" install. The caller must point
 # MRS_TOOLCHAIN at its bin directory. Every recipe use is quoted so paths may
-# contain spaces:
+# contain spaces (the stock install directories do):
 #   make MRS_TOOLCHAIN=/path/to/bin ...
+#
+# GCC12 and GCC15 both build the matrix; check-deps warns rather than refuses
+# on anything else. Note GCC15 renamed the tool prefix and emits slightly
+# different code — see the TOOL_PREFIXES probe below and firmware/README.md.
 # ---------------------------------------------------------------------------
 MRS_TOOLCHAIN ?=
 
@@ -160,7 +164,7 @@ else ifneq ($(strip $(filter $(TOOLCHAIN_GOALS),$(MAKECMDGOALS))),)
 endif
 ifeq ($(NEEDS_TOOLCHAIN),1)
   ifeq ($(strip $(MRS_TOOLCHAIN)),)
-    $(error MRS_TOOLCHAIN is required; set it to the MounRiver GCC12 bin directory)
+    $(error MRS_TOOLCHAIN is required; set it to a MounRiver RISC-V Embedded GCC bin directory)
   endif
 endif
 
@@ -175,12 +179,31 @@ ifeq ($(strip $(HOST_CC)),)
 endif
 export HOST_CC
 
-CC := $(MRS_TOOLCHAIN)/riscv-wch-elf-gcc
+# MounRiver renamed the tool prefix at GCC15: riscv-wch-elf-* became
+# riscv32-wch-elf-*. Detect it instead of making every contributor bridge the
+# rename with a symlink farm. Probed with $(shell) rather than $(wildcard)
+# because MRS_TOOLCHAIN routinely contains a space ("RISC-V Embedded GCC12")
+# and $(wildcard) splits on whitespace. Kept in sync with detect_tool_prefix()
+# in check_dependencies.py, which enforces the same list.
+TOOL_PREFIXES := riscv-wch-elf- riscv32-wch-elf-
+ifneq ($(strip $(MRS_TOOLCHAIN)),)
+  TOOL_PREFIX := $(shell for p in $(TOOL_PREFIXES); do \
+                     if [ -x "$(MRS_TOOLCHAIN)/$${p}gcc" ]; then \
+                       printf '%s' "$$p"; break; \
+                     fi; \
+                   done)
+  ifeq ($(NEEDS_TOOLCHAIN)$(strip $(TOOL_PREFIX)),1)
+    $(error no MounRiver compiler in "$(MRS_TOOLCHAIN)" (expected one of \
+            $(addsuffix gcc,$(TOOL_PREFIXES))))
+  endif
+endif
+
+CC := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)gcc
 AS := $(CC)
 LD := $(CC)
-OBJCOPY := $(MRS_TOOLCHAIN)/riscv-wch-elf-objcopy
-SIZE := $(MRS_TOOLCHAIN)/riscv-wch-elf-size
-NM := $(MRS_TOOLCHAIN)/riscv-wch-elf-nm
+OBJCOPY := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objcopy
+SIZE := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)size
+NM := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)nm
 
 MINICHLINK ?= minichlink
 WCHLINK_SERIAL ?=
