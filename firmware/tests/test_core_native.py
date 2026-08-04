@@ -10,7 +10,8 @@ from ob_native import (
     CMD_BOOT, CMD_COMMIT, CMD_CRC, CMD_ERASE, CMD_HELLO, CMD_READ, CMD_WRITE,
     DET_ALIGN, DET_MISMATCH, DET_NONSEQ, DET_NORECORD, DET_RANGE,
     E_ADDR, E_ARG, E_CMD, E_FLASH, E_LEN, E_NOT_ERASED, E_PROTO, E_STATE,
-    E_VERIFY, MAX_WRITE, OK, RECORD_MAGIC, frame, get_device, load_golden,
+    E_VERIFY, MAX_WRITE, OK, RECORD_MAGIC, RECORD_SIZE, RSVD,
+    frame, get_device, load_golden,
 )
 
 GOLDEN = load_golden()
@@ -95,8 +96,13 @@ def full_update(dev, image, whole_app=False):
     commit(dev, image, seq & 0xFF)
 
 
-def expected_record(image):
-    body = u32(RECORD_MAGIC) + u32(len(image)) + u32(zlib.crc32(image))
+def expected_record(image, generation=1):
+    """The 32-byte OBR2 record a COMMIT of `image` should leave in its slot.
+
+    generation defaults to 1 because every mutation erases the target slot's
+    record first, so a fresh commit always claims the lowest generation."""
+    body = (u32(RECORD_MAGIC) + u32(generation) + u32(len(image)) +
+            u32(zlib.crc32(image)) + bytes(RSVD))
     return body + u32(zlib.crc32(body))
 
 
@@ -363,7 +369,7 @@ def test_commit_wrong_crc(dev):
     bad = zlib.crc32(image) ^ 1
     cmd_err(dev, CMD_COMMIT, 4, u32(len(image)) + u32(bad),
             E_VERIFY, DET_MISMATCH)
-    assert dev.record_raw() == dev.erased(0, 16)          # still invalidated
+    assert dev.record_raw() == dev.erased(dev.slot_record_addr(0), RECORD_SIZE)          # still invalidated
     cmd_err(dev, CMD_BOOT, 5, bytes([0]), E_VERIFY, DET_NORECORD)
 
 
@@ -436,7 +442,7 @@ def test_ch57x_nonseq_commit_rejected(dev57):
     write(dev57, APP_START, image[:48], 3)
     cmd_err(dev57, CMD_COMMIT, 4, u32(len(image)) + u32(zlib.crc32(image)),
             E_VERIFY, DET_NONSEQ)
-    assert dev57.record_raw() == dev57.erased(0, 16)
+    assert dev57.record_raw() == dev57.erased(dev57.slot_record_addr(0), RECORD_SIZE)
 
 
 def test_ch57x_short_stream_commit_rejected(dev57):
@@ -466,7 +472,9 @@ def test_ch57x_bless_via_xip_despite_f26(dev57):
     hello(dev57)
     _pl, act = commit(dev57, image, 1)   # write_count == 0 -> XIP path
     assert act == ACT_NONE
-    assert dev57.record_raw() == expected_record(image)
+    # generation 2: nothing was mutated, so the gen-1 record from the earlier
+    # update survived into this session and the new one has to outrank it.
+    assert dev57.record_raw() == expected_record(image, generation=2)
     assert dev57.violations() == 0
 
 
@@ -528,7 +536,9 @@ def test_power_cycle_forgets_commit_replay_cache(dev):
     hello(dev)
     before = dev.op_total()
     commit(dev, image, 1)
-    assert dev.op_total() == before + 1
+    # Two mutating ops, not one: storing a record erases its block before
+    # writing it, because flash only clears bits.
+    assert dev.op_total() == before + 2
 
 
 def test_ch59x_nonseq_commit_ok(dev59):
@@ -605,7 +615,7 @@ def test_erase_of_streamed_block_poisons_commit(dev57):
     erase(dev57, APP_START, BLOCK, seq=3)        # bytes gone, CRC stale
     cmd_err(dev57, CMD_COMMIT, 4, u32(48) + u32(zlib.crc32(image)),
             E_VERIFY, DET_NONSEQ)
-    assert dev57.record_raw() == dev57.erased(0, 16)
+    assert dev57.record_raw() == dev57.erased(dev57.slot_record_addr(0), RECORD_SIZE)
 
 
 def test_retry_with_different_bytes_poisons_commit(dev57):
@@ -682,7 +692,7 @@ def test_failed_record_write_reinvalidates_on_next_mutation(dev):
     # failure, then mutate again: the record MUST be re-invalidated.
     dev.set_record_raw(expected_record(image))
     erase(dev, APP_START, BLOCK, seq=4)
-    assert dev.record_raw() == dev.erased(0, 16), \
+    assert dev.record_raw() == dev.erased(dev.slot_record_addr(0), RECORD_SIZE), \
         "second mutation did not re-invalidate a possibly-landed record"
 
 
@@ -697,9 +707,10 @@ def test_boot_applies_full_app_validation(dev):
     cmd_err(dev, CMD_BOOT, 1, bytes([0]), E_VERIFY, DET_NORECORD)
 
 
-def _forged_record(img_len, image):
+def _forged_record(img_len, image, generation=1):
     """CRC-valid record body with an arbitrary (possibly bogus) img_len."""
-    body = u32(RECORD_MAGIC) + u32(img_len) + u32(zlib.crc32(image))
+    body = (u32(RECORD_MAGIC) + u32(generation) + u32(img_len) +
+            u32(zlib.crc32(image)) + bytes(RSVD))
     return body + u32(zlib.crc32(body))
 
 
@@ -716,7 +727,7 @@ def test_record_geometry_gates_boot_decision(dev):
         assert dev.boot_decide() == 1, f"img_len {bad_len:#x} accepted"
     # exact-maximum img_len is VALID (inclusive bound) — protects <= from
     # regressing to <; img_crc32 is not checked in default builds
-    dev.set_record_raw(_forged_record(dev.app_end - APP_START, image))
+    dev.set_record_raw(_forged_record(dev.slot_capacity(0), image))
     assert dev.boot_decide() == 0
     dev.set_record_raw(expected_record(image))   # positive control: it was
     assert dev.boot_decide() == 0                # the geometry that gated
@@ -742,7 +753,7 @@ def test_ch57x_no_bless_after_write_then_rehello(dev57):
     hello(dev57, 3)                              # new session, same power
     cmd_err(dev57, CMD_COMMIT, 4, u32(48) + u32(zlib.crc32(image[:48])),
             E_VERIFY, DET_NONSEQ)
-    assert dev57.record_raw() == dev57.erased(0, 16)
+    assert dev57.record_raw() == dev57.erased(dev57.slot_record_addr(0), RECORD_SIZE)
 
 
 def test_ch57x_no_bless_after_erase_only(dev57):
@@ -1026,3 +1037,84 @@ def test_ms_accumulate_survives_a_huge_delta(dev, ticks_per_ms):
 
     assert ms == (0xFFFFFFFF + ticks_per_ms - 1) // ticks_per_ms
     assert rem == (0xFFFFFFFF + ticks_per_ms - 1) % ticks_per_ms
+
+
+# --- A/B slot selection --------------------------------------------------
+# The invariant from docs/AB-UPDATE.md: at every instant at least one slot
+# holds a CRC-valid record describing a CRC-valid image, and the bootloader
+# boots the highest valid generation.
+
+SLOT_A, SLOT_B, SLOT_NONE = 0, 1, 0xFFFFFFFF
+
+
+def place_slot(dev, slot, image, generation):
+    """Put `image` and a matching record into `slot`, bypassing OBP."""
+    dev.write_flash(dev.slot_base(slot), image)
+    dev.set_record_raw(expected_record(image, generation), slot)
+
+
+def test_slots_do_not_overlap_and_records_sit_in_their_own_slot(dev):
+    a, b = dev.slot_base(SLOT_A), dev.slot_base(SLOT_B)
+
+    assert a + dev.slot_capacity(SLOT_A) <= dev.slot_record_addr(SLOT_A) < b
+    assert b + dev.slot_capacity(SLOT_B) <= dev.slot_record_addr(SLOT_B)
+    assert dev.slot_record_addr(SLOT_B) + BLOCK <= dev.app_end
+
+
+def test_higher_generation_wins(dev):
+    older, newer = bytes(range(1, 65)), bytes(range(65, 129))
+    place_slot(dev, SLOT_A, older, 4)
+    place_slot(dev, SLOT_B, newer, 5)
+
+    assert dev.boot_select() == SLOT_B
+
+    # and the other way round, to prove it is the generation and not the order
+    place_slot(dev, SLOT_A, older, 9)
+    assert dev.boot_select() == SLOT_A
+
+
+def test_a_newer_record_with_a_broken_image_falls_back(dev):
+    """The interrupted-update case: slot B's record claims a newer generation
+    but its image never landed, so the older slot must still boot."""
+    good = bytes(range(1, 65))
+    place_slot(dev, SLOT_A, good, 1)
+    # record says 64 bytes are there; the slot is left erased
+    dev.set_record_raw(expected_record(good, 2), SLOT_B)
+
+    assert dev.boot_select() == SLOT_A
+
+
+def test_no_valid_slot_selects_none(dev):
+    assert dev.boot_select() == SLOT_NONE
+
+
+def test_boot_decision_jumps_to_the_selected_slot(dev):
+    image = bytes(range(1, 65))
+    place_slot(dev, SLOT_B, image, 3)
+
+    assert dev.boot_decide() == 0, "should have jumped"
+    assert dev.jumped_to() == dev.slot_base(SLOT_B)
+
+
+def test_a_corrupt_record_never_validates_its_slot(dev):
+    image = bytes(range(1, 65))
+    place_slot(dev, SLOT_A, image, 1)
+    assert dev.boot_select() == SLOT_A
+
+    for bad in (
+        expected_record(image, 1)[:4] + b"\x00" + expected_record(image, 1)[5:],
+        expected_record(image, 1)[:-1] + b"\xAA",              # broken rec_crc32
+        expected_record(image, 1)[:16] + b"\x01" + expected_record(image, 1)[17:],
+    ):
+        dev.set_record_raw(bad, SLOT_A)
+        assert dev.boot_select() == SLOT_NONE, f"accepted {bad[:8].hex()}"
+
+
+def test_next_generation_outranks_every_valid_record(dev):
+    assert dev.next_generation() == 1
+
+    place_slot(dev, SLOT_A, bytes(range(1, 65)), 7)
+    assert dev.next_generation() == 8
+
+    place_slot(dev, SLOT_B, bytes(range(1, 65)), 11)
+    assert dev.next_generation() == 12

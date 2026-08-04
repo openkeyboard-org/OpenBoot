@@ -19,18 +19,24 @@ if (openboot_get_record(&record) == 0) {
 openboot_request_update();
 ```
 
-Define exactly one chip family:
+Define exactly one chip family, plus the slot this image is linked for:
 
-- `OPENBOOT_CHIP_CH57X` for CH570/CH572
-- `OPENBOOT_CHIP_CH59X` for CH591/CH592
+- `OPENBOOT_CHIP_CH57X` for CH570/CH572, or `OPENBOOT_CHIP_CH59X` for CH591/CH592
+- `OPENBOOT_SLOT_BASE` — the base address this image links at
+- `OPENBOOT_SLOT_SIZE` — the slot size OpenBoot was built with
 
 Add `firmware/app` and the matching WCH `StdPeriphDriver/inc` directory to the
-include path. CH59x applications must also link `libISP592.a`; CH57x reads the
-record directly from memory-mapped code flash.
+include path. Both families read the record straight out of memory-mapped code
+flash, so no ROM API is involved and CH59x applications no longer need
+`libISP592.a` linked for this.
+
+The application is built **once per slot** — these parts have no flash remap,
+so one image cannot execute from two bases. See
+[the A/B update design](../../docs/AB-UPDATE.md).
 
 `openboot_get_record()` checks that it can read a record with the expected
 magic. Applications that depend on the record contents should also validate
-`rec_crc32` over its first 12 bytes.
+`rec_crc32` over its first 28 bytes.
 
 ## Linker layout
 

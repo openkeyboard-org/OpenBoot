@@ -113,38 +113,68 @@
 #define OB_BOOT_APP           0x00
 #define OB_BOOT_STAY          0x01
 
-/* --- boot record (16 bytes, stored by the bootloader at COMMIT) --------- */
-/* CH57x: code flash 0x3B000; CH59x: DataFlash offset 0x7000 (last block). */
-#define OB_BOOT_RECORD_SIZE  0x10
-#define OB_RECORD_MAGIC       0x3152424Fu  /* "OBR1" read as u32 LE */
+/* --- boot record (32 bytes, one per slot, written at COMMIT) ----------- */
+/* Each slot is self-describing: its record lives at
+ *     slot_base + slot_size - OB_BOOT_RECORD_SIZE
+ * inside the slot it describes, written into space that slot's own erase
+ * already cleared. There is no shared metadata block, so nothing outside the
+ * slot being updated is ever written or erased. The bootloader boots the
+ * highest valid `generation`. See docs/AB-UPDATE.md for the invariant and
+ * the failure table it rests on. */
+#define OB_BOOT_RECORD_SIZE   0x20        /* 32 */
+#define OB_RECORD_MAGIC       0x3252424Fu /* "OBR2" read as u32 LE */
+#define OB_RECORD_RSVD_BYTES  0x0C        /* 12, zeroed and covered by the CRC */
 
 typedef struct {
-    uint32_t magic;      /* OB_RECORD_MAGIC */
-    uint32_t img_len;    /* bytes from app_start, multiple of 4 */
-    uint32_t img_crc32;  /* CRC-32/ISO-HDLC over [app_start, app_start+img_len) */
-    uint32_t rec_crc32;  /* CRC-32/ISO-HDLC over the 12 bytes above */
+    uint32_t magic;       /* OB_RECORD_MAGIC */
+    uint32_t generation;  /* monotonic; the highest VALID record wins */
+    uint32_t img_len;     /* bytes from the slot base, multiple of 4 */
+    uint32_t img_crc32;   /* CRC-32/ISO-HDLC over [slot_base, slot_base+img_len) */
+    uint8_t  rsvd[OB_RECORD_RSVD_BYTES];  /* MUST be zero */
+    uint32_t rec_crc32;   /* CRC-32/ISO-HDLC over the 28 bytes above */
 } ob_boot_record_t;
 
+/* Bytes the record CRC covers: everything but the CRC itself. A plain
+ * literal because gen_protocol.py mirrors these constants into Rust and
+ * Python and only understands literals; the assert below pins it. */
+#define OB_RECORD_CRC_LEN     0x1C        /* 28 */
+
+/* Both spellings are written out rather than abstracted behind a helper:
+ * gen_protocol.py mirrors every OB_* define into Rust and Python and accepts
+ * only plain numeric literals, so a macro here breaks the generator. */
 #ifdef __cplusplus
 static_assert(sizeof(ob_boot_record_t) == OB_BOOT_RECORD_SIZE,
               "boot record wire size must match OB_BOOT_RECORD_SIZE");
 static_assert(alignof(ob_boot_record_t) >= alignof(uint32_t),
               "boot record must retain uint32_t alignment");
 static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
-              offsetof(ob_boot_record_t, img_len) == 4 &&
-              offsetof(ob_boot_record_t, img_crc32) == 8 &&
-              offsetof(ob_boot_record_t, rec_crc32) == 12,
+              offsetof(ob_boot_record_t, generation) == 4 &&
+              offsetof(ob_boot_record_t, img_len) == 8 &&
+              offsetof(ob_boot_record_t, img_crc32) == 12 &&
+              offsetof(ob_boot_record_t, rsvd) == 16 &&
+              offsetof(ob_boot_record_t, rec_crc32) == 28,
               "boot record field offsets must match the stored format");
+static_assert((OB_BOOT_RECORD_SIZE % 4u) == 0,
+              "boot record size must be a whole number of flash words");
+static_assert(OB_RECORD_CRC_LEN == OB_BOOT_RECORD_SIZE - 4u,
+              "the record CRC must cover everything but itself");
 #else
 _Static_assert(sizeof(ob_boot_record_t) == OB_BOOT_RECORD_SIZE,
                "boot record wire size must match OB_BOOT_RECORD_SIZE");
 _Static_assert(_Alignof(ob_boot_record_t) >= _Alignof(uint32_t),
                "boot record must retain uint32_t alignment");
 _Static_assert(offsetof(ob_boot_record_t, magic) == 0 &&
-               offsetof(ob_boot_record_t, img_len) == 4 &&
-               offsetof(ob_boot_record_t, img_crc32) == 8 &&
-               offsetof(ob_boot_record_t, rec_crc32) == 12,
+               offsetof(ob_boot_record_t, generation) == 4 &&
+               offsetof(ob_boot_record_t, img_len) == 8 &&
+               offsetof(ob_boot_record_t, img_crc32) == 12 &&
+               offsetof(ob_boot_record_t, rsvd) == 16 &&
+               offsetof(ob_boot_record_t, rec_crc32) == 28,
                "boot record field offsets must match the stored format");
+/* Written with the ROM flash API, whose minimum unit is one 4-byte word. */
+_Static_assert((OB_BOOT_RECORD_SIZE % 4u) == 0,
+               "boot record size must be a whole number of flash words");
+_Static_assert(OB_RECORD_CRC_LEN == OB_BOOT_RECORD_SIZE - 4u,
+               "the record CRC must cover everything but itself");
 #endif
 
 /* --- app -> bootloader entry request ------------------------------------ */

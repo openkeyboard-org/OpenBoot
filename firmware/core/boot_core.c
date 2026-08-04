@@ -7,6 +7,20 @@
 #include "crc32.h"
 #include "openboot_port.h"
 
+/* The slot OBP mutations target. Fixed to A until HELLO advertises slots and
+ * the host is told to write the inactive one; the surrounding machinery is
+ * already slot-addressed so that change is local. */
+#define OB_WRITE_SLOT OB_SLOT_A
+
+/* Invalidate a slot's record by erasing the block that holds it. That block
+ * is inside the slot being mutated, so the other slot's record - and with it
+ * the device's ability to boot - is never at risk. */
+static uint32_t record_invalidate(uint32_t slot)
+{
+    /* The record owns its block outright, so this erases no image bytes. */
+    return ob_flash_erase(ob_slot_record_addr(slot), OB_FLASH_ERASE_BLOCK);
+}
+
 #ifndef OB_TRANSPORT_ID
 #error "build must inject OB_TRANSPORT_ID"
 #endif
@@ -140,7 +154,7 @@ static uint32_t mutation_begin(void)
     rec_state = OB_REC_INVALID;
     committed_img_len = 0;
     committed_img_crc = 0;
-    r = ob_record_invalidate();
+    r = record_invalidate(OB_WRITE_SLOT);
     if (r == 0)
         s.disarmed = 1;
     return r;
@@ -257,7 +271,7 @@ static int boot_record_trusted(void)
 {
     if (rec_state == OB_REC_FRESH)
         return 1;
-    return rec_state == OB_REC_FLASH && ob_boot_app_valid();
+    return rec_state == OB_REC_FLASH && ob_boot_app_valid(OB_WRITE_SLOT);
 }
 
 void ob_core_init(void)
@@ -394,7 +408,8 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
     img_crc = get32(pl + 4);
     if (img_len == 0 || (img_len % 4))
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_LEN, 0);
-    if (img_len > ob_app_end() - OB_FLASH_APP_START)
+    /* The slot's own record sits at its top, so an image may not reach it. */
+    if (img_len > ob_slot_capacity(OB_WRITE_SLOT))
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
 
     /* A lost success response is safe to retry. The record write itself
@@ -420,12 +435,11 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_VERIFY,
                         OB_DET_VERIFY_MISMATCH);
 
-    rec.magic = OB_RECORD_MAGIC;
+    rec.generation = ob_next_generation();
     rec.img_len = img_len;
     rec.img_crc32 = img_crc;
-    rec.rec_crc32 = ob_crc32(&rec, 12);
     record_begin_write();
-    r = ob_record_write(&rec);
+    r = ob_record_store(OB_WRITE_SLOT, &rec);   /* fills magic/rsvd/rec_crc32 */
     if (r) {
         record_note_write_failed();
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_FLASH, (uint8_t)r);

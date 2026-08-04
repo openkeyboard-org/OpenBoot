@@ -25,7 +25,13 @@ Verified against the vendor SDK headers and the datasheets vendored in
 | Minimum erase | 4096 B (code flash) | 4096 B (code flash) |
 | Minimum write | 4 B | 4 B (code flash) |
 | DataFlash | none | 32 KiB, 256 B page erase **documented but unusable** |
-| Record lives in | code flash | DataFlash |
+| Record lives in | code flash, inside its slot | code flash, inside its slot |
+
+Records moved into the slots, so the CH59x DataFlash path is gone entirely and
+both families read a record as a plain memory-mapped word. The blocks the old
+shared record used (`0x3B000` on ch57x, DataFlash `0x7000` on ch59x) are no
+longer written by OpenBoot; they stay reserved rather than being reclaimed, so
+OpenDongle's flash map does not move.
 
 Three facts do most of the work here:
 
@@ -61,8 +67,15 @@ roughly 4x headroom.
 
 ## The record
 
-Each slot is **self-describing**: a 32-byte record at `slot_base + slot_size -
-32`, written at COMMIT into space that slot's own erase already cleared.
+Each slot is **self-describing**: a 32-byte record in the **final erase block**
+of its own slot, at `slot_base + slot_size - 4096`, written at COMMIT.
+
+The record owns a whole 4096-byte block rather than just its 32 bytes because
+rewriting it means erasing it first — flash only clears bits — and erase
+granularity is one block. If an image could reach into that block, re-committing
+a slot would destroy image bytes. The block costs 4 KiB per slot (1.8% on ch592,
+3.6% on ch570) and makes every record rewrite safe. Usable image size is
+therefore `slot_size - 4096`.
 
 | Offset | Size | Field |
 |---|---|---|
@@ -109,9 +122,13 @@ point, and it is the only step that changes which slot boots.
 
 - The record sits outside the declared `img_len` and is bounds-checked before
   use.
-- The slot's own erase covers the record.
-- The application linker reserves the top 32 bytes of its slot.
+- The record's erase block contains nothing else, so erasing it destroys no
+  image bytes.
+- The application linker reserves the top 4096 bytes of its slot.
 - A slot is bootable only after its record validates.
+- A slot the silicon is too small to contain is unusable **wholesale**, never
+  shrunk — shrinking would move the record away from the address the
+  application was linked against.
 
 ## Rejected alternatives
 

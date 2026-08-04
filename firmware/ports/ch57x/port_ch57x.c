@@ -73,50 +73,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
     return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
 }
 
-/* ---- boot record (code flash 0x3B000; no DataFlash on ch57x) ---------- */
-/* XIP read: valid at boot, but stale after controller writes this power
- * cycle (F26) — callers must not re-read right after ob_record_write;
- * the write path verifies via the controller instead. */
-int ob_record_read(ob_boot_record_t *rec)
-{
-    const volatile uint32_t *src = (const volatile uint32_t *)OB_RECORD_ADDR;
-    uint32_t *dst = (uint32_t *)rec;
-    uint32_t i;
-
-    for (i = 0; i < sizeof(*rec) / 4u; i++) {
-        dst[i] = src[i];
-    }
-    return 0;
-}
-
-uint32_t ob_record_write(const ob_boot_record_t *rec)
-{
-    /* ROM API needs a 4-aligned RAM buffer */
-    uint32_t buf[sizeof(*rec) / 4u];
-    const uint32_t *src = (const uint32_t *)rec;
-    uint32_t i, rc;
-
-    for (i = 0; i < sizeof(buf) / 4u; i++) {
-        buf[i] = src[i];
-    }
-
-    rc = FLASH_ROM_ERASE(OB_RECORD_ADDR, OB_FLASH_ERASE_BLOCK);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = FLASH_ROM_WRITE(OB_RECORD_ADDR, buf, sizeof(buf));
-    if (rc != 0) {
-        return rc;
-    }
-    /* controller verify, not XIP (F26) */
-    return FLASH_ROM_VERIFY(OB_RECORD_ADDR, buf, sizeof(buf));
-}
-
-uint32_t ob_record_invalidate(void)
-{
-    return FLASH_ROM_ERASE(OB_RECORD_ADDR, OB_FLASH_ERASE_BLOCK);
-}
-
 /* ---- boot strap pin (active low) -------------------------------------- */
 #if defined(OB_BOOT_PIN_MASK) && defined(OB_BOOT_PIN_PORT_B) && OB_BOOT_PIN_PORT_B
 #error "ch57x has no GPIO port B"
@@ -240,10 +196,10 @@ void ob_delay_us(uint32_t us)
         : "+r"(n));
 }
 
-void ob_jump_app(void)
+void ob_jump_app(uint32_t base)
 {
     OB_STK_CTLR = 0;                     /* hand the app a stopped SysTick */
-    ((void (*)(void))OB_FLASH_APP_START)();
+    ((void (*)(void))(uintptr_t)base)();
     __builtin_unreachable();
 }
 

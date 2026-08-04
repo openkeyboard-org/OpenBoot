@@ -112,12 +112,9 @@ uint32_t ob_flash_erase(uint32_t addr, uint32_t len);
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len);
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);
 
-/* Boot-record storage (CH57x: code-flash page; CH59x: DataFlash last
- * block — always erased with a full 4096-byte length, never the SDK
- * EEPROM_ERASE inline). read returns 0 and fills *rec on success. */
-int      ob_record_read(ob_boot_record_t *rec);
-uint32_t ob_record_write(const ob_boot_record_t *rec);
-uint32_t ob_record_invalidate(void);
+/* No boot-record hooks: each slot's record lives INSIDE that slot, in code
+ * flash on both families, so it is read through XIP and written with the
+ * flash hooks above like any other app byte. See docs/AB-UPDATE.md. */
 
 /* Boot strap pin, debounced by the caller. Returns nonzero when the
  * stay-in-bootloader strap is asserted. Compiled to `return 0` when the
@@ -151,7 +148,9 @@ void ob_delay_us(uint32_t us);
  * calling it would lose time. */
 uint32_t ob_uptime_ms(void);
 
-void ob_jump_app(void) __attribute__((noreturn));
+/* Launch the application at `base` — the base of the slot the boot decision
+ * chose, not a fixed address, because either slot may be active. */
+void ob_jump_app(uint32_t base) __attribute__((noreturn));
 
 /* Soft-reset the chip. Where the next boot lands is not this function's
  * business — ob_boot_decide() re-runs and picks. BOOT uses it to LAUNCH
