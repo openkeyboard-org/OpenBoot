@@ -13,10 +13,15 @@ Checks, in order:
      SHA-256 or an unvalidated major warns and the build proceeds. Only a
      missing or unrunnable tool fails.
 
+With --expect-revision, also assert that THIS checkout is the revision the
+caller pinned and is clean — for a superproject that vendors OpenBoot and
+would otherwise have nothing comparing the submodule against its gitlink.
+
 Paths are resolved relative to this file, so it can be run from anywhere:
 
     python3 firmware/check_dependencies.py [--toolchain BIN_DIR]
                                            [--skip-toolchain]
+                                           [--expect-revision SHA]
 
 Exit status: 0 on success, 2 on failure with an actionable message on stderr.
 """
@@ -110,6 +115,25 @@ def validate_sdk(relative: str, revision: str) -> None:
         )
 
 
+def validate_self(revision: str) -> None:
+    """Assert this checkout IS the revision the caller pinned.
+
+    For a superproject that vendors OpenBoot: nothing else compares the
+    submodule against its gitlink, so a factory image could otherwise be
+    composed from a locally modified bootloader with every gate passing."""
+    actual = run_git(REPO_ROOT, "rev-parse", "HEAD")
+    if actual != revision:
+        fail(
+            f"OpenBoot is at {actual}, expected {revision}\n"
+            "check out the pinned revision, or update --expect-revision"
+        )
+    if run_git(REPO_ROOT, "status", "--porcelain", "--untracked-files=normal"):
+        fail(
+            f"OpenBoot checkout is dirty: {REPO_ROOT}\n"
+            "the built image would not be the pinned revision's bytes"
+        )
+
+
 def detect_tool_prefix(toolchain: Path) -> str:
     """Which riscv*-wch-elf- prefix this directory uses. Mirrors the probe in
     firmware/Makefile, which needs the same answer at parse time."""
@@ -192,8 +216,16 @@ def main() -> int:
         help="check only the SDK submodules (for hosts without the cross "
         "toolchain, e.g. running the host-native tests)",
     )
+    parser.add_argument(
+        "--expect-revision",
+        metavar="SHA",
+        help="assert this OpenBoot checkout is SHA and is clean; for a "
+        "superproject validating its pinned submodule",
+    )
     args = parser.parse_args()
     try:
+        if args.expect_revision:
+            validate_self(args.expect_revision)
         for relative, revision in PINNED_SDKS:
             validate_sdk(relative, revision)
         if not args.skip_toolchain:

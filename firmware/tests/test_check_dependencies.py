@@ -67,3 +67,28 @@ def test_missing_required_tool_still_fails(tmp_path):
 def test_directory_without_any_compiler_fails(tmp_path):
     with pytest.raises(RuntimeError, match="no MounRiver compiler"):
         deps.validate_toolchain(str(tmp_path))
+
+
+def fake_git(head: str, status: str = ""):
+    return lambda tree, *args: head if args[0] == "rev-parse" else status
+
+
+def test_expect_revision_accepts_a_clean_matching_checkout(monkeypatch):
+    monkeypatch.setattr(deps, "run_git", fake_git("cafe"))
+
+    deps.validate_self("cafe")
+
+
+def test_expect_revision_rejects_a_different_head(monkeypatch):
+    monkeypatch.setattr(deps, "run_git", fake_git("deadbeef"))
+
+    with pytest.raises(RuntimeError, match="expected cafe"):
+        deps.validate_self("cafe")
+
+
+def test_expect_revision_rejects_a_dirty_checkout(monkeypatch):
+    """Matching HEAD is not enough: local edits change the built bytes."""
+    monkeypatch.setattr(deps, "run_git", fake_git("cafe", " M firmware/Makefile"))
+
+    with pytest.raises(RuntimeError, match="dirty"):
+        deps.validate_self("cafe")

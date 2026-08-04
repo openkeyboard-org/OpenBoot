@@ -63,8 +63,10 @@ make test                       # host-native core tests
 
 Every binary is limited to 8192 bytes by the linker and a post-build check.
 
-A project that packages the bootloader should ask where the image lands rather
-than reconstruct the directory name, which is a build-system detail:
+## Packaging OpenBoot in another project
+
+Ask where the image lands rather than reconstructing the directory name, which
+is a build-system detail:
 
 ```sh
 make --no-print-directory CHIP=ch592 TRANSPORT=usb BOARD=myboard print-image-path
@@ -74,6 +76,21 @@ It prints one absolute path and nothing else, builds nothing, and needs no
 `MRS_TOOLCHAIN`. The `.elf`, `.hex`, and `.map` share the directory and stem.
 `--no-print-directory` matters when the result is captured: Make writes its own
 "Entering directory" lines to stdout.
+
+Each build also writes a `.manifest` beside the `.bin` recording the OpenBoot
+revision, whether that checkout was dirty, the chip/transport/board, and the
+image sha256. Hash that file into your own build identity — the image sha256
+already accounts for every knob, source file and compiler choice, so it is the
+whole statement about what was built.
+
+To assert the checkout really is the pinned one before building:
+
+```sh
+python3 check_dependencies.py --expect-revision <sha> --toolchain "$MRS_TOOLCHAIN"
+```
+
+That fails if HEAD differs or the worktree is dirty. Without it, nothing
+compares a vendored OpenBoot against its gitlink.
 
 ## Board configuration
 

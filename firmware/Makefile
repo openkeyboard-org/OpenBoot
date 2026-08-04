@@ -115,6 +115,7 @@ BOOTREQ_NAME_ch57x := OB_BOOTREQ_ADDR_CH57X
 BOOTREQ_NAME_ch59x := OB_BOOTREQ_ADDR_CH59X
 BOOTREQ_NAME := $(BOOTREQ_NAME_$(PORT))
 PROTOCOL_H := $(abspath ../protocol/openboot_protocol.h)
+REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
 # Only headers and libISP come from here -- no SDK driver .c is compiled.
@@ -351,7 +352,8 @@ MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 .PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
         print-image-path $(MATRIX)
 
-image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
+image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
+       $(BUILD)/$(TARGET).manifest
 
 # Where the current CHIP/TRANSPORT/BOARD image lands, for consumers that
 # package the bootloader (a superproject composing a factory image, say).
@@ -494,6 +496,36 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	"$(OBJCOPY)" -O ihex "$<" "$@"
+
+# Provenance for whoever packages this image. A superproject that vendors
+# OpenBoot (composing a factory image, say) otherwise has no way to record
+# WHICH bootloader it shipped: the gitlink is not consulted by any build step
+# and no revision reaches the artifact.
+#
+# The image sha256 is the whole statement about configuration — it already
+# subsumes every knob, source file and compiler choice — so this deliberately
+# does not restate the knobs. It records what produced the bytes and what they
+# hash to; openboot_config.h sits beside it for the expanded form.
+#
+# FORCE + cmp because the contents depend on git state, which moves without
+# any file in the build tree changing.
+$(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
+	@rev=$$(git -C "$(REPO_ROOT)" rev-parse HEAD 2>/dev/null || echo unknown); \
+	 if [ "$$rev" = unknown ]; then dirty=unknown; \
+	 elif [ -n "$$(git -C "$(REPO_ROOT)" status --porcelain 2>/dev/null)" ]; then dirty=1; \
+	 else dirty=0; fi; \
+	 if command -v sha256sum >/dev/null 2>&1; then sum=$$(sha256sum "$<"); \
+	 else sum=$$(shasum -a 256 "$<"); fi; \
+	 { echo "openboot_revision=$$rev"; \
+	   echo "openboot_dirty=$$dirty"; \
+	   echo "chip=$(CHIP)"; \
+	   echo "transport=$(TRANSPORT)"; \
+	   echo "board=$(BOARD)"; \
+	   echo "image=$(notdir $<)"; \
+	   echo "image_bytes=$$(wc -c < "$<" | tr -d ' ')"; \
+	   echo "image_sha256=$${sum%% *}"; \
+	 } > "$@.tmp"
+	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
 
 # SWD flash via a WCH-LinkE. minichlink ignores the return values of its
 # CH5xx erase/write calls and its byte-for-byte verify is disabled, so a zero
