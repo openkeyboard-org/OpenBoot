@@ -974,3 +974,55 @@ def test_a_board_clamped_build_bound_holds_on_larger_silicon(dev):
     cmd_err(dev, CMD_ERASE, 4, u32(dev.app_end) + u32(BLOCK), E_ADDR, DET_RANGE)
     over = dev.app_end - APP_START + 4
     cmd_err(dev, CMD_COMMIT, 5, u32(over) + u32(0), E_ADDR, DET_RANGE)
+
+
+# --- idle auto-boot timing ----------------------------------------------
+# main.c needs a transport and is only syntax-checked, so the timeout
+# arithmetic lives in boot_decision.c specifically to be reachable here.
+# Before this, nothing in the suite covered idle auto-boot at all.
+
+def test_idle_timeout_of_zero_never_elapses(dev):
+    """0 disables idle auto-boot (PROTOCOL.md section 10). It must not
+    degenerate into 'expire immediately', which would boot the app out from
+    under a board that deliberately asked to wait forever."""
+    assert not dev.idle_elapsed(0, 0, 0)
+    assert not dev.idle_elapsed(0, 0xFFFFFFFF, 0)
+
+
+def test_idle_elapses_exactly_at_the_deadline(dev):
+    assert not dev.idle_elapsed(1000, 10999, 10000)
+    assert dev.idle_elapsed(1000, 11000, 10000)
+    assert dev.idle_elapsed(1000, 11001, 10000)
+
+
+def test_idle_is_wrap_safe_across_the_millisecond_rollover(dev):
+    """start near 2^32 and now past the wrap: unsigned subtraction has to
+    give the true elapsed time, not a ~49-day answer."""
+    start = 0xFFFFF000
+    assert not dev.idle_elapsed(start, 0x00000FFF, 10000)   # 4095 ms elapsed
+    assert dev.idle_elapsed(start, 0x00001710, 10000)       # 10000 ms elapsed
+
+
+@pytest.mark.parametrize("ticks_per_ms", [6400, 60000, 100000])
+def test_ms_accumulate_loses_no_ticks_over_many_calls(dev, ticks_per_ms):
+    """Sub-millisecond remainders must carry across calls: the main loop
+    polls every few tens of microseconds, so most calls add no whole
+    millisecond at all and a truncating implementation would never advance."""
+    ms = rem = 0
+    delta = ticks_per_ms // 10 + 7          # ~0.1 ms, deliberately not a divisor
+    for _ in range(10000):
+        ms, rem = dev.ms_accumulate(ms, rem, delta, ticks_per_ms)
+
+    assert ms == (10000 * delta) // ticks_per_ms
+    assert rem == (10000 * delta) % ticks_per_ms
+
+
+@pytest.mark.parametrize("ticks_per_ms", [6400, 60000, 100000])
+def test_ms_accumulate_survives_a_huge_delta(dev, ticks_per_ms):
+    """A delta near 2^32 is what a missed counter wrap looks like. The
+    arithmetic must not overflow — adding the delta into the remainder
+    before dividing would."""
+    ms, rem = dev.ms_accumulate(0, ticks_per_ms - 1, 0xFFFFFFFF, ticks_per_ms)
+
+    assert ms == (0xFFFFFFFF + ticks_per_ms - 1) // ticks_per_ms
+    assert rem == (0xFFFFFFFF + ticks_per_ms - 1) % ticks_per_ms

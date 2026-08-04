@@ -16,6 +16,27 @@ int ob_record_load(ob_boot_record_t *rec)
            rec->img_len <= ob_app_end() - OB_FLASH_APP_START;
 }
 
+int ob_idle_elapsed(uint32_t start_ms, uint32_t now_ms, uint32_t timeout_ms)
+{
+    if (timeout_ms == 0u)
+        return 0;                       /* 0 disables idle auto-boot */
+    return (uint32_t)(now_ms - start_ms) >= timeout_ms;
+}
+
+void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
+                      uint32_t delta_ticks, uint32_t ticks_per_ms)
+{
+    /* Divide first and carry the remainder separately: adding delta_ticks
+     * into *rem before dividing would overflow uint32_t on a large delta.
+     * Both remainders are < ticks_per_ms, so their sum cannot. */
+    *ms  += delta_ticks / ticks_per_ms;
+    *rem += delta_ticks % ticks_per_ms;
+    if (*rem >= ticks_per_ms) {
+        *rem -= ticks_per_ms;
+        (*ms)++;
+    }
+}
+
 int ob_boot_app_valid(void)
 {
     ob_boot_record_t rec;

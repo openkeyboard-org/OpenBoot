@@ -1,19 +1,20 @@
-/* Bootloader main loop: fully polled, no interrupts, no timers. Every
- * iteration ends with exactly one OB_POLL_INTERVAL_US sleep, and the
- * count of those iterations is the only time source there is.
+/* Bootloader main loop: fully polled, no interrupts, no ISRs. Every
+ * iteration ends with one OB_POLL_INTERVAL_US sleep; the idle deadline is
+ * measured against ob_uptime_ms(), a free-running SysTick counter the port
+ * starts once the clock is settled.
  *
- * What that buys: no traffic can RESET the idle timer — every iteration
- * advances it, whether the frame was valid, rejected, malformed or
- * absent — so only a real session keeps a device out of its app.
+ * This used to count poll iterations and call the result milliseconds. It
+ * was not a wall clock and the drift was severe — bench-measured at ~8.6x
+ * on ch592-usb and ~27x on ch570-usb — because iterations are not equal in
+ * length: one that handles a frame also runs the handler and tr_send(),
+ * which on USB can block for milliseconds against a host that is not
+ * draining, yet still credited one nominal 20 us slot.
  *
- * What it does not buy: iterations are not equal in length, so this is
- * not a wall clock. An iteration that handles a frame also runs the
- * handler and tr_send() — on USB a send can block for milliseconds
- * against a host that is not draining — yet still credits one nominal
- * 20 us slot. Sustained framed traffic therefore stretches the real
- * timeout, potentially by orders of magnitude. Bounding it in seconds
- * needs a monotonic counter the port layer does not currently expose;
- * OB_IDLE_TIMEOUT_MS is a floor on a quiet link, not a deadline. */
+ * The property that mattered is preserved: no traffic RESETS the deadline.
+ * It is anchored once and only an active session (successful HELLO)
+ * suppresses it, so nothing short of a session keeps a device out of its
+ * app. Reading a clock instead of counting iterations changes only whether
+ * the number means what it says. */
 #include "openboot_port.h"
 #include "openboot_transport.h"
 #include "boot_core.h"
@@ -22,23 +23,20 @@
 #ifndef OB_IDLE_TIMEOUT_MS               /* board-overridable via build */
 #define OB_IDLE_TIMEOUT_MS 10000u
 #endif
-#define OB_IDLE_POLLS OB_MS_TO_POLLS(OB_IDLE_TIMEOUT_MS)
-#if OB_IDLE_TIMEOUT_MS != 0
-_Static_assert(OB_IDLE_POLLS > 0, "enabled idle timeout must take at least one poll");
-_Static_assert(OB_IDLE_POLLS <= UINT32_MAX, "idle timeout poll count exceeds uint32_t");
-#endif
 
 int main(void)
 {
     uint8_t resp[OB_MAX_FRAME];
-#if OB_IDLE_TIMEOUT_MS != 0
-    uint32_t idle = 0;
-#endif
+    uint32_t idle_start, now_ms;
 
     ob_port_init();
     ob_boot_decide();                    /* may not return */
     tr_init();
     ob_core_init();
+
+    /* Anchor after bring-up, so a slow boot-time image CRC does not eat
+     * into the connection window the board asked for. */
+    idle_start = ob_uptime_ms();
 
     for (;;) {
         uint32_t avail, rlen;
@@ -55,26 +53,33 @@ int main(void)
             }
         }
 
-        /* Idle auto-boot counts every iteration, so no traffic of any
-         * kind RESETS the timer (see the file header for why that is
-         * not the same as a wall clock); only an active session
-         * (successful HELLO) suppresses it, until the next reset.
-         * OB_IDLE_TIMEOUT_MS == 0 compile-disables the whole block (a
-         * preprocessor guard, not a folded runtime condition: -Werror's
-         * -Wtype-limits rejects `++idle >= 0` even when unreachable).
-         * This is the one direct ob_jump_app() outside the boot
-         * decision: it can never run on dirty flash — mutation requires
-         * a session and an active session suppresses the timeout — so
-         * XIP is coherent here by construction. */
-#if OB_IDLE_TIMEOUT_MS != 0
-        if (!ob_core_session_active() && ++idle >= OB_IDLE_POLLS) {
+        /* Idle auto-boot. The deadline is anchored once and no traffic of
+         * any kind RESETS it — valid, rejected, malformed and CRC-corrupt
+         * frames alike leave it alone. Only an active session (successful
+         * HELLO) suppresses it, until the next reset.
+         * ob_idle_elapsed() treats OB_IDLE_TIMEOUT_MS == 0 as disabled, so
+         * no preprocessor guard is needed here.
+         * This is the one direct ob_jump_app() outside the boot decision:
+         * it can never run on dirty flash — mutation requires a session and
+         * an active session suppresses the timeout — so XIP is coherent
+         * here by construction. */
+        /* Read the clock unconditionally, before any short-circuit can skip
+         * it: ob_uptime_ms() folds the hardware counter into a millisecond
+         * total and that counter wraps every ~43 s, so a caller that stops
+         * polling during a long session would silently lose time. Nothing
+         * depends on that today — a session suppresses the timeout for the
+         * rest of the power cycle — but a future session-quiet deadline
+         * would, and the bug would not be visible until then. */
+        now_ms = ob_uptime_ms();
+
+        if (!ob_core_session_active() &&
+            ob_idle_elapsed(idle_start, now_ms, OB_IDLE_TIMEOUT_MS)) {
             if (ob_boot_app_valid()) {
                 tr_deinit();
                 ob_jump_app();
             }
-            idle = 0;                    /* invalid app: recheck next period */
+            idle_start = now_ms;         /* invalid app: recheck next period */
         }
-#endif
 
         ob_delay_us(OB_POLL_INTERVAL_US);
     }

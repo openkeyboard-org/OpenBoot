@@ -111,7 +111,7 @@ line.
 |---|---|---|
 | `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
 | `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
-| `OB_IDLE_TIMEOUT_MS` | `10000` | Nominal idle auto-boot setting; `0` disables it |
+| `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it |
 | `OB_BOOT_IMAGE_CRC` | off | Check the complete image CRC on every boot |
 | `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
@@ -126,19 +126,12 @@ page, so its board file sets `OB_APP_END := 0x0003A000` and no `ERASE`,
 higher than the silicon's own end; the device advertises the resulting bound
 over HELLO, so the host needs no per-board knowledge.
 
-`OB_IDLE_TIMEOUT_MS` is a nominal setting, not a duration: it converts to a
-count of main-loop iterations, and an iteration is only nominally 20 µs. Real
-timeouts measured on silicon for the default `10000`:
-
-| Image | Real timeout | Drift |
-|---|---|---|
-| CH570 USB at 100 MHz | ~273 s | ~27x |
-| CH592 USB at 60 MHz | ~86 s | ~8.6x |
-
-The drift is per chip and transport, so a board that cares about the real
-figure has to measure it. Treat the setting as a lower bound in any case:
-frame handling stretches an iteration, and on USB a send against a host that
-is not draining can block for milliseconds while still crediting one slot.
+`OB_IDLE_TIMEOUT_MS` is wall-clock milliseconds, measured against a
+free-running SysTick counter that the port starts once the clock is settled.
+It used to be a poll count merely named after milliseconds, which drifted
+badly under load — the default `10000` measured about 273 seconds on CH570 USB
+and about 86 seconds on CH592 USB. The value is unchanged; what moved is that
+it now means what it says.
 
 ## Flash the bootloader
 

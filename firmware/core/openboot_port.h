@@ -110,6 +110,17 @@ void    ob_read_uid(uint8_t uid[8]);
 
 void ob_delay_us(uint32_t us);
 
+/* Free-running milliseconds since ob_port_init(). Monotonic, wraps at 2^32
+ * (~49 days). Backed by SysTick, which the port starts once the clock is
+ * settled — this is the only real time source in the bootloader.
+ *
+ * CONTRACT: the caller must poll this more often than the underlying tick
+ * counter wraps, which is ~43 s at the fastest supported clock. The main
+ * loop calls it every iteration (tens of microseconds), so the accumulator
+ * cannot miss a wrap. Anything that blocks for tens of seconds without
+ * calling it would lose time. */
+uint32_t ob_uptime_ms(void);
+
 void ob_jump_app(void) __attribute__((noreturn));
 
 /* Soft-reset the chip. Where the next boot lands is not this function's

@@ -640,9 +640,9 @@ The first successful HELLO disables auto-boot until the next reset;
 CRC-corrupt frames alike all advance it, so nothing short of a session can
 keep a device out of its app indefinitely.
 
-The timer counts poll iterations rather than wall-clock time. Frame handling
-can stretch the interval, so treat `OB_IDLE_TIMEOUT_MS` as a lower bound. A
-device without a valid record waits indefinitely.
+`OB_IDLE_TIMEOUT_MS` is wall-clock milliseconds, measured against a
+free-running hardware counter, so frame handling does not stretch it. A device
+without a valid record waits indefinitely.
 
 ## 11. Versioning and discovery
 

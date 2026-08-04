@@ -4,10 +4,9 @@
 # the recovery path; a USB image clears RB_PIN_DEBUG_EN, so SWD is gone
 # while the bootloader or app is running).
 
-# Idle auto-boot (poll count, not wall clock — measured ~273 s real for this
-# nominal 10000 on ch570-usb, see generic-ch57x.mk). Kept enabled so a
-# dongle never sits dead in the bootloader; value is nominal until
-# bench-calibrated.
+# Idle auto-boot, in real milliseconds. Kept enabled so a dongle never sits
+# dead in the bootloader. Previously a poll count that measured ~273 s here
+# for the same 10000; the value is unchanged and its meaning is what moved.
 OB_IDLE_TIMEOUT_MS := 10000
 
 # Full image-CRC check at every boot: same rationale as opendongle-ch592.mk.

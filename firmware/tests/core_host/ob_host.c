@@ -228,6 +228,21 @@ void ob_delay_us(uint32_t us)
     (void)us;
 }
 
+/* Test-controlled clock. main.c is the only caller in the firmware and is
+ * not linked here, so this exists to satisfy the port contract and to let a
+ * test drive ob_idle_elapsed() against a chosen "now". */
+static uint32_t host_now_ms;
+
+uint32_t ob_uptime_ms(void)
+{
+    return host_now_ms;
+}
+
+void host_set_uptime_ms(uint32_t v)
+{
+    host_now_ms = v;
+}
+
 void ob_jump_app(void)
 {
     if (jump_armed)

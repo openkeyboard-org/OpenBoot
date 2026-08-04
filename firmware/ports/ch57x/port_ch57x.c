@@ -2,6 +2,9 @@
  * OpenBoot port hooks: CH570/CH572.
  */
 #include "openboot_port.h"
+#include "boot_decision.h"   /* ob_ms_accumulate: shared tick arithmetic */
+
+static void ob_time_init(void);
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG/R8_FLASH_SCK)
@@ -48,6 +51,8 @@ void ob_port_init(void)
 #else
 #error "OB_CPU_HZ must be 6400000 or 100000000 on ch57x"
 #endif
+    /* Last, so the tick rate matches the clock we just settled on. */
+    ob_time_init();
 }
 
 /* ---- flash ------------------------------------------------------------ */
@@ -180,6 +185,45 @@ void ob_read_uid(uint8_t uid[8])
     }
 }
 
+/* ---- time -------------------------------------------------------------- */
+/* SysTick as a free-running HCLK up-counter — the bootloader's only real
+ * clock. Register map and bit semantics from CH572DS1 section 3.4.4; the
+ * ch59x port carries the same block, verified against CH592DS1 3.4.4.
+ *
+ *   CTLR bit0 STE   1 = counter enabled
+ *        bit1 STIE  0 = no interrupt (nothing is routed to the PFIC)
+ *        bit2 STCLK 1 = HCLK.  0 = HCLK/8, and 0 is the RESET VALUE, so
+ *                   enabling with STE alone silently gives an 8x-slow clock
+ *        bit3 STRE  0 = keep counting past CMP instead of auto-reloading
+ *        bit4 MODE  0 = count up
+ *
+ * CNT is 32 bits here (64 on ch59x) but its low word is at +0x08 on both, so
+ * both ports read 32 bits and rely on wrap-safe unsigned deltas. At 100 MHz
+ * it wraps every ~43 s, far more often than the ~49-day millisecond total,
+ * which is why the accumulator exists at all. */
+#define OB_STK_CTLR (*(volatile uint32_t *)0xE000F000u)
+#define OB_STK_CNTL (*(volatile uint32_t *)0xE000F008u)
+#define OB_STK_RUN  0x05u               /* STE | STCLK */
+
+static uint32_t up_ms, up_rem, up_last;
+
+static void ob_time_init(void)
+{
+    OB_STK_CTLR = 0;                     /* stop before touching the count */
+    OB_STK_CNTL = 0;
+    up_ms = up_rem = up_last = 0;
+    OB_STK_CTLR = OB_STK_RUN;
+}
+
+uint32_t ob_uptime_ms(void)
+{
+    uint32_t now = OB_STK_CNTL;
+
+    ob_ms_accumulate(&up_ms, &up_rem, now - up_last, OB_CPU_HZ / 1000u);
+    up_last = now;
+    return up_ms;
+}
+
 /* ---- misc -------------------------------------------------------------- */
 void ob_delay_us(uint32_t us)
 {
@@ -198,6 +242,7 @@ void ob_delay_us(uint32_t us)
 
 void ob_jump_app(void)
 {
+    OB_STK_CTLR = 0;                     /* hand the app a stopped SysTick */
     ((void (*)(void))OB_FLASH_APP_START)();
     __builtin_unreachable();
 }
