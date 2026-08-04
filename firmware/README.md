@@ -10,7 +10,8 @@ at `0x2000`.
 > flashing one. UART builds leave SWD enabled and are the safer bring-up path.
 
 See the [protocol specification](../docs/PROTOCOL.md),
-[architecture](../docs/ARCHITECTURE.md), and
+[architecture](../docs/ARCHITECTURE.md), the
+[A/B update design](../docs/AB-UPDATE.md), and the
 [application integration guide](app/README.md) for related details.
 
 ## Prerequisites

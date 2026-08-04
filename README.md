@@ -27,7 +27,7 @@ HELLO, so the host tool needs no per-chip database.
 | `protocol/` | Shared protocol constants and golden frames |
 | `firmware/` | Bootloader, ports, transports, boards, and tests |
 | `tools/` | `openboot` host CLI |
-| `docs/` | [Protocol](docs/PROTOCOL.md) and [architecture](docs/ARCHITECTURE.md) |
+| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [A/B update design](docs/AB-UPDATE.md) |
 | `third_party/openwch/` | Pinned WCH SDK submodules |
 
 ## Build
