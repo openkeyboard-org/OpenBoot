@@ -75,6 +75,34 @@ The addresses are defined as `OB_BOOTREQ_ADDR_CH57X` and
 `OB_BOOTREQ_ADDR_CH59X` in `protocol/openboot_protocol.h`. OpenBoot clears the
 request after consuming it.
 
+## Factory install
+
+A blank part needs the bootloader and the application written together. Build
+a whole-chip image with the bootloader, a pad, and the application:
+
+```sh
+make -C firmware CHIP=ch592 TRANSPORT=usb factory APP=/path/to/app.bin
+```
+
+The result is `<image>-factory.bin` in the build directory, written at flash
+address `0`. The application lands at the same file offset as its load
+address, so nothing has to be positioned by hand.
+
+> [!IMPORTANT]
+> The pad between the bootloader and `0x2000` is `0x00`, never `0xFF`.
+> Programming `0xFF` on CH5xx programs nothing, so an `0xFF` pad would never
+> reach flash and a post-flash readback compare would fail across the whole
+> pad region. `firmware/compose_factory.py` owns this rule; use it rather than
+> concatenating by hand.
+
+An application written this way has no boot record, so the device comes up in
+the bootloader. Attest it once over OBP and boot:
+
+```sh
+openboot bless app.bin
+openboot boot
+```
+
 ### CH59x DataFlash
 
 OpenBoot reserves DataFlash offsets `[0x7000, 0x8000)` for the boot record.

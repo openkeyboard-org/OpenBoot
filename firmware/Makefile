@@ -17,6 +17,7 @@
 #   make test                       host-native core tests, no cross toolchain
 #   make check-deps                 verify pinned SDKs + toolchain
 #   make print-image-path           absolute path of the current .bin, nothing else
+#   make factory APP=app.bin        whole-chip image: bootloader + pad + app
 #
 # Every image must fit the 8 KiB bootloader region. That is enforced three
 # ways: the linker script's FLASH MEMORY length, the post-objcopy byte gate in
@@ -157,6 +158,7 @@ MRS_TOOLCHAIN ?=
 # firmware targets do, including the default goal and matrix convenience
 # targets, so fail at parse time with one actionable message.
 TOOLCHAIN_GOALS := image all matrix-report board-policy check-deps flash flash-isp \
+                   factory \
                    $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 ifeq ($(strip $(MAKECMDGOALS)),)
   NEEDS_TOOLCHAIN := 1
@@ -350,7 +352,7 @@ LDLIBS := -l$(ISPLIB)
 .DEFAULT_GOAL := image
 MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 .PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
-        print-image-path $(MATRIX)
+        print-image-path factory $(MATRIX)
 
 image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
        $(BUILD)/$(TARGET).manifest
@@ -526,6 +528,23 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 	   echo "image_sha256=$${sum%% *}"; \
 	 } > "$@.tmp"
 	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
+
+# Whole-chip factory image: this bootloader, 0x00 pad to the app base, then
+# the caller's application. One file to write at flash 0 on a blank part.
+#
+#   make factory APP=/path/to/app.bin CHIP=ch592 TRANSPORT=usb
+#
+# The pad must be 0x00 and not 0xFF — programming 0xFF programs nothing on
+# CH5xx, so an 0xFF pad never lands in flash and a post-flash readback compare
+# fails across it. compose_factory.py owns that rule and the tests pin it.
+FACTORY_BIN := $(BUILD)/$(TARGET)-factory.bin
+
+factory: $(BUILD)/$(TARGET).bin compose_factory.py
+	@test -n "$(strip $(APP))" || { \
+	  echo "set APP=<application .bin> — factory needs an application to package" >&2; \
+	  exit 1; }
+	$(HOST_PYTHON) compose_factory.py --openboot "$(BUILD)/$(TARGET).bin" \
+	    --app "$(APP)" --output "$(FACTORY_BIN)"
 
 # SWD flash via a WCH-LinkE. minichlink ignores the return values of its
 # CH5xx erase/write calls and its byte-for-byte verify is disabled, so a zero
