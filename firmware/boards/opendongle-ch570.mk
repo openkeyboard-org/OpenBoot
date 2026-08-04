@@ -19,8 +19,4 @@ OB_BOOT_IMAGE_CRC := 1
 # ob_app_end() takes min(silicon, build), so this bound also holds on
 # larger silicon. Covered by test_core_native.py (build-side clamp) and
 # test_board_config.py (this file really lands in the generated config).
-#
-# NOTE: APP_END is a Makefile-internal variable (board files are included
-# after the per-chip default is assigned, firmware/Makefile:78-136). If an
-# official OB_APP_END board knob is ever introduced, migrate to it.
-APP_END := 0x0003A000
+OB_APP_END := 0x0003A000

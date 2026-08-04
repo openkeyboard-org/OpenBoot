@@ -115,8 +115,16 @@ line.
 | `OB_BOOT_IMAGE_CRC` | off | Check the complete image CRC on every boot |
 | `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
+| `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
+
+`OB_APP_END` fences OBP off from flash the board reserves for something else —
+OpenDongle's CH570 keeps its RF bond at `0x3A000`, just below the boot-record
+page, so its board file sets `OB_APP_END := 0x0003A000` and no `ERASE`,
+`WRITE` or `COMMIT` can reach either page. It must be 4096-aligned and no
+higher than the silicon's own end; the device advertises the resulting bound
+over HELLO, so the host needs no per-board knowledge.
 
 `OB_IDLE_TIMEOUT_MS` is a nominal setting, not a duration: it converts to a
 count of main-loop iterations, and an iteration is only nominally 20 µs. Real

@@ -45,6 +45,25 @@ def test_product_config_boot_image_crc(chip, board):
     assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
 
 
+@pytest.mark.parametrize("bad", [
+    "0x0003A800",   # not 4096-aligned
+    "0x0003C000",   # past the silicon end
+    "0x1000",       # below the app base
+    "0xZZZ",        # not a number
+])
+def test_unusable_app_end_is_refused(bad):
+    """The C side #errors on an overlapping region anyway; this is the
+    friendlier message, and it also catches the cases C cannot see."""
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch570", "TRANSPORT=usb", f"OB_APP_END={bad}",
+         "build/ch570-usb/openboot_config.h"],
+        capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "is not usable on ch570" in result.stderr
+
+
 @pytest.mark.parametrize("chip,board", [
     ("ch570", "opendongle-ch570"),
     ("ch592", "opendongle-ch592"),

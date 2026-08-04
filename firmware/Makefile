@@ -82,6 +82,11 @@ APP_END_ch572 := 0x0003B000
 APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
 APP_END := $(APP_END_$(CHIP))
+# The app base is fixed at OB_APP_BASE for every chip; used below to bound a
+# board override. The C side is the safety net (openboot_port.h and the port
+# headers #error on an empty or overlapping region) — this is only here to
+# say so in Make's voice, before a confusing compile error.
+APP_BASE_BYTES := 8192
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
 FAMILY_ch570 := OB_FAMILY_CH570
@@ -141,6 +146,29 @@ include boards/$(BOARD).mk
 OB_IDLE_TIMEOUT_MS ?= 10000
 # A board that defines only a strap mask selects port A by default.
 OB_BOOT_PIN_PORT_B ?= 0
+
+# A board may shrink the app region below what the silicon offers, to fence
+# OBP off from flash it does not own. OpenDongle's CH570 keeps its RF bond at
+# 0x3A000, directly below the boot-record page, so no ERASE/WRITE/COMMIT may
+# reach either. The port's ob_app_end() takes min(silicon, build), so a bound
+# set here also holds on larger silicon.
+#
+# Bounded rather than trusted: must be 4096-aligned (the erase granularity)
+# and inside (app base, silicon end]. Board files are included above, after
+# the per-chip default is assigned, which is what makes the override land.
+ifneq ($(strip $(OB_APP_END)),)
+  APP_END_OK := $(shell \
+    want=$$(printf '%d' '$(strip $(OB_APP_END))' 2>/dev/null) && \
+    max=$$(printf '%d' '$(APP_END_$(CHIP))') && \
+    [ "$$want" -gt $(APP_BASE_BYTES) ] && [ "$$want" -le "$$max" ] && \
+    [ $$(( want % 4096 )) -eq 0 ] && echo ok)
+  ifneq ($(strip $(APP_END_OK)),ok)
+    $(error OB_APP_END=$(OB_APP_END) is not usable on $(CHIP): expected a \
+            4096-aligned address above $(APP_BASE_BYTES) and no higher than \
+            $(APP_END_$(CHIP)))
+  endif
+  APP_END := $(OB_APP_END)
+endif
 
 # ---------------------------------------------------------------------------
 # Toolchain: a MounRiver "RISC-V Embedded GCC" install. The caller must point
