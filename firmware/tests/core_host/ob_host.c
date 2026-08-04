@@ -300,8 +300,15 @@ void host_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
 void host_write_flash(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
     /* Bypasses the controller entirely: models bytes that arrived by SWD or
-     * a factory image, so a test can stage a slot without driving OBP. */
+     * a factory image, so a test can stage a slot without driving OBP.
+     * Bounds-checked like host_flash_read: a mis-sized test payload should
+     * fail loudly as a violation, not corrupt the harness's heap. */
+    if (addr >= OB_FLASH_APP_END || len > OB_FLASH_APP_END - addr) {
+        violations++;
+        return;
+    }
     memcpy(&sim_flash[addr], buf, len);
+    memset(&sim_prog[addr], 0, len);       /* staged bytes are programmed */
 }
 
 uint32_t host_jumped_to(void)

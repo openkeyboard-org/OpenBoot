@@ -114,13 +114,18 @@
 #define OB_BOOT_STAY          0x01
 
 /* --- boot record (32 bytes, one per slot, written at COMMIT) ----------- */
-/* Each slot is self-describing: its record lives at
- *     slot_base + slot_size - OB_BOOT_RECORD_SIZE
- * inside the slot it describes, written into space that slot's own erase
- * already cleared. There is no shared metadata block, so nothing outside the
- * slot being updated is ever written or erased. The bootloader boots the
- * highest valid `generation`. See docs/AB-UPDATE.md for the invariant and
- * the failure table it rests on. */
+/* Each slot is self-describing: its record sits at the START of the slot's
+ * FINAL 4096-byte erase block,
+ *     slot_base + slot_size - 4096
+ * and owns that whole block. Not just its own 32 bytes: rewriting a record
+ * means erasing it first, since flash only clears bits, and erase granularity
+ * is one block - an image able to reach into that block would be destroyed by
+ * its own re-commit. Usable image size is therefore slot_size - 4096.
+ *
+ * There is no shared metadata block, so nothing outside the slot being updated
+ * is ever written or erased. The bootloader boots the highest valid
+ * `generation`. See docs/AB-UPDATE.md for the invariant and its failure
+ * table. */
 #define OB_BOOT_RECORD_SIZE   0x20        /* 32 */
 #define OB_RECORD_MAGIC       0x3252424Fu /* "OBR2" read as u32 LE */
 #define OB_RECORD_RSVD_BYTES  0x0C        /* 12, zeroed and covered by the CRC */
