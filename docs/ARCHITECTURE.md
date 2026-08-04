@@ -56,9 +56,9 @@ link time keeps the interfaces direct and the image small.
 
 | | CH570 / CH572 | CH591 | CH592 |
 |---|---|---|---|
-| App region | `[0x2000, 0x3B000)` (228 KiB) | `[0x2000, 0x30000)` (184 KiB) | `[0x2000, 0x70000)` (440 KiB) |
+| App region | `[0x2000, 0x3C000)` (232 KiB) | `[0x2000, 0x30000)` (184 KiB) | `[0x2000, 0x70000)` (440 KiB) |
 | RAM | 12 KiB | 26 KiB | 26 KiB |
-| Boot record | Code flash `0x3B000` | DataFlash `0x7000` | DataFlash `0x7000` |
+| Boot record | in each slot's last 4 KiB block | same | same |
 | UART pins | PA2 RX, PA3 TX | PA8 RX, PA9 TX by default | PA8 RX, PA9 TX by default |
 | USB clock | 100 MHz | 60 MHz | 60 MHz |
 | Live XIP CRC | No (`OB_FEAT_CRC_LIVE` clear) | Yes | Yes |

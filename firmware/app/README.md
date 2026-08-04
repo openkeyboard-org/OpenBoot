@@ -47,7 +47,7 @@ within the family-specific region:
 
 | Chip | App region | Length |
 |---|---|---|
-| CH570 / CH572 | `[0x2000, 0x3B000)` | 228 KiB |
+| CH570 / CH572 | `[0x2000, 0x3C000)` | 232 KiB |
 | CH591 | `[0x2000, 0x30000)` | 184 KiB |
 | CH592 | `[0x2000, 0x70000)` | 440 KiB |
 
@@ -57,8 +57,9 @@ For example:
 FLASH (rx) : ORIGIN = 0x00002000, LENGTH = 228K
 ```
 
-Do not reuse the vendor CH570 EVT application's 235 KiB length: it overlaps
-OpenBoot's boot-record block at `0x3B000`.
+Each slot reserves its final 4096-byte block for its own boot record, so an
+application may use `slot_size - 4096` bytes. See
+[the A/B update design](../../docs/AB-UPDATE.md).
 
 ### RAM boot request
 
@@ -111,7 +112,6 @@ openboot boot
 
 ### CH59x DataFlash
 
-OpenBoot reserves DataFlash offsets `[0x7000, 0x8000)` for the boot record.
-Applications may use `[0x0000, 0x7000)` but must not erase or write the reserved
-block. CH57x has no DataFlash; its record block at `0x3B000` is already outside
-the application region.
+OpenBoot no longer reserves any DataFlash: records live inside their slots, in
+code flash, on both families. All 32 KiB of CH59x DataFlash is available to the
+application. CH57x has no DataFlash at all.

@@ -69,10 +69,10 @@ def test_default_board_leaves_the_usb_identity_alone():
 
 
 @pytest.mark.parametrize("chip,board,size,b_base", [
-    # Two equal slots, floored to the erase block. ch570 generic leaves the
-    # top 4 KiB unused because 228 KiB does not halve onto a block boundary;
-    # the OpenDongle clamp to 0x3A000 happens to divide exactly.
-    ("ch570", "generic-ch57x",       "0x0001C000", "0x0001E000"),
+    # Two equal slots, floored to the erase block. ch570 generic now spans all
+    # of CodeFlash and halves exactly; the OpenDongle clamp to 0x3A000 keeps
+    # OBP off the bond page and halves exactly too, at a smaller size.
+    ("ch570", "generic-ch57x",       "0x0001D000", "0x0001F000"),
     ("ch570", "opendongle-ch570",    "0x0001C000", "0x0001E000"),
     ("ch591", "generic-ch59x",       "0x00017000", "0x00019000"),
     ("ch592", "opendongle-ch592",    "0x00037000", "0x00039000"),
@@ -101,7 +101,7 @@ def test_both_slots_fit_inside_the_app_region(chip, board):
 
 @pytest.mark.parametrize("bad", [
     "0x0003A800",   # not 4096-aligned
-    "0x0003C000",   # past the silicon end
+    "0x0003D000",   # past the silicon end
     "0x1000",       # below the app base
     "0xZZZ",        # not a number
 ])

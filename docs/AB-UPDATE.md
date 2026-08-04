@@ -29,9 +29,9 @@ Verified against the vendor SDK headers and the datasheets vendored in
 
 Records moved into the slots, so the CH59x DataFlash path is gone entirely and
 both families read a record as a plain memory-mapped word. The blocks the old
-shared record used (`0x3B000` on ch57x, DataFlash `0x7000` on ch59x) are no
-longer written by OpenBoot; they stay reserved rather than being reclaimed, so
-OpenDongle's flash map does not move.
+shared record used have been **reclaimed**: ch57x's app region grows to
+`[0x2000, 0x3C000)`, all of CodeFlash and the `FLASH_ROM_MAX_SIZE` limit in
+`ISP572.h`, and all 32 KiB of CH59x DataFlash is now free for applications.
 
 Three facts do most of the work here:
 
@@ -57,7 +57,7 @@ remainder left unused above slot B.
 
 | Build | Slot A | Slot B | Each |
 |---|---|---|---|
-| ch570 / ch572 (`0x3B000`) | `0x02000` | `0x1E000` | 112 KiB |
+| ch570 / ch572 (`0x3C000`) | `0x02000` | `0x1F000` | 116 KiB |
 | ch570 clamped (`0x3A000`) | `0x02000` | `0x1E000` | 112 KiB |
 | ch591 (`0x30000`) | `0x02000` | `0x19000` | 92 KiB |
 | ch592 (`0x70000`) | `0x02000` | `0x39000` | 220 KiB |

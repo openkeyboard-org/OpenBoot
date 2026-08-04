@@ -6,7 +6,7 @@ tool.
 
 | Chip | App region | RAM | Transports |
 |---|---|---|---|
-| CH570 / CH572 | `[0x2000, 0x3B000)` | 12 KiB | USB, UART |
+| CH570 / CH572 | `[0x2000, 0x3C000)` | 12 KiB | USB, UART |
 | CH591 | `[0x2000, 0x30000)` | 26 KiB | USB, UART |
 | CH592 | `[0x2000, 0x70000)` | 26 KiB | USB, UART |
 

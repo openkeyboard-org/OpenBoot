@@ -56,7 +56,7 @@ ACT_NONE, ACT_RESET = 0, 2        # 1 was ACT_JUMP_APP (retired: reset-to-launch
 # and features ARE protocol constants, so they come from the generated module
 # rather than being written out again here.
 PARAMS = {
-    "ch57x": dict(app_end=0x3B000, erased_word=0xF3F9BDA9,
+    "ch57x": dict(app_end=0x3C000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH570, features=0),
     "ch59x": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),

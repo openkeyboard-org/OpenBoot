@@ -536,28 +536,41 @@ What the protocol does **not** provide:
 ### 9.1 Boot record
 
 The boot record is the persistent statement "a verified image of this
-length and CRC is installed". It is written only by COMMIT and invalidated
-at the first mutation of every session.
+length and CRC is installed in this slot". There is **one record per slot**,
+written only by COMMIT.
 
-16-byte layout (`ob_boot_record_t`, all fields little-endian):
+32-byte layout (`ob_boot_record_t`, all fields little-endian):
 
 | Offset | Size | Field | Meaning |
 |---|---|---|---|
-| 0 | 4 | magic | `OB_RECORD_MAGIC = 0x3152424F` — ASCII `"OBR1"` (`4F 42 52 31` in memory) |
-| 4 | 4 | img_len | image bytes from `app_start`, multiple of 4 |
-| 8 | 4 | img_crc32 | CRC-32/ISO-HDLC over `[app_start, app_start + img_len)` |
-| 12 | 4 | rec_crc32 | CRC-32/ISO-HDLC over the 12 bytes above |
+| 0 | 4 | magic | `OB_RECORD_MAGIC = 0x3252424F` — ASCII `"OBR2"` (`4F 42 52 32` in memory) |
+| 4 | 4 | generation | monotonic; the device boots the **highest valid** generation |
+| 8 | 4 | img_len | image bytes from the **slot base**, multiple of 4 |
+| 12 | 4 | img_crc32 | CRC-32/ISO-HDLC over `[slot_base, slot_base + img_len)` |
+| 16 | 12 | reserved | MUST be zero; covered by `rec_crc32` |
+| 28 | 4 | rec_crc32 | CRC-32/ISO-HDLC over the 28 bytes above |
 
-A record is valid iff the magic matches, `rec_crc32` matches, and
-`img_len` is a nonzero multiple of 4 that fits the app region.
+A record is valid iff the magic matches, `rec_crc32` matches, the reserved
+bytes are zero, and `img_len` is a nonzero multiple of 4 that fits the
+slot's capacity.
 
-Storage location (one 4096-byte block, outside the app region on every
-chip, so ordinary app flashing never touches it):
+**Storage.** Each record lives in the final 4096-byte erase block of the
+slot it describes, at `slot_base + slot_size - 4096`. It owns that block
+outright, because rewriting a record means erasing it first — flash only
+clears bits — and erase granularity is one block; an image that could reach
+into it would be destroyed by its own re-commit. Usable image size is
+therefore `slot_size - 4096`.
 
-| Family | Location |
-|---|---|
-| CH570 / CH572 | code flash `0x3B000` — the block immediately after the app region (no DataFlash on these chips) |
-| CH591 / CH592 | DataFlash offset `0x7000` — the **last** 4 KiB block of the 32 KiB DataFlash, leaving the bottom free for applications |
+Nothing outside the slot being updated is written or erased at any point in
+an update, which is what lets an interrupted update leave the other slot
+bootable. See [the A/B update design](AB-UPDATE.md) for the full invariant
+and its failure table.
+
+Records were previously a single 16-byte `"OBR1"` structure in a reserved
+block outside the app region (code flash `0x3B000` on CH57x, DataFlash
+`0x7000` on CH59x). Those blocks are no longer reserved by OpenBoot, and
+`OBR1` records do not migrate: a device carrying one lands in the bootloader
+and needs one `bless`.
 
 **What the record does not say.** It describes exactly `img_len` bytes from
 `app_start` and says nothing about the flash beyond them. Within an OBP session

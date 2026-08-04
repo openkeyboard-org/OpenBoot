@@ -73,12 +73,13 @@ PORT := $(PORT_$(CHIP))
 
 # Exclusive end of the application flash region, injected per VARIANT as
 # -DOB_FLASH_APP_END (openboot_port.h #errors if it is missing):
-#   ch570/ch572: 240 K part, app [0x2000, 0x3B000) (top 4 K block at 0x3B000
-#                holds the boot record -- these parts have no DataFlash)
+#   ch570/ch572: 240 K part, app [0x2000, 0x3C000) -- all of CodeFlash, since
+#                records now live inside their slots rather than in a
+#                reserved block (see docs/AB-UPDATE.md)
 #   ch591:       192 K part, app [0x2000, 0x30000)
 #   ch592:       448 K part, app [0x2000, 0x70000)
-APP_END_ch570 := 0x0003B000
-APP_END_ch572 := 0x0003B000
+APP_END_ch570 := 0x0003C000
+APP_END_ch572 := 0x0003C000
 APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
 # `override` on both assignments: a variable set on the make COMMAND LINE

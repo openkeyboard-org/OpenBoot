@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #if defined(OB_HOST_CH57X)
-#define OB_FLASH_APP_END   0x0003B000u
+#define OB_FLASH_APP_END   0x0003C000u
 #define OB_ERASED_WORD     0xF3F9BDA9u
 #define OB_CHIP_FAMILY     OB_FAMILY_CH570
 #define OB_FEATURES        0x00000000u          /* F26: no live CRC */

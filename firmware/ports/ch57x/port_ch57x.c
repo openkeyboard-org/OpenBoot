@@ -99,7 +99,7 @@ int ob_bootpin_asserted(void)
  * case rather than by remembering this file exists. */
 #define OB_CHIP_ID_CH570  0x70u
 #define OB_CHIP_ID_CH572  0x72u
-#define OB_APP_END_240K   0x0003B000u   /* 240 KiB minus the record block */
+#define OB_APP_END_240K   0x0003C000u   /* all 240 KiB of CodeFlash */
 
 uint32_t ob_app_end(void)
 {
