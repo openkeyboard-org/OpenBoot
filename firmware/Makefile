@@ -539,12 +539,16 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 # fails across it. compose_factory.py owns that rule and the tests pin it.
 FACTORY_BIN := $(BUILD)/$(TARGET)-factory.bin
 
-factory: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).manifest compose_factory.py
+# check-deps, not just the .bin: a factory image is the artifact that ships,
+# so it must not be composable from an SDK or toolchain state that `make image`
+# would have refused.
+factory: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).manifest \
+         compose_factory.py
 	@test -n "$(strip $(APP))" || { \
 	  echo "set APP=<application .bin> — factory needs an application to package" >&2; \
 	  exit 1; }
 	$(HOST_PYTHON) compose_factory.py --openboot "$(BUILD)/$(TARGET).bin" \
-	    --app "$(APP)" --output "$(FACTORY_BIN)"
+	    --app "$(APP)" --app-end $(APP_END) --output "$(FACTORY_BIN)"
 
 # SWD flash via a WCH-LinkE. minichlink ignores the return values of its
 # CH5xx erase/write calls and its byte-for-byte verify is disabled, so a zero

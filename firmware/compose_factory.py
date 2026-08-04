@@ -43,13 +43,20 @@ def app_base() -> int:
 OPENBOOT_REGION_BYTES = app_base()
 
 
-def compose_factory(openboot: bytes, app: bytes) -> bytes:
+def compose_factory(openboot: bytes, app: bytes, app_max: int | None = None) -> bytes:
     if not 0 < len(openboot) <= OPENBOOT_REGION_BYTES:
         raise ValueError(
             f"OpenBoot image must be 1..{OPENBOOT_REGION_BYTES} bytes, "
             f"got {len(openboot)}")
     if not app:
         raise ValueError("application image is empty")
+    # Without a bound the composer will happily emit an image that runs past
+    # the end of the application region - and a whole-chip flash of it would
+    # then write over whatever lives above.
+    if app_max is not None and len(app) > app_max:
+        raise ValueError(
+            f"application is {len(app)} bytes, exceeds the {app_max}-byte "
+            f"application region")
     return openboot + b"\x00" * (OPENBOOT_REGION_BYTES - len(openboot)) + app
 
 
@@ -79,11 +86,22 @@ def main() -> int:
                         help="OpenBoot bootloader binary, loaded at 0")
     parser.add_argument("--app", type=Path, required=True,
                         help="application binary, loaded at OB_APP_BASE")
+    parser.add_argument("--app-end", default=None,
+                        help="exclusive end of the application region, e.g. "
+                             "0x00070000; the largest usable application "
+                             "follows from it. Omit to skip the bound.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
+        # The composer already owns the region base (OB_APP_BASE, read from
+        # the protocol header), so the caller passes only the end and the
+        # bound follows. Keeps hex parsing in Python rather than in a shell
+        # arithmetic expansion.
+        app_max = None
+        if args.app_end is not None:
+            app_max = int(args.app_end, 0) - OPENBOOT_REGION_BYTES
         factory = compose_factory(args.openboot.read_bytes(),
-                                  args.app.read_bytes())
+                                  args.app.read_bytes(), app_max)
     except ValueError as exc:
         print(f"factory composition failed: {exc}", file=sys.stderr)
         return 2

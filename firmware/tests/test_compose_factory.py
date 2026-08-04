@@ -20,7 +20,9 @@ def test_region_matches_the_protocol_header():
     assert OPENBOOT_REGION_BYTES == ob_consts.OB_APP_BASE
 
 
-@pytest.mark.parametrize("size", [1, 100, 4080, 8191, 8192])
+@pytest.mark.parametrize("size", [1, 100, 4080,
+                                  OPENBOOT_REGION_BYTES - 1,
+                                  OPENBOOT_REGION_BYTES])
 def test_app_lands_at_exactly_the_app_base(size):
     openboot = bytes((index * 7 + 3) & 0xFF for index in range(size))
 
@@ -57,6 +59,22 @@ def test_pad_byte_is_0x00_not_0xff():
 def test_rejects_unusable_inputs(openboot, app):
     with pytest.raises(ValueError):
         compose(openboot, app)
+
+
+def test_an_application_larger_than_the_region_is_refused():
+    """Without this the composer emits an image running past the app region,
+    and a whole-chip flash writes over whatever lives above it."""
+    boot = b"\xAA" * 100
+
+    compose(boot, b"\x11" * 64, 64)                  # exactly the bound is fine
+    with pytest.raises(ValueError, match="exceeds"):
+        compose(boot, b"\x11" * 65, 64)
+
+
+def test_no_bound_given_means_no_bound_enforced():
+    """The argument is optional so a standalone run still works; the Makefile
+    always supplies it."""
+    compose(b"\xAA" * 100, b"\x11" * 10_000_000)
 
 
 def test_write_atomic_creates_missing_parents(tmp_path):

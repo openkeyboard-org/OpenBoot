@@ -165,7 +165,7 @@ def validate_toolchain(toolchain_value: Optional[str]) -> None:
     if toolchain_value is None or not toolchain_value.strip():
         fail(
             "toolchain not specified; pass --toolchain BIN_DIR or set "
-            "MRS_TOOLCHAIN to a MounRiver riscv-wch-elf bin directory"
+            "MRS_TOOLCHAIN to a MounRiver RISC-V Embedded GCC bin directory"
         )
     toolchain = Path(toolchain_value).expanduser().resolve()
     if not toolchain.is_dir():
@@ -218,7 +218,7 @@ def main() -> int:
     parser.add_argument(
         "--toolchain",
         default=os.environ.get("MRS_TOOLCHAIN"),
-        help="MounRiver riscv-wch-elf bin directory "
+        help="MounRiver RISC-V Embedded GCC bin directory "
         "(default: $MRS_TOOLCHAIN; required unless --skip-toolchain)",
     )
     parser.add_argument(
