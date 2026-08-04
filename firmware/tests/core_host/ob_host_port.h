@@ -26,6 +26,15 @@
 #define OB_FLASH_WRITE_PAGE  256u
 #define OB_CPU_HZ            6400000u
 
+/* A/B slots. The real build computes these in the Makefile and injects them;
+ * reproduce the same rule here (half the region, floored to the erase block)
+ * so the harness exercises the geometry the firmware actually ships with. */
+#define OB_SLOT_SIZE \
+    ((((OB_FLASH_APP_END - OB_FLASH_APP_START) / 2u) / OB_FLASH_ERASE_BLOCK) \
+     * OB_FLASH_ERASE_BLOCK)
+#define OB_SLOT_A_BASE OB_FLASH_APP_START
+#define OB_SLOT_B_BASE (OB_SLOT_A_BASE + OB_SLOT_SIZE)
+
 /* Boot-request word lives in a harness variable, not at a fixed address. */
 extern uint32_t ob_host_bootreq;
 #define OB_BOOTREQ_ADDR ((uintptr_t)&ob_host_bootreq)

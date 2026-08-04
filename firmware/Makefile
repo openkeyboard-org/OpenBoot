@@ -93,6 +93,9 @@ override APP_END := $(APP_END_$(CHIP))
 # headers #error on an empty or overlapping region) — this is only here to
 # say so in Make's voice, before a confusing compile error.
 APP_BASE_BYTES := 8192
+# Flash erase granularity, and therefore the alignment every region boundary
+# must respect. Mirrors OB_FLASH_ERASE_BLOCK in the port headers.
+ERASE_BLOCK_BYTES := 4096
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
 FAMILY_ch570 := OB_FAMILY_CH570
@@ -178,6 +181,40 @@ ifneq ($(strip $(OB_APP_END)),)
             $(APP_END_$(CHIP)))
   endif
   override APP_END := $(OB_APP_END)
+endif
+
+# ---------------------------------------------------------------------------
+# A/B slot geometry.
+#
+# The app region is split in two so a failed update leaves the previous image
+# intact and bootable. Both slots are the same size because the application is
+# LINKED per slot — these parts have no flash remap (the only address-related
+# bit, RB_ROM_CODE_OFS, is a fixed boot-entry selector, not a translation), and
+# the vendor BLE/RF libraries are -mcmodel=medany blobs whose PC-relative
+# references to fixed RAM break under any base shift. So slot B holds a second
+# build of the same application, not a copy of slot A's bytes.
+#
+# Size is half the region rounded DOWN to the erase granularity; any remainder
+# is left unused at the top rather than making the slots unequal, which the
+# per-slot link addresses could not express anyway.
+#
+#   ch570/ch572 (0x3B000): A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
+#   ch570 clamped 0x3A000: A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
+#   ch591       (0x30000): A [0x02000,0x19000)  B [0x19000,0x30000)   92 KiB
+#   ch592       (0x70000): A [0x02000,0x39000)  B [0x39000,0x70000)  220 KiB
+# ---------------------------------------------------------------------------
+SLOT_GEOM := $(shell \
+  base=$(APP_BASE_BYTES); \
+  end=$$(printf '%d' '$(APP_END)'); \
+  size=$$(( ((end - base) / 2 / $(ERASE_BLOCK_BYTES)) * $(ERASE_BLOCK_BYTES) )); \
+  printf '0x%08X 0x%08X 0x%08X' "$$size" "$$base" "$$((base + size))")
+OB_SLOT_SIZE   := $(word 1,$(SLOT_GEOM))
+OB_SLOT_A_BASE := $(word 2,$(SLOT_GEOM))
+OB_SLOT_B_BASE := $(word 3,$(SLOT_GEOM))
+
+ifeq ($(strip $(OB_SLOT_SIZE)),0x00000000)
+  $(error app region $(APP_BASE_BYTES)..$(APP_END) on $(CHIP) is too small to \
+          split into two $(ERASE_BLOCK_BYTES)-byte-aligned slots)
 endif
 
 # ---------------------------------------------------------------------------
@@ -338,7 +375,10 @@ CONFIG_LINES := \
   '\#define OB_CPU_HZ $(CPU_HZ)' \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
-  '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)'
+  '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
+  '\#define OB_SLOT_SIZE $(OB_SLOT_SIZE)' \
+  '\#define OB_SLOT_A_BASE $(OB_SLOT_A_BASE)' \
+  '\#define OB_SLOT_B_BASE $(OB_SLOT_B_BASE)'
 # CH57x crystal load capacitance. Leave this absent to use the port's
 # vendor-reference default; emit an explicit board override when supplied.
 ifneq ($(strip $(OB_HSE_CAP_LOAD)),)

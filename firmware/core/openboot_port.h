@@ -57,6 +57,36 @@
 #error "port must define OB_FEATURES"
 #endif
 
+/* ---- A/B slot geometry (injected by the Makefile) --------------------- */
+/* Two equally sized slots inside the app region. They are equal because the
+ * application is LINKED per slot rather than copied between them — see the
+ * geometry block in firmware/Makefile for why a copy is not available on
+ * these parts. Any region remainder is left unused above slot B. */
+#ifndef OB_SLOT_SIZE
+#error "build must inject OB_SLOT_SIZE"
+#endif
+#ifndef OB_SLOT_A_BASE
+#error "build must inject OB_SLOT_A_BASE"
+#endif
+#ifndef OB_SLOT_B_BASE
+#error "build must inject OB_SLOT_B_BASE"
+#endif
+#if OB_SLOT_SIZE == 0
+#error "slot size must be non-zero"
+#endif
+#if (OB_SLOT_SIZE % OB_FLASH_ERASE_BLOCK) != 0
+#error "slot size must be a multiple of the erase block"
+#endif
+#if OB_SLOT_A_BASE != OB_FLASH_APP_START
+#error "slot A must start at the app base"
+#endif
+#if OB_SLOT_B_BASE != (OB_SLOT_A_BASE + OB_SLOT_SIZE)
+#error "slot B must start immediately after slot A"
+#endif
+#if (OB_SLOT_B_BASE + OB_SLOT_SIZE) > OB_FLASH_APP_END
+#error "slot B must end inside the app region"
+#endif
+
 /* Erased-block bitmap: 1 bit per erase block of the largest app region
  * (CH592: 440 KiB / 4 KiB = 110 blocks). */
 #define OB_BITMAP_BYTES 16

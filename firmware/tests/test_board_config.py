@@ -68,6 +68,37 @@ def test_default_board_leaves_the_usb_identity_alone():
     assert "OB_USB_" not in gen_config("ch592", "generic-ch59x")
 
 
+@pytest.mark.parametrize("chip,board,size,b_base", [
+    # Two equal slots, floored to the erase block. ch570 generic leaves the
+    # top 4 KiB unused because 228 KiB does not halve onto a block boundary;
+    # the OpenDongle clamp to 0x3A000 happens to divide exactly.
+    ("ch570", "generic-ch57x",       "0x0001C000", "0x0001E000"),
+    ("ch570", "opendongle-ch570",    "0x0001C000", "0x0001E000"),
+    ("ch591", "generic-ch59x",       "0x00017000", "0x00019000"),
+    ("ch592", "opendongle-ch592",    "0x00037000", "0x00039000"),
+])
+def test_slot_geometry(chip, board, size, b_base):
+    cfg = gen_config(chip, board)
+
+    assert f"#define OB_SLOT_SIZE {size}\n" in cfg
+    assert "#define OB_SLOT_A_BASE 0x00002000\n" in cfg
+    assert f"#define OB_SLOT_B_BASE {b_base}\n" in cfg
+
+
+@pytest.mark.parametrize("chip,board", [
+    ("ch570", "opendongle-ch570"),
+    ("ch592", "opendongle-ch592"),
+])
+def test_both_slots_fit_inside_the_app_region(chip, board):
+    """The C side #errors on this too; catching it here says which board."""
+    cfg = gen_config(chip, board)
+    val = lambda name: int(
+        [l for l in cfg.splitlines() if l.startswith(f"#define {name} ")][0].split()[-1], 16)
+
+    assert val("OB_SLOT_B_BASE") + val("OB_SLOT_SIZE") <= val("OB_FLASH_APP_END")
+    assert val("OB_SLOT_A_BASE") + val("OB_SLOT_SIZE") == val("OB_SLOT_B_BASE")
+
+
 @pytest.mark.parametrize("bad", [
     "0x0003A800",   # not 4096-aligned
     "0x0003C000",   # past the silicon end
