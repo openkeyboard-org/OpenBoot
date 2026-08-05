@@ -622,15 +622,34 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 	 } > "$@.tmp"
 	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
 
-# Whole-chip factory image: this bootloader, 0x00 pad to the app base, then
-# the caller's application. One file to write at flash 0 on a blank part.
+# Whole-chip factory image: this bootloader, 0x00 pad to the app base, the
+# caller's application, and slot A's boot record. One file to write at flash 0
+# on a blank part, which then boots the application on its own.
 #
 #   make factory APP=/path/to/app.bin CHIP=ch592 TRANSPORT=usb
+#
+# The application must be the SLOT A build: the record describes slot A, and
+# an application only runs at the base it was linked for.
+#
+# The record is what makes the part bootable off the line. Without it a
+# factory-programmed device comes up in the bootloader and needs a host to run
+# `openboot bless` before it will run anything — set FACTORY_BLESS=0 for that,
+# which is occasionally what a bring-up image wants and never what production
+# does.
+#
+# Blessing costs size: the record sits at the top of slot A, so the image
+# spans everything below it and is mostly zeros. That is the price of one
+# contiguous blob any programmer can write at address 0.
 #
 # The pad must be 0x00 and not 0xFF — programming 0xFF programs nothing on
 # CH5xx, so an 0xFF pad never lands in flash and a post-flash readback compare
 # fails across it. compose_factory.py owns that rule and the tests pin it.
 FACTORY_BIN := $(BUILD)/$(TARGET)-factory.bin
+FACTORY_BLESS ?= 1
+# Usable image bytes in a slot: the top erase block belongs to its record.
+OB_SLOT_CAPACITY := $(shell printf '0x%08X' \
+  $$(( $(shell printf '%d' '$(OB_SLOT_SIZE)') - $(ERASE_BLOCK_BYTES) )))
+FACTORY_BLESS_ARG := $(if $(filter-out 0,$(FACTORY_BLESS)),--bless-capacity $(OB_SLOT_CAPACITY))
 
 # check-deps, not just the .bin: a factory image is the artifact that ships,
 # so it must not be composable from an SDK or toolchain state that `make image`
@@ -641,7 +660,8 @@ factory: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).manifest \
 	  echo "set APP=<application .bin> — factory needs an application to package" >&2; \
 	  exit 1; }
 	$(HOST_PYTHON) compose_factory.py --openboot "$(BUILD)/$(TARGET).bin" \
-	    --app "$(APP)" --app-end $(APP_END) --output "$(FACTORY_BIN)"
+	    --app "$(APP)" --app-end $(APP_END) $(FACTORY_BLESS_ARG) \
+	    --output "$(FACTORY_BIN)"
 
 # SWD flash via a WCH-LinkE. minichlink ignores the return values of its
 # CH5xx erase/write calls and its byte-for-byte verify is disabled, so a zero
