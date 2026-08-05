@@ -179,12 +179,21 @@ def test_bounds_that_describe_different_geometries_are_refused():
 
 
 def test_a_padded_application_cannot_cross_the_region_end():
-    """The boundary from the report: 101 bytes fits a 101-byte region, and its
-    recorded image is 104."""
-    capacity = 104
-    with pytest.raises(ValueError, match="different geometries"):
-        compose(BOOT, APP[:101], app_max=101, bless_capacity=capacity)
-    # Consistent bounds at the same sizes compose, and stay inside the region.
-    img = compose(BOOT, APP[:101], app_max=capacity + ob_consts.OB_BOOT_RECORD_SIZE,
-                  bless_capacity=capacity)
-    assert len(img) - compose_factory.app_base() == capacity + ob_consts.OB_BOOT_RECORD_SIZE
+    """101 bytes fits a 101-byte allowance; the image recorded for it is 104,
+    so the padding is what crosses.
+
+    The bounds here AGREE, which is the point: an earlier version of this test
+    used app_max=101 with bless_capacity=104, and those describe different
+    geometries, so it tripped that check and never reached the padded length
+    it is named for."""
+    app = APP[:101]
+
+    tight = 100                       # the padded 104 will not fit this
+    with pytest.raises(ValueError, match="capacity of slot A"):
+        compose(BOOT, app, app_max=tight + ob_consts.OB_BOOT_RECORD_SIZE,
+                bless_capacity=tight)
+
+    fits = 104                        # exactly the padded length
+    img = compose(BOOT, app, app_max=fits + ob_consts.OB_BOOT_RECORD_SIZE,
+                  bless_capacity=fits)
+    assert len(img) - compose_factory.app_base() == fits + ob_consts.OB_BOOT_RECORD_SIZE
