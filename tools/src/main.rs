@@ -4,6 +4,7 @@
 //! Safe by default: `probe` (the default subcommand) is read-only, and
 //! `flash`/`erase` print a plan and stop unless `--force` is given.
 
+mod bundle;
 mod client;
 mod flows;
 mod hex;
@@ -16,10 +17,11 @@ mod transport;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand, ValueEnum};
 
+use bundle::{load_source, Bundle};
 use flows::{FlashOpts, VerifyMismatch};
 use image::load_image;
 use proto::consts::OB_UART_BAUD;
@@ -173,6 +175,11 @@ enum Cmd {
         stay: bool,
     },
 
+    /// Build or inspect a slot bundle: one release file carrying every
+    /// per-slot build of an application
+    #[command(subcommand)]
+    Bundle(BundleCmd),
+
     /// Write the boot record for an image already in flash (e.g. flashed
     /// over SWD): zero-write COMMIT — the device CRCs flash directly
     Bless {
@@ -183,6 +190,147 @@ enum Cmd {
         #[arg(long, value_parser = parse_u32_auto, value_name = "ADDR")]
         base: Option<u32>,
     },
+}
+
+#[derive(Subcommand)]
+enum BundleCmd {
+    /// Pack per-slot images into one bundle
+    #[command(long_about = "Pack per-slot images into one bundle.\n\n\
+        Each IMAGE is PATH@BASE, where BASE is the address that image was \
+        LINKED for — .bin files carry no base of their own, and guessing one \
+        is exactly the mistake bundles exist to prevent. Intel HEX takes its \
+        base from its records, so PATH alone is used and @BASE is rejected.\n\n\
+        Example:\n  \
+        openboot bundle create -o app.obb --chip ch592 \\\n    \
+        app-slot-a.bin@0x2000 app-slot-b.bin@0x39000")]
+    Create {
+        /// PATH@BASE per slot (@BASE required for .bin, rejected for .hex)
+        #[arg(required = true, value_name = "IMAGE")]
+        images: Vec<String>,
+
+        /// Output bundle
+        #[arg(short, long, value_name = "FILE")]
+        output: PathBuf,
+
+        /// Chip family to record, cross-checked against HELLO when flashing
+        #[arg(long, value_name = "CHIP")]
+        chip: Option<String>,
+    },
+
+    /// Show what a bundle contains
+    Info {
+        /// Bundle file
+        bundle: PathBuf,
+    },
+}
+
+/// `PATH@BASE`, split on the LAST '@' so a path may itself contain one —
+/// provided a base follows. The format cannot tell `my@file.bin` (a path)
+/// from a path with a malformed base, so that case is an error rather than a
+/// bare path, and says so.
+fn parse_image_spec(spec: &str) -> Result<(PathBuf, Option<u32>)> {
+    let Some((path, base)) = spec.rsplit_once('@') else {
+        return Ok((PathBuf::from(spec), None));
+    };
+    if path.is_empty() {
+        bail!("{spec:?}: nothing before the '@' — the form is PATH@BASE");
+    }
+    if base.is_empty() {
+        bail!("{spec:?}: nothing after the '@' — the form is PATH@BASE");
+    }
+    let addr = parse_u32(base).map_err(|_| {
+        anyhow::anyhow!(
+            "{spec:?}: {base:?} is not an address. The form is PATH@BASE, and a \
+             path containing '@' still has to be followed by its base."
+        )
+    })?;
+    Ok((PathBuf::from(path), Some(addr)))
+}
+
+fn parse_u32(s: &str) -> Result<u32> {
+    let t = s.trim();
+    let parsed = if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16)
+    } else {
+        t.parse::<u32>()
+    };
+    parsed.map_err(|_| anyhow::anyhow!("{s:?} is not a number"))
+}
+
+fn run_bundle(cmd: BundleCmd) -> Result<()> {
+    match cmd {
+        BundleCmd::Create {
+            images,
+            output,
+            chip,
+        } => {
+            let family = match chip.as_deref() {
+                None => bundle::FAMILY_UNSPECIFIED,
+                Some(name) => bundle::family_from_name(name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown chip {name:?}; expected one of {}",
+                        bundle::FAMILY_NAMES
+                            .iter()
+                            .map(|(n, _)| *n)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?,
+            };
+            let mut loaded = Vec::new();
+            for spec in &images {
+                let (path, base) = parse_image_spec(spec)?;
+                let is_hex = path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("hex"));
+                if base.is_none() && !is_hex {
+                    bail!(
+                        "{}: a .bin carries no link base, so give it as PATH@BASE — \
+                         the base it was LINKED for, not where you would like it",
+                        path.display()
+                    );
+                }
+                // Rejected here rather than left to load_image, whose message
+                // names --base: the user typed @BASE and would be told about a
+                // flag they never used.
+                if base.is_some() && is_hex {
+                    bail!(
+                        "{}: drop the @BASE — Intel HEX carries its own load \
+                         address in its records",
+                        path.display()
+                    );
+                }
+                loaded.push(load_image(&path, base)?);
+            }
+            let b = Bundle::new(family, loaded)?;
+            let bytes = b.encode();
+            std::fs::write(&output, &bytes)
+                .with_context(|| format!("write {}", output.display()))?;
+            println!("wrote {} ({} bytes)", output.display(), bytes.len());
+            print_bundle(&b);
+            Ok(())
+        }
+        BundleCmd::Info { bundle: path } => {
+            let raw = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let b = Bundle::parse(&raw).with_context(|| format!("parse {}", path.display()))?;
+            println!("{}: {} bytes", path.display(), raw.len());
+            print_bundle(&b);
+            Ok(())
+        }
+    }
+}
+
+fn print_bundle(b: &Bundle) {
+    println!("  chip            {}", b.family_name());
+    println!("  variants        {}", b.images.len());
+    for img in &b.images {
+        println!(
+            "    base 0x{:08X}  {:>7} B  crc32 0x{:08X}",
+            img.base,
+            img.bytes.len(),
+            img.crc32()
+        );
+    }
 }
 
 fn resolve_transport_kind(
@@ -248,18 +396,12 @@ fn run(mut cli: Cli) -> Result<()> {
             no_verify,
             no_boot,
         } => {
-            let img = load_image(&image, base)?;
-            println!(
-                "loaded {}: base 0x{:08X}, {} bytes, crc32 0x{:08X}",
-                image.display(),
-                img.base,
-                img.bytes.len(),
-                img.crc32()
-            );
+            let src = load_source(&image, base)?;
+            println!("loaded {}: {}", image.display(), src.describe());
             let mut t = open_transport(&cli)?;
             flows::flash(
                 t.as_mut(),
-                &img,
+                &src,
                 &FlashOpts {
                     force,
                     verify: !no_verify,
@@ -268,9 +410,9 @@ fn run(mut cli: Cli) -> Result<()> {
             )
         }
         Cmd::Verify { image, base } => {
-            let img = load_image(&image, base)?;
+            let src = load_source(&image, base)?;
             let mut t = open_transport(&cli)?;
-            flows::verify(t.as_mut(), &img)
+            flows::verify(t.as_mut(), &src)
         }
         Cmd::Erase {
             all,
@@ -288,17 +430,13 @@ fn run(mut cli: Cli) -> Result<()> {
             let mut t = open_transport(&cli)?;
             flows::boot(t.as_mut(), stay)
         }
+        Cmd::Bundle(cmd) => run_bundle(cmd),
+
         Cmd::Bless { image, base } => {
-            let img = load_image(&image, base)?;
-            println!(
-                "loaded {}: base 0x{:08X}, {} bytes, crc32 0x{:08X}",
-                image.display(),
-                img.base,
-                img.bytes.len(),
-                img.crc32()
-            );
+            let src = load_source(&image, base)?;
+            println!("loaded {}: {}", image.display(), src.describe());
             let mut t = open_transport(&cli)?;
-            flows::bless(t.as_mut(), &img)
+            flows::bless(t.as_mut(), &src)
         }
     }
 }
