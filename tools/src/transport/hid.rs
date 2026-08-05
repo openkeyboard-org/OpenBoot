@@ -235,16 +235,20 @@ mod tests {
     fn a_platform_reporting_no_usages_yields_every_interface_for_the_caller_to_reject() {
         // This is the case the unconditional multi-match error exists for:
         // narrowing cannot help, so open() must refuse rather than guess.
-        let blind: Vec<(u16, u16, &str)> =
-            APP_IFACES.iter().map(|(_, _, l)| (0u16, 0u16, *l)).collect();
+        let blind: Vec<(u16, u16, &str)> = APP_IFACES
+            .iter()
+            .map(|(_, _, l)| (0u16, 0u16, *l))
+            .collect();
 
         assert_eq!(narrow_to_bootloader(&blind).len(), APP_IFACES.len());
     }
 
     #[test]
     fn a_partial_usage_match_is_not_enough() {
-        let set = vec![(OB_USAGE_PAGE, 0x0002, "wrong-usage"),
-                       (0xFF01, OB_USAGE, "wrong-page")];
+        let set = vec![
+            (OB_USAGE_PAGE, 0x0002, "wrong-usage"),
+            (0xFF01, OB_USAGE, "wrong-page"),
+        ];
         assert!(narrow_to_bootloader(&set).is_empty());
     }
 }

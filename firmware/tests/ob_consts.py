@@ -5,7 +5,7 @@ Regenerate with `python3 protocol/gen_protocol.py`; `make -C firmware test`
 runs `--check`, so a stale copy fails the suite.
 """
 OB_PROTO_MAJOR = 0x0
-OB_PROTO_MINOR = 0x1
+OB_PROTO_MINOR = 0x2
 OB_FRAME_HDR_LEN = 0x4
 OB_FRAME_CRC_LEN = 0x4
 OB_FRAME_OVERHEAD = 0x8
@@ -44,7 +44,8 @@ OB_DET_VERIFY_NONSEQ = 0x2
 OB_DET_VERIFY_NORECORD = 0x3
 OB_HELLO_MAGIC = 0x3150424F
 OB_HELLO_REQ_LEN = 0x6
-OB_HELLO_RESP_LEN = 0x24
+OB_HELLO_RESP_LEN = 0x30
+OB_SLOT_ID_NONE = 0xFF
 OB_FAMILY_CH570 = 0x1
 OB_FAMILY_CH572 = 0x2
 OB_FAMILY_CH591 = 0x3

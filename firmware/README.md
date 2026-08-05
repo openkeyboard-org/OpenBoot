@@ -2,7 +2,8 @@
 
 The firmware builds one bootloader image for each supported chip and
 transport. Each image occupies flash `[0x0000, 0x2000)`; the application starts
-at `0x2000`.
+at `0x2000`. The region above it is split into two A/B slots so an
+interrupted update leaves the previous application bootable.
 
 > [!WARNING]
 > CH570/CH572 USB builds disable SWD because USB shares PA0/PA1 with the debug
@@ -211,13 +212,18 @@ Bring up UART before USB, and leave CH57x USB until last.
 3. Probe over UART, or confirm USB enumerates as the board's configured
    identity — `1209:0001` unless `OB_USB_VID`/`OB_USB_PID` are set, which the
    product boards do (`0C45:FEFE`).
-4. Check HELLO reports the correct family, app bounds, geometry, features, and
-   UID.
+4. Check HELLO reports the correct family, app bounds, geometry, features,
+   UID, and slot layout — on a blank part, no active slot and slot A as the
+   write target.
 5. Flash, COMMIT, verify, and boot a test application.
-6. Interrupt erase and write operations; each reset must return to OpenBoot and
-   allow a clean reflash.
-7. Test idle auto-boot and application-requested bootloader entry.
-8. Exercise CRC mismatch, write-before-erase, and ROM-ISP recovery paths.
+6. Flash a second time and confirm the update lands in the OTHER slot, that
+   the device boots it, and that both images are present in flash at once.
+7. Interrupt erase and write operations. With a previous application
+   installed, each reset must come back up running that application unaided;
+   on a part with nothing installed yet, it must return to OpenBoot and allow
+   a clean reflash.
+8. Test idle auto-boot and application-requested bootloader entry.
+9. Exercise CRC mismatch, write-before-erase, and ROM-ISP recovery paths.
 
 A variant remains build-validated only until this sequence passes on its own
 silicon.

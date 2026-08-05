@@ -113,6 +113,22 @@ fn print_device_info(info: &DeviceInfo) {
     );
     println!("  features        {}", info.feature_names());
     println!("  uid             {}", info.uid_hex());
+    println!(
+        "  slots           {} (active {}, writing {})",
+        info.slot_count,
+        DeviceInfo::slot_name(info.active_slot),
+        DeviceInfo::slot_name(info.write_slot)
+    );
+    if info.write_capacity == 0 {
+        println!("  write window    none — this slot does not fit the silicon");
+    } else {
+        println!(
+            "  write window    0x{:08X}..0x{:08X} ({} KiB)",
+            info.write_base,
+            u64::from(info.write_base) + u64::from(info.write_capacity),
+            info.write_capacity / 1024
+        );
+    }
     if let Some(w) = info.variant_mismatch() {
         eprintln!("WARNING: {w}");
     }
@@ -134,6 +150,12 @@ fn print_device_brief(info: &DeviceInfo) {
         info.erase_block,
         info.feature_names()
     );
+    println!(
+        "        active slot {}, writing slot {} at 0x{:08X}",
+        DeviceInfo::slot_name(info.active_slot),
+        DeviceInfo::slot_name(info.write_slot),
+        info.write_base
+    );
     if let Some(w) = info.variant_mismatch() {
         eprintln!("WARNING: {w}");
     }
@@ -153,21 +175,63 @@ fn check_in_region(info: &DeviceInfo, base: u32, len: usize) -> Result<()> {
     Ok(())
 }
 
-/// Flash/bless additionally require `base == app_start`: COMMIT attests
-/// `[app_start, app_start+len)` (CH57x stream CRC must even be written
-/// sequentially from app_start), so an offset image could never be
-/// committed or booted.
-fn check_committable(info: &DeviceInfo, image: &Image) -> Result<()> {
-    if image.base != info.app_start {
+/// The window this session may mutate. A zero capacity is a truthful report
+/// from a device whose silicon cannot hold the slot its build laid out — a
+/// wrong-variant bootloader — and every ERASE and WRITE would come back as a
+/// bare range error, so say what is actually wrong instead.
+fn write_window(info: &DeviceInfo) -> Result<(u32, u64)> {
+    if info.write_capacity == 0 {
         bail!(
-            "image base 0x{:08X} != device app_start 0x{:08X}; COMMIT attests \
-             images starting at app_start, so flash/bless require the image \
-             to be linked/based there",
-            image.base,
-            info.app_start
+            "device reports no writable slot: slot {} does not fit this \
+             silicon, whose app region ends at 0x{:08X}. The bootloader was \
+             built for a larger variant of this family.",
+            DeviceInfo::slot_name(info.write_slot),
+            info.app_end
         );
     }
-    check_in_region(info, image.base, image.bytes.len())
+    Ok((
+        info.write_base,
+        u64::from(info.write_base) + u64::from(info.write_capacity),
+    ))
+}
+
+/// `[base, base+len)` must lie inside the writable slot. Mutations are
+/// bounded by the slot, not by the app region — the device enforces this
+/// too, and it is what keeps the currently bootable image out of reach.
+fn check_in_write_window(info: &DeviceInfo, base: u32, len: usize) -> Result<()> {
+    let (wbase, wend) = write_window(info)?;
+    let end = u64::from(base) + len as u64;
+    if base < wbase || end > wend {
+        bail!(
+            "[0x{base:08X}, 0x{end:08X}) is outside the device's writable \
+             slot {} window [0x{wbase:08X}, 0x{wend:08X})",
+            DeviceInfo::slot_name(info.write_slot)
+        );
+    }
+    Ok(())
+}
+
+/// Flash/bless additionally require `base == write_base`: COMMIT attests
+/// `[write_base, write_base+len)` (on CH57x the stream CRC must even be
+/// written sequentially from there), so an offset image could never be
+/// committed or booted.
+///
+/// That base is the INACTIVE slot, which alternates between updates, so the
+/// artifact the device will accept changes from one update to the next. An
+/// image is linked for one slot base and cannot be relocated — see
+/// docs/AB-UPDATE.md.
+fn check_committable(info: &DeviceInfo, image: &Image) -> Result<()> {
+    if image.base != info.write_base {
+        bail!(
+            "image base 0x{:08X} != device write base 0x{:08X} (slot {}); \
+             COMMIT attests images starting at the write base, so flash and \
+             bless need an image linked for that slot",
+            image.base,
+            info.write_base,
+            DeviceInfo::slot_name(info.write_slot)
+        );
+    }
+    check_in_write_window(info, image.base, image.bytes.len())
 }
 
 /// Bytes per WRITE frame. DeviceInfo parsing has already enforced the
@@ -281,7 +345,7 @@ fn plan_flash(info: &DeviceInfo, image: &Image, opts: &FlashOpts) -> Result<Flas
     let block = info.erase_block;
     let blocks = (len as u32).div_ceil(block);
     let erase_len = blocks * block;
-    check_in_region(info, image.base, erase_len as usize)
+    check_in_write_window(info, image.base, erase_len as usize)
         .context("erase span (image rounded up to whole blocks)")?;
     let chunk = write_chunk_len(info);
     Ok(FlashPlan {
@@ -465,7 +529,8 @@ pub fn erase(
     print_device_brief(&info);
 
     let (start, len) = if all {
-        (info.app_start, info.app_end - info.app_start)
+        let (wbase, wend) = write_window(&info)?;
+        (wbase, (wend - u64::from(wbase)) as u32)
     } else {
         match (start, length) {
             (Some(s), Some(l)) => (s, l),
@@ -483,12 +548,12 @@ pub fn erase(
         );
     }
     let end = u64::from(start) + u64::from(len);
-    if start < info.app_start || end > u64::from(info.app_end) {
+    let (wbase, wend) = write_window(&info)?;
+    if start < wbase || end > wend {
         bail!(
-            "erase range [0x{start:08X}, 0x{end:08X}) is outside the app \
-             region [0x{:08X}, 0x{:08X})",
-            info.app_start,
-            info.app_end
+            "erase range [0x{start:08X}, 0x{end:08X}) is outside the \
+             device's writable slot {} window [0x{wbase:08X}, 0x{wend:08X})",
+            DeviceInfo::slot_name(info.write_slot)
         );
     }
 

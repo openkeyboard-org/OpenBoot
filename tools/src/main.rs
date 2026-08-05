@@ -1,4 +1,4 @@
-//! openboot — host tool for the OpenBoot IAP bootloader (OBP v0.1) on WCH
+//! openboot — host tool for the OpenBoot IAP bootloader (OBP v0.2) on WCH
 //! CH570/CH572/CH591/CH592, over USB HID or UART.
 //!
 //! Safe by default: `probe` (the default subcommand) is read-only, and
@@ -63,8 +63,8 @@ enum TransportArg {
 #[command(
     name = "openboot",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Flash and manage OpenBoot (OBP v0.1) bootloaders on WCH CH57x/CH59x chips.",
-    long_about = "Flash and manage OpenBoot (OBP v0.1) bootloaders on WCH \
+    about = "Flash and manage OpenBoot (OBP v0.2) bootloaders on WCH CH57x/CH59x chips.",
+    long_about = "Flash and manage OpenBoot (OBP v0.2) bootloaders on WCH \
         CH570/CH572/CH591/CH592 chips over USB HID or UART.\n\n\
         Safe by default: `probe` (the default) is read-only; `flash` and \
         `erase` print a plan and stop unless --force is given.\n\n\

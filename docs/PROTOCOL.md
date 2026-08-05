@@ -1,7 +1,7 @@
-# OBP v0.1 — the OpenBoot wire protocol
+# OBP v0.2 — the OpenBoot wire protocol
 
 This is the normative specification of the OpenBoot Protocol ("OBP"),
-version 0.1 (`OB_PROTO_MAJOR = 0x00`, `OB_PROTO_MINOR = 0x01`). It is
+version 0.2 (`OB_PROTO_MAJOR = 0x00`, `OB_PROTO_MINOR = 0x02`). It is
 self-contained: a third-party client can be implemented from this document
 alone. Where this document and
 [`protocol/openboot_protocol.h`](../protocol/openboot_protocol.h) disagree,
@@ -32,7 +32,7 @@ offset  size  field
                        0xFF = frame-error report
 1       1     seq      opaque, chosen by the host, echoed by the device
 2       1     len      payload length N, 0..56 (OB_MAX_PAYLOAD = 0x38)
-3       1     flags    MUST be 0 in v0.1; nonzero is rejected with E_ARG
+3       1     flags    MUST be 0 in v0.2; nonzero is rejected with E_ARG
 4       N     payload  command-specific (section 6)
 4+N     4     crc32    CRC-32/ISO-HDLC over bytes [0, 4+N), little-endian
 ```
@@ -213,16 +213,16 @@ Request payload (`OB_HELLO_REQ_LEN = 0x06`):
 |---|---|---|---|---|
 | 0 | 4 | u32 | magic | `OB_HELLO_MAGIC = 0x3150424F` — the ASCII bytes `"OBP1"` (`4F 42 50 31` on the wire) |
 | 4 | 1 | u8 | host_major | host protocol major, `0x00` |
-| 5 | 1 | u8 | host_minor | host protocol minor, `0x01` |
+| 5 | 1 | u8 | host_minor | host protocol minor, `0x02` |
 
-Success response payload (`OB_HELLO_RESP_LEN = 0x24` = 36 bytes; the device
+Success response payload (`OB_HELLO_RESP_LEN = 0x30` = 48 bytes; the device
 MUST send at least this much, the host MUST tolerate more — section 11):
 
 | Offset | Size | Type | Field | Meaning |
 |---|---|---|---|---|
 | 0 | 1 | u8 | status | `OB_OK` |
 | 1 | 1 | u8 | proto_major | `0x00` |
-| 2 | 1 | u8 | proto_minor | `0x01` |
+| 2 | 1 | u8 | proto_minor | `0x02` |
 | 3 | 1 | u8 | chip_rev | ROM configuration chip-id byte |
 | 4 | 2 | u16 | bl_version | bootloader version (mirrored in USB `bcdDevice`) |
 | 6 | 1 | u8 | chip_family | `OB_FAMILY_*`, table below |
@@ -235,6 +235,12 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |
 | 24 | 4 | u32 | features | `OB_FEAT_*` bit set, table below |
 | 28 | 8 | u64 | uid | 64-bit ROM unique ID |
+| 36 | 1 | u8 | slot_count | number of A/B slots (2) |
+| 37 | 1 | u8 | active_slot | slot the device can currently boot, or `OB_SLOT_ID_NONE = 0xFF` |
+| 38 | 1 | u8 | write_slot | slot this session may mutate — never `active_slot` |
+| 39 | 1 | u8 | reserved | MUST be 0 |
+| 40 | 4 | u32 | write_base | first address ERASE and WRITE accept |
+| 44 | 4 | u32 | write_capacity | bytes writable at `write_base`; `0` means this silicon cannot hold that slot |
 
 | `chip_family` | Chip |
 |---|---|
@@ -251,6 +257,21 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 Errors: `E_LEN` (payload not 6 bytes), `E_ARG` (bad magic), and `E_PROTO`
 (unsupported version).
 
+`app_start`/`app_end` describe the WHOLE application region and are
+unchanged by slots; `write_base`/`write_capacity` are the window this
+session may mutate, and every ERASE, WRITE and COMMIT is bounded by them
+(section 9.1). The host MUST send an image linked for `write_slot`, and
+MUST NOT derive its address from `app_start` and the slot index —
+`write_base` is authoritative.
+
+`write_slot` is fixed for the whole power cycle and moves only when a
+COMMIT succeeds, so re-sending HELLO mid-update always names the slot the
+partly written image is going into. A host that re-HELLOs after a
+transport error can therefore resume against the same addresses.
+
+`active_slot` is reported so a host can show which image is running. It is
+never a write target, and no command can reach it.
+
 Semantics: a successful HELLO always (re)initializes the session — the
 erased-block bitmap is cleared and the stream-CRC tracker reset, whether or
 not a session was already open — and permanently disables idle auto-boot
@@ -265,9 +286,11 @@ Request payload (8 bytes):
 | 0 | 4 | u32 | addr | multiple of `erase_block` (4096) |
 | 4 | 4 | u32 | len | multiple of `erase_block`, nonzero |
 
-`[addr, addr + len)` MUST lie entirely within `[app_start, app_end)`;
-violations are answered with `E_ADDR` (detail: range or align) before any
-flash is touched.
+`[addr, addr + len)` MUST lie entirely within
+`[write_base, write_base + write_capacity)`; violations are answered with
+`E_ADDR` (detail: range or align) before any flash is touched. The bound is
+the write slot, not the app region, so an ERASE can reach neither the other
+slot nor the write slot's own record block — see section 9.1.
 
 Behavior: if this is the session's first mutation, the boot record is
 invalidated first (section 8). The device then erases block by block in one
@@ -301,8 +324,9 @@ Checks, in order:
 
 1. Payload length in `[8, 52]` and `(payload_len - 4)` a multiple of 4,
    else `E_LEN`.
-2. `[addr, addr + data_len)` within `[app_start, app_end)` and `addr`
-   4-aligned, else `E_ADDR`.
+2. `[addr, addr + data_len)` within
+   `[write_base, write_base + write_capacity)` and `addr` 4-aligned, else
+   `E_ADDR`.
 3. **Every 4096-byte block the write touches MUST be marked in the
    erased-block bitmap** (i.e. erased earlier in this same session), else
    `E_NOT_ERASED`. This is the structural fix for the vendor
@@ -319,7 +343,7 @@ detail.
 Success response: 1 byte, `[OB_OK]`.
 
 **Stream CRC.** The device maintains a sequential-run tracker for COMMIT on
-devices without `FEAT_CRC_LIVE`: the run starts at `app_start`; a WRITE at
+devices without `FEAT_CRC_LIVE`: the run starts at `write_base`; a WRITE at
 exactly the current run position folds its data into the session stream CRC
 and advances the position. A **byte-exact** re-send of the immediately
 previous chunk (same address, length, and data — the lost-response retry)
@@ -328,7 +352,7 @@ else — a different range, or the same range with *different* bytes (e.g.
 further 1→0 programming the flash controller accepts) — permanently breaks
 the run for the remainder of the session, as does an ERASE that overlaps
 the already-streamed region (section 6.2). Image data SHOULD therefore be
-written as one strictly sequential pass from `app_start`. Writes are
+written as one strictly sequential pass from `write_base`. Writes are
 idempotent at the flash level (same data into erased-and-verified cells),
 so retrying after a lost response is always flash-safe; if the run was
 broken on a device without `FEAT_CRC_LIVE`, COMMIT fails closed with
@@ -344,6 +368,10 @@ Request payload (8 bytes):
 | 4 | 4 | u32 | len | multiple of 4, nonzero |
 
 `[addr, addr + len)` MUST lie within `[app_start, app_end)`, else `E_ADDR`.
+CRC is bounded by the app REGION rather than by the write slot, because it
+changes nothing and a host has to be able to read the slot it is not
+writing: `openboot verify` runs in a fresh session, where the image it
+wants to check is the active one.
 The bootloader region is not CRC-addressable — readback oracles included.
 
 Success response (5 bytes):
@@ -369,18 +397,18 @@ Request payload (8 bytes):
 
 | Offset | Size | Type | Field | Constraint |
 |---|---|---|---|---|
-| 0 | 4 | u32 | img_len | multiple of 4, nonzero, `img_len ≤ app_end − app_start` |
-| 4 | 4 | u32 | img_crc32 | CRC-32/ISO-HDLC over `[app_start, app_start + img_len)` |
+| 0 | 4 | u32 | img_len | multiple of 4, nonzero, `img_len ≤ write_capacity` |
+| 4 | 4 | u32 | img_crc32 | CRC-32/ISO-HDLC over `[write_base, write_base + img_len)` |
 
 An out-of-range `img_len` is answered with `E_ADDR` (detail: range).
 
 Attestation path:
 
 - **`FEAT_CRC_LIVE` set (CH59x):** the device computes the CRC directly
-  over `[app_start, app_start + img_len)` and compares with `img_crc32`.
+  over `[write_base, write_base + img_len)` and compares with `img_crc32`.
 - **`FEAT_CRC_LIVE` clear (CH57x), session performed writes:** the session
   stream CRC is used instead. The writes MUST have formed one unbroken
-  sequential run starting at `app_start` covering exactly `img_len` bytes;
+  sequential run starting at `write_base` covering exactly `img_len` bytes;
   otherwise the device answers `E_VERIFY` with detail
   `OB_DET_VERIFY_NONSEQ`. A covered-length or CRC mismatch yields
   `E_VERIFY` with detail `OB_DET_VERIFY_MISMATCH`.
@@ -393,10 +421,24 @@ Attestation path:
   path. This lets a host attest and boot-enable an image that was flashed
   out-of-band (e.g. via SWD) without rewriting it.
 
-On match the device writes the boot record (section 8) and answers
-`[OB_OK]`; a record storage failure is `E_FLASH`. On mismatch **no record
-is written** — the device never converts an unverified image into a
+On match the device writes the write slot's boot record (section 8) and
+answers `[OB_OK]`; a record storage failure is `E_FLASH`. On mismatch **no
+record is written** — the device never converts an unverified image into a
 bootable one, and a previously invalidated record stays invalid.
+
+A successful COMMIT is what makes the written slot bootable, so it is also
+where the roles swap: the slot just committed becomes `active_slot` and
+`write_slot` moves to the other one. A host that flashes twice in one
+session MUST re-read HELLO, or address the new `write_base` it can compute
+from the swap; the erased-block bitmap and the sequential run are re-armed
+against the new slot, so a second update starts from the same clean state a
+fresh HELLO would give it.
+
+The generation the device stores is at least one above any generation it
+has already written this power cycle, even when flash does not yet read
+that way (CH57x, F26). Without that floor a second update in one power
+cycle could store a generation the other slot already claims, and section
+10's tie-break would resolve it to the older image.
 
 COMMIT is retry-idempotent. After a successful record write, the device
 remembers the committed `(img_len, img_crc32)` tuple until reset or the next
@@ -495,25 +537,34 @@ The protocol is built so that **no sequence of host requests — valid,
 invalid, malicious, or truncated by power loss — can brick the device.**
 
 1. **The bootloader region `[0x0, 0x2000)` does not exist to the
-   protocol.** One shared range validator gates ERASE, WRITE, and CRC; all
-   three see only `[app_start, app_end)`. The region cannot be erased,
-   written, or even CRC'd.
-2. **Arming: the erased-block bitmap.** A 16-byte RAM bitmap
+   protocol.** Range validation gates ERASE, WRITE, and CRC, and none of
+   them can see below `app_start`. The region cannot be erased, written, or
+   even CRC'd.
+2. **Mutations cannot reach the running image.** ERASE and WRITE are bounded
+   by `[write_base, write_base + write_capacity)` — the INACTIVE slot —
+   while CRC is bounded by the whole app region because reading is not the
+   same risk as changing. No command a host can send alters a byte of the
+   slot the device is currently able to boot, whether by mistake, by a
+   stale address, or deliberately.
+3. **Arming: the erased-block bitmap.** A 16-byte RAM bitmap
    (`OB_BITMAP_BYTES = 16`, one bit per 4 KiB block from `app_start`;
    CH592's 440 KiB region needs 110 bits) records which blocks this
    session has successfully erased. WRITE refuses (`E_NOT_ERASED`) any
    block not armed. The bitmap is cleared at reset and on every HELLO.
    This structurally removes the vendor USB-IAP bug where a write could
    land — including over the bootloader — before any erase.
-3. **Disarm before mutation.** The first ERASE or WRITE of each session
-   invalidates the boot record *before* the mutation executes. From that
-   moment until COMMIT succeeds there is no valid record, so power loss at
-   any instant of an update leaves a device that boots into the
-   bootloader and can simply be re-flashed. An interrupted update is an
-   inconvenience, never a brick.
-4. **COMMIT is the only gate to bootability**, and it only opens on a CRC
+4. **Disarm before mutation.** The first ERASE or WRITE of each session
+   invalidates the **write slot's** record *before* the mutation executes,
+   so from that moment until COMMIT succeeds that slot cannot be booted.
+   Because the invalidate reaches only the slot being updated, the other
+   slot's record is never at risk: power loss at any instant of an update
+   leaves the previous image bootable and the device comes back up running
+   it, unaided. On a device with no previous image — a part being flashed
+   for the first time — the same cut leaves it in the bootloader, ready to
+   be re-flashed. Neither outcome is a brick.
+5. **COMMIT is the only gate to bootability**, and it only opens on a CRC
    match (section 6.5). There is no path that records an unverified image.
-5. **No self-update.** OBP v0.1 cannot modify the bootloader, including
+6. **No self-update.** OBP v0.2 cannot modify the bootloader, including
    deliberately. Bootloader updates go through the chip's mask-ROM ISP
    (`wchisp`, BOOT strap) or SWD (`minichlink`) — both always available
    regardless of what OBP has done, which is precisely why v1 omits the
@@ -529,7 +580,13 @@ What the protocol does **not** provide:
   feature-gated off). CRC is the only oracle over flash contents.
 - **No pipelining** — strict ping-pong, one outstanding request.
 - **No UART auto-baud** and no baud negotiation: fixed 115200 8N1.
-- **No multi-image or slot management**: one app region, one record.
+- **No image transport between slots.** The two slots are independent
+  addresses, not copies of one image: an application is linked for a slot
+  base and cannot be relocated on these parts, so the host supplies the
+  variant matching `write_slot` (see `docs/AB-UPDATE.md`). The device never
+  moves bytes from one slot to the other.
+- **No more than two slots**, and no host-chosen slot: `write_slot` is the
+  device's decision and the host cannot override it.
 
 ## 9. Boot record and RAM boot request
 
@@ -630,6 +687,11 @@ whose record claims a newer generation but whose image fails is skipped rather
 than fatal: that is the interrupted-update case, and the older slot still
 boots.
 
+Slots are examined in order and a candidate must beat the best generation
+seen so far, so two valid slots claiming the SAME generation would resolve to
+the lower-numbered one — by position, not by recency. COMMIT is responsible
+for never creating that tie (section 6.5).
+
 The request word is always cleared after it is read, including when the strap
 wins, so it is one-shot. No shipped board defines the optional OpenBoot strap;
 products may set `OB_BOOT_PIN_MASK`. It is sampled only at reset.
@@ -669,11 +731,16 @@ record waits indefinitely either way.
 ## 11. Versioning and discovery
 
 - The version is `major.minor`, exchanged in both HELLO directions
-  (`OB_PROTO_MAJOR = 0x00`, `OB_PROTO_MINOR = 0x01`).
+  (`OB_PROTO_MAJOR = 0x00`, `OB_PROTO_MINOR = 0x02`).
 - **Pre-1.0 (major 0), nothing is frozen**: any minor bump may change
   behavior incompatibly, so a major-0 device requires an EXACT
   major+minor match in HELLO and rejects anything else with `E_PROTO`.
   The additive-minor rules below take effect at 1.0.
+- **0.1 → 0.2 added A/B slots.** HELLO grew from 36 to 48 bytes with the
+  slot view; ERASE and WRITE became bounded by `write_base` rather than by
+  `app_start`; COMMIT attests from `write_base` and swaps the slots on
+  success. A 0.1 host is rejected outright rather than silently writing the
+  running image, which is exactly why major 0 requires the exact match.
 - **Major** changes are incompatible. A device rejects an unsupported
   `host_major` with `E_PROTO`; a host MUST refuse to proceed if the
   device's `proto_major` is not one it implements.
@@ -682,12 +749,12 @@ record waits indefinitely either way.
      response payloads (HELLO in particular). A device MUST send at least
      the lengths specified here; a host MUST accept longer payloads and
      ignore bytes it does not understand. A host MUST NOT reject a HELLO
-     response for being longer than 36 bytes.
+     response for being longer than 48 bytes.
   2. **New opcodes / gated features**, discovered by probing: an
      unimplemented opcode is answered with `E_CMD`, which is always safe
      and side-effect-free. Feature bits in HELLO (`features`) advertise
      optional capabilities such as READ without a round trip.
-- **`flags` is the escape hatch**: it MUST be zero in v0.1 and v0.1 devices
+- **`flags` is the escape hatch**: it MUST be zero in v0.2 and v0.2 devices
   reject nonzero flags with `E_ARG`, so a future host can detect — from the
   rejection — that a device does not implement a flag-gated behavior.
 

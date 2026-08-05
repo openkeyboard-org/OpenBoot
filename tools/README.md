@@ -45,8 +45,15 @@ Global selectors:
 
 Flat binaries default to base `0x2000`; use `--base` to override it. Intel HEX
 files use addresses from their records. Images are padded to a 4-byte boundary
-with `0xFF`. `flash` and `bless` require the image to start at the
-device-reported application base.
+with `0xFF`.
+
+`flash` and `bless` require the image to start at the device-reported
+**write base** — the base of the slot the device is willing to write, which is
+whichever one it is not currently running. That base alternates between
+updates, so the artifact to supply alternates too: an application is linked
+for a slot base and cannot be relocated on these parts. `probe` prints the
+active slot, the write slot and the window, and a mismatch is refused before
+anything is erased.
 
 Exit status is `0` for success, `1` for device, I/O, or usage errors, and `2`
 for a verification mismatch. Idempotent commands are retried up to three times

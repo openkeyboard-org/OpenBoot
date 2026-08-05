@@ -42,24 +42,29 @@ magic. Applications that depend on the record contents should also validate
 
 ### Flash
 
-OpenBoot owns `[0x0000, 0x2000)`. Link the application at `0x2000` and keep it
-within the family-specific region:
+OpenBoot owns `[0x0000, 0x2000)`. The rest is split into two equally sized
+slots, and the application is linked at a **slot base** — not at `0x2000`
+unconditionally, which is only slot A:
 
-| Chip | App region | Length |
-|---|---|---|
-| CH570 / CH572 | `[0x2000, 0x3C000)` | 232 KiB |
-| CH591 | `[0x2000, 0x30000)` | 184 KiB |
-| CH592 | `[0x2000, 0x70000)` | 440 KiB |
+| Chip | App region | Slot A | Slot B | Each slot |
+|---|---|---|---|---|
+| CH570 / CH572 | `[0x2000, 0x3C000)` | `0x2000` | `0x1F000` | 116 KiB |
+| CH591 | `[0x2000, 0x30000)` | `0x2000` | `0x19000` | 92 KiB |
+| CH592 | `[0x2000, 0x70000)` | `0x2000` | `0x39000` | 220 KiB |
 
-For example:
+Slot bases shift when a board sets `OB_APP_END`, so take them from the build
+rather than from this table — `OPENBOOT_SLOT_BASE` and `OPENBOOT_SLOT_SIZE`
+above are the values OpenBoot was built with. For example, slot A on CH592:
 
 ```ld
-FLASH (rx) : ORIGIN = 0x00002000, LENGTH = 228K
+FLASH (rx) : ORIGIN = 0x00002000, LENGTH = 216K
 ```
 
 Each slot reserves its final 4096-byte block for its own boot record, so an
-application may use `slot_size - 4096` bytes. See
-[the A/B update design](../../docs/AB-UPDATE.md).
+application may use `slot_size - 4096` bytes. The device reports the base and
+capacity it wants over HELLO (`write_base`, `write_capacity`), and refuses an
+image linked for the other slot, so a mismatch fails before anything is
+erased. See [the A/B update design](../../docs/AB-UPDATE.md).
 
 ### RAM boot request
 

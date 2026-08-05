@@ -1,4 +1,4 @@
-//! OBP v0.1 frame codec: encode/decode with typed errors, response
+//! OBP v0.2 frame codec: encode/decode with typed errors, response
 //! matching, request payload builders, and status/detail decoding into
 //! human-readable errors.
 //!
@@ -47,7 +47,7 @@ impl Frame {
     }
 
     /// Encode to bytes: header + payload, then CRC-32/ISO-HDLC (LE) over
-    /// everything before it. `flags` is always 0 in v0.1.
+    /// everything before it. `flags` is always 0 in v0.2.
     pub fn encode(&self) -> Vec<u8> {
         assert!(
             self.payload.len() <= OB_MAX_PAYLOAD,
@@ -58,7 +58,7 @@ impl Frame {
         out.push(self.cmd);
         out.push(self.seq);
         out.push(self.payload.len() as u8);
-        out.push(0); // flags: must be 0 in v0.1
+        out.push(0); // flags: must be 0 in v0.2
         out.extend_from_slice(&self.payload);
         let crc = crc32fast::hash(&out);
         out.extend_from_slice(&crc.to_le_bytes());
@@ -124,7 +124,7 @@ pub enum FrameError {
     PayloadTooLong { declared: u8 },
     /// Buffer ends before `len` payload bytes + CRC.
     Truncated { declared: u8, available: usize },
-    /// `flags` must be 0 in v0.1.
+    /// `flags` must be 0 in v0.2.
     BadFlags { flags: u8 },
     /// CRC over header+payload does not match the trailer.
     BadCrc { computed: u32, received: u32 },
@@ -150,7 +150,7 @@ impl fmt::Display for FrameError {
                 "frame truncated: {available} bytes available for a {declared}-byte payload"
             ),
             FrameError::BadFlags { flags } => {
-                write!(f, "flags byte 0x{flags:02X} must be 0 in OBP v0.1")
+                write!(f, "flags byte 0x{flags:02X} must be 0 in OBP v0.2")
             }
             FrameError::BadCrc { computed, received } => write!(
                 f,
@@ -376,7 +376,12 @@ mod tests {
     #[test]
     fn golden_request_encodings() {
         assert_eq!(
-            Frame::new(OB_CMD_HELLO, 0x00, hello_req_payload(0x00, 0x01)).encode(),
+            Frame::new(
+                OB_CMD_HELLO,
+                0x00,
+                hello_req_payload(OB_PROTO_MAJOR, OB_PROTO_MINOR)
+            )
+            .encode(),
             vector("hello_req")
         );
         assert_eq!(
@@ -425,14 +430,20 @@ mod tests {
         assert_eq!(DeviceError::from_payload(&f.payload), None);
 
         let info = DeviceInfo::parse(&f.payload).unwrap();
-        assert_eq!(info.proto_major, 0);
-        assert_eq!(info.proto_minor, 1);
+        assert_eq!(info.proto_major, OB_PROTO_MAJOR);
+        assert_eq!(info.proto_minor, OB_PROTO_MINOR);
         assert_eq!(info.chip_rev, 9);
         assert_eq!(info.bl_version, 0x000A);
         assert_eq!(info.chip_family, OB_FAMILY_CH592);
         assert_eq!(info.transport, OB_TRANSPORT_ID_USB);
         assert_eq!(info.app_start, 0x0000_2000);
         assert_eq!(info.app_end, 0x0007_0000);
+        // the 0.2 slot view: a fresh part, so slot A is the target
+        assert_eq!(info.slot_count, 2);
+        assert_eq!(info.active_slot, OB_SLOT_ID_NONE);
+        assert_eq!(info.write_slot, 0);
+        assert_eq!(info.write_base, 0x0000_2000);
+        assert_eq!(info.write_capacity, 0x0003_6000);
         assert_eq!(info.erase_block, 4096);
         assert_eq!(info.write_page, 256);
         assert_eq!(info.write_align, 4);

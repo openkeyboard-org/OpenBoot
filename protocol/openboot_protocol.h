@@ -1,5 +1,5 @@
 /*
- * OpenBoot wire protocol ("OBP") v0.1 — single source of truth.
+ * OpenBoot wire protocol ("OBP") v0.2 — single source of truth.
  *
  * This header is the hand-written source of truth. It is included directly
  * by the bootloader firmware, and protocol/gen_protocol.py parses its
@@ -15,7 +15,7 @@
  *                          0xFF = frame-error report
  *   1       1     seq      opaque, chosen by host, echoed by device
  *   2       1     len      payload length N (0..OB_MAX_PAYLOAD)
- *   3       1     flags    must be 0 in v0.1 (rejected with E_ARG otherwise)
+ *   3       1     flags    must be 0 in v0.2 (rejected with E_ARG otherwise)
  *   4       N     payload
  *   4+N     4     crc32    CRC-32/ISO-HDLC (zlib), little-endian, over
  *                          bytes [0, 4+N)
@@ -38,7 +38,7 @@
  * are additive. (The "OBP1" HELLO magic is the protocol FAMILY
  * identifier, not the version — these two bytes are the version.) */
 #define OB_PROTO_MAJOR        0x00
-#define OB_PROTO_MINOR        0x01
+#define OB_PROTO_MINOR        0x02
 
 /* --- frame geometry --------------------------------------------------- */
 #define OB_FRAME_HDR_LEN      0x04
@@ -93,8 +93,36 @@
  *   0  status  1 proto_major  2 proto_minor  3 chip_rev  4 bl_version u16
  *   6  chip_family  7 transport  8 app_start u32  12 app_end u32
  *   16 erase_block u32  20 write_page u16  22 write_align u8
- *   23 max_write_data u8  24 features u32  28 uid u64                     */
-#define OB_HELLO_RESP_LEN     0x24  /* 36 */
+ *   23 max_write_data u8  24 features u32  28 uid u64
+ *   -- added in 0.2, the A/B slot view --
+ *   36 slot_count u8  37 active_slot u8  38 write_slot u8  39 rsvd u8
+ *   40 write_base u32  44 write_capacity u32
+ *
+ * app_start/app_end still describe the WHOLE application region — the
+ * geometry of the part, unchanged by slots. write_base/write_capacity are
+ * the window this session may actually mutate, and every ERASE, WRITE, CRC
+ * and COMMIT is bounded by them.
+ *
+ * The host must send the image linked for `write_slot` and must not derive
+ * that slot's address itself: write_base is authoritative. active_slot is
+ * the slot currently bootable (OB_SLOT_ID_NONE when nothing is), and is
+ * reported so a host can show which image is running; it is never a write
+ * target. write_capacity is 0 when the silicon is too small to hold the
+ * slot, which makes every mutation fail the range check. */
+#define OB_HELLO_RESP_LEN     0x30  /* 48 */
+
+#ifdef __cplusplus
+static_assert(OB_HELLO_RESP_LEN <= OB_MAX_PAYLOAD,
+              "the HELLO response must fit in one frame payload");
+#else
+_Static_assert(OB_HELLO_RESP_LEN <= OB_MAX_PAYLOAD,
+               "the HELLO response must fit in one frame payload");
+#endif
+
+/* Wire slot identifiers: 0 and 1 index the slots, 0xFF means "none". The
+ * firmware's internal OB_SLOT_* (boot_decision.h) are 32-bit and do not
+ * cross the wire; these single bytes do. */
+#define OB_SLOT_ID_NONE       0xFF
 
 #define OB_FAMILY_CH570       0x01
 #define OB_FAMILY_CH572       0x02

@@ -10,12 +10,13 @@ from ob_native import (
     CMD_BOOT, CMD_COMMIT, CMD_CRC, CMD_ERASE, CMD_HELLO, CMD_READ, CMD_WRITE,
     DET_ALIGN, DET_MISMATCH, DET_NONSEQ, DET_NORECORD, DET_RANGE,
     E_ADDR, E_ARG, E_CMD, E_FLASH, E_LEN, E_NOT_ERASED, E_PROTO, E_STATE,
-    E_VERIFY, MAX_WRITE, OK, RECORD_MAGIC, RECORD_SIZE, RSVD,
+    E_VERIFY, MAX_WRITE, OB_HELLO_RESP_LEN, OB_PROTO_MAJOR, OB_PROTO_MINOR,
+    OB_SLOT_ID_NONE, OK, RECORD_MAGIC, RECORD_SIZE, RSVD,
     frame, get_device, load_golden,
 )
 
 GOLDEN = load_golden()
-HELLO_PAYLOAD = b"OBP1" + bytes([0, 1])
+HELLO_PAYLOAD = b"OBP1" + bytes([OB_PROTO_MAJOR, OB_PROTO_MINOR])
 
 
 def u32(v):
@@ -75,25 +76,50 @@ def commit(dev, image, seq=3):
                   u32(len(image)) + u32(zlib.crc32(image)))
 
 
-def full_update(dev, image, whole_app=False):
-    """HELLO + ERASE + sequential WRITE + COMMIT. Caller resets first."""
-    hello(dev)
+def slot_view(pl):
+    """The A/B fields of a HELLO payload: (active, write, base, capacity)."""
+    return (pl[37], pl[38],
+            int.from_bytes(pl[40:44], "little"),
+            int.from_bytes(pl[44:48], "little"))
+
+
+def write_target(dev, seq=0):
+    """Open a session and return (slot, base, capacity) it will accept."""
+    _active, slot, base, cap = slot_view(hello(dev, seq))
+    return slot, base, cap
+
+
+def full_update(dev, image, whole_slot=False):
+    """HELLO + ERASE + sequential WRITE + COMMIT into whichever slot the
+    device says it is willing to write. Returns that slot's index — after
+    the COMMIT it is the ACTIVE slot, and the next update targets the other
+    one. Caller resets first."""
+    slot, base, cap = write_target(dev)
     seq = 1
-    if whole_app:
-        a = APP_START
-        while a < dev.app_end:
-            length = min(0x8000, dev.app_end - a)   # host chunks <= 32 KiB
+    if whole_slot:
+        a = base
+        while a < base + cap:
+            length = min(0x8000, base + cap - a)    # host chunks <= 32 KiB
             erase(dev, a, length, seq & 0xFF)
             seq += 1
             a += length
     else:
         blocks = (len(image) + BLOCK - 1) // BLOCK
-        erase(dev, APP_START, blocks * BLOCK, seq & 0xFF)
+        erase(dev, base, blocks * BLOCK, seq & 0xFF)
         seq += 1
     for off in range(0, len(image), MAX_WRITE):
-        write(dev, APP_START + off, image[off:off + MAX_WRITE], seq & 0xFF)
+        write(dev, base + off, image[off:off + MAX_WRITE], seq & 0xFF)
         seq += 1
     commit(dev, image, seq & 0xFF)
+    return slot
+
+
+def swd_install(dev, image, slot=0):
+    """Model an image put in a slot out of band (SWD, factory image): the
+    bytes are in flash with NO record and nothing has gone through the flash
+    controller this power cycle, which is exactly the bless precondition."""
+    dev.reset()
+    dev.write_flash(dev.slot_base(slot), image)
 
 
 def expected_record(image, generation=1):
@@ -145,9 +171,9 @@ def test_golden_hello(dev):
     if dev.family == "ch59x":
         assert resp == GOLDEN["hello_resp_ch592_usb"]
     _, _, pl = parse(resp)
-    assert len(pl) == 36
+    assert len(pl) == OB_HELLO_RESP_LEN
     assert pl[0] == OK
-    assert (pl[1], pl[2]) == (0, 1)                       # proto 0.1
+    assert (pl[1], pl[2]) == (OB_PROTO_MAJOR, OB_PROTO_MINOR)
     assert pl[3] == 9                                     # chip_rev
     assert int.from_bytes(pl[4:6], "little") == 0x000A    # bl_version v0.10
     assert pl[6] == dev.family_id
@@ -160,6 +186,13 @@ def test_golden_hello(dev):
     assert pl[23] == MAX_WRITE
     assert int.from_bytes(pl[24:28], "little") == dev.features
     assert int.from_bytes(pl[28:36], "little") == 0x0123456789ABCDEF
+    # 0.2: the A/B view. Nothing is committed on a fresh harness, so no
+    # slot is active and the write target is A at the app base.
+    active, wslot, base, cap = slot_view(pl)
+    assert (active, wslot) == (OB_SLOT_ID_NONE, 0)
+    assert (base, cap) == (dev.slot_base(0), dev.slot_capacity(0))
+    assert base == APP_START
+    assert pl[36] == 2 and pl[39] == 0                    # count, reserved
 
 
 def test_golden_session(dev):
@@ -219,9 +252,9 @@ def test_min_frame_unknown_cmd(dev):
 def test_full_update_flow(dev):
     rng = random.Random(0xF10)
     image = bytes(rng.randrange(256) for _ in range(10240))
-    full_update(dev, image, whole_app=True)
-    assert dev.flash_read(APP_START, len(image)) == image
-    assert dev.record_raw() == expected_record(image)
+    slot = full_update(dev, image, whole_slot=True)
+    assert dev.flash_read(dev.slot_base(slot), len(image)) == image
+    assert dev.record_raw(slot) == expected_record(image)
     _pl, act = cmd_ok(dev, CMD_BOOT, 0x50, bytes([0]))
     # Reset-to-launch on every family: no stay magic, the post-reset boot
     # decision (coherent XIP) is the single launch authority.
@@ -340,12 +373,17 @@ def test_bad_flags(dev):
 
 
 def test_hello_rejects(dev):
-    cmd_err(dev, CMD_HELLO, 1, b"OBP1" + bytes([2, 0]), E_PROTO, 0)
-    # pre-1.0 (major 0): the minor must match exactly too
-    cmd_err(dev, CMD_HELLO, 2, b"OBP1" + bytes([0, 2]), E_PROTO, 0)
-    cmd_err(dev, CMD_HELLO, 3, b"OBPX" + bytes([0, 1]), E_ARG, 0)
+    cmd_err(dev, CMD_HELLO, 1,
+            b"OBP1" + bytes([OB_PROTO_MAJOR + 1, OB_PROTO_MINOR]), E_PROTO, 0)
+    # pre-1.0 (major 0): the minor must match exactly too, in both
+    # directions — an older host is refused as firmly as a newer one
+    cmd_err(dev, CMD_HELLO, 2,
+            b"OBP1" + bytes([OB_PROTO_MAJOR, OB_PROTO_MINOR + 1]), E_PROTO, 0)
+    cmd_err(dev, CMD_HELLO, 3,
+            b"OBP1" + bytes([OB_PROTO_MAJOR, OB_PROTO_MINOR - 1]), E_PROTO, 0)
+    cmd_err(dev, CMD_HELLO, 4, b"OBPX" + HELLO_PAYLOAD[4:], E_ARG, 0)
     # none of them opened a session
-    cmd_err(dev, CMD_ERASE, 4, u32(APP_START) + u32(BLOCK), E_STATE, 0)
+    cmd_err(dev, CMD_ERASE, 5, u32(APP_START) + u32(BLOCK), E_STATE, 0)
 
 
 def test_boot_bad_mode(dev):
@@ -467,15 +505,31 @@ def test_ch57x_stream_commit_with_f26_poison(dev57):
 def test_ch57x_bless_via_xip_despite_f26(dev57):
     """Zero-write session: no blocks dirtied, XIP coherent, bless works."""
     image = bytes(range(1, 129))
-    full_update(dev57, image)
-    dev57.power_cycle()                  # image now "SWD-flashed" history
-    hello(dev57)
-    _pl, act = commit(dev57, image, 1)   # write_count == 0 -> XIP path
+    swd_install(dev57, image, slot=0)
+    slot, base, _cap = write_target(dev57)
+    assert (slot, base) == (0, APP_START)   # nothing bootable: the target is A
+    _pl, act = commit(dev57, image, 1)      # write_count == 0 -> XIP path
     assert act == ACT_NONE
-    # generation 2: nothing was mutated, so the gen-1 record from the earlier
-    # update survived into this session and the new one has to outrank it.
-    assert dev57.record_raw() == expected_record(image, generation=2)
+    assert dev57.record_raw(0) == expected_record(image, generation=1)
     assert dev57.violations() == 0
+
+
+def test_bless_of_the_inactive_slot_outranks_the_running_image(dev):
+    """The A/B bless: an image installed out of band into the INACTIVE slot
+    has to claim a generation above the record still describing the running
+    one, or the boot decision would keep choosing the old slot."""
+    old = bytes(range(1, 65))
+    assert full_update(dev, old) == 0
+    dev.power_cycle()
+    slot, base, _cap = write_target(dev)
+    assert slot == 1                        # A is active, so B is the target
+    new = bytes(range(10, 138))
+    dev.write_flash(base, new)
+    commit(dev, new, 1)
+    assert dev.record_raw(1) == expected_record(new, generation=2)
+    assert dev.record_raw(0) == expected_record(old, generation=1)
+    dev.power_cycle()
+    assert dev.boot_select() == 1
 
 
 def test_commit_retry_is_idempotent(dev):
@@ -496,12 +550,14 @@ def test_commit_retry_is_idempotent(dev):
 def test_bless_commit_retry_is_idempotent(dev):
     """The CH57x failure mode: record writes dirty XIP after a bless."""
     image = bytes(range(1, 97))
-    full_update(dev, image)
-    dev.power_cycle()                   # coherent out-of-band image history
-    hello(dev)
+    swd_install(dev, image, slot=0)
+    write_target(dev)
     commit(dev, image, 1)
     after_bless = dev.op_total()
 
+    # The COMMIT moved the write target to the other slot. The replay cache
+    # keys on the tuple that reached flash, not on the current target, so a
+    # retry is still acknowledged without touching the controller.
     commit(dev, image, 2)
     assert dev.op_total() == after_bless
     hello(dev, 3)
@@ -513,16 +569,20 @@ def test_commit_replay_requires_exact_tuple(dev):
     image = bytes(range(1, 97))
     full_update(dev, image)
     before = dev.op_total()
+    # Not the committed tuple, so it must be re-attested — against the
+    # CURRENT write slot, which the commit flip just moved to the empty one.
+    # It fails either way and touches no flash; the detail differs only
+    # because ch59x may attest straight from XIP and ch57x may not.
     cmd_err(dev, CMD_COMMIT, 0x40,
-            u32(len(image)) + u32(zlib.crc32(image) ^ 1),
-            E_VERIFY, DET_MISMATCH)
+            u32(len(image)) + u32(zlib.crc32(image) ^ 1), E_VERIFY,
+            DET_MISMATCH if dev.family == "ch59x" else DET_NONSEQ)
     assert dev.op_total() == before
 
 
 def test_mutation_invalidates_commit_replay(dev):
     image = bytes(range(1, 97))
-    full_update(dev, image)
-    erase(dev, APP_START, BLOCK, seq=0x40)
+    slot = full_update(dev, image)
+    erase(dev, dev.slot_base(1 - slot), BLOCK, seq=0x40)   # the new target
     before = dev.op_total()
     cmd_err(dev, CMD_COMMIT, 0x41,
             u32(len(image)) + u32(zlib.crc32(image)), E_VERIFY)
@@ -533,12 +593,15 @@ def test_power_cycle_forgets_commit_replay_cache(dev):
     image = bytes(range(1, 97))
     full_update(dev, image)
     dev.power_cycle()
-    hello(dev)
+    slot, base, _cap = write_target(dev)
+    dev.write_flash(base, image)        # stage the new target out of band
     before = dev.op_total()
-    commit(dev, image, 1)
+    commit(dev, image, 1)               # same tuple as before the cycle
     # Two mutating ops, not one: storing a record erases its block before
-    # writing it, because flash only clears bits.
+    # writing it, because flash only clears bits. A surviving cache would
+    # have acknowledged this for free.
     assert dev.op_total() == before + 2
+    assert dev.record_raw(slot) == expected_record(image, generation=2)
 
 
 def test_ch59x_nonseq_commit_ok(dev59):
@@ -554,16 +617,32 @@ def test_ch59x_nonseq_commit_ok(dev59):
 
 # --- F26 record-view staleness (power-cycle-scoped gates) ----------------
 
-def test_boot_rejected_between_invalidate_and_commit(dev):
-    """From the first mutation until a successful COMMIT, BOOT must refuse
-    to trust the record — on CH57x the stale (F26) view still reads as the
-    old, valid record after the invalidate."""
-    image = bytes(range(64))
-    full_update(dev, image)
-    dev.power_cycle()
-    hello(dev)
-    erase(dev, APP_START, BLOCK, seq=1)          # invalidates the record
+def test_boot_rejected_when_the_only_slot_is_mid_update(dev):
+    """From the first mutation until a successful COMMIT the write slot is
+    unbootable, and on CH57x its record still reads (F26) as whatever stood
+    there before the invalidate. With nothing else to fall back on — a
+    factory part being flashed for the first time — BOOT must refuse."""
+    _slot, base, _cap = write_target(dev)
+    erase(dev, base, BLOCK, seq=1)               # invalidates the record
     cmd_err(dev, CMD_BOOT, 2, bytes([0]), E_VERIFY, DET_NORECORD)
+
+
+def test_boot_mid_update_falls_back_to_the_untouched_slot(dev):
+    """A/B's headline property. The same window as above, on a device that
+    has a previous image: mutations are confined to the INACTIVE slot, so
+    the active one is still exactly what the reset path will find and BOOT
+    returns to it. Beginning an update no longer strands the device."""
+    image = bytes(range(64))
+    slot = full_update(dev, image)
+    dev.power_cycle()
+    wslot, base, _cap = write_target(dev)
+    assert wslot != slot
+    erase(dev, base, BLOCK, seq=1)               # invalidates the write slot
+    _pl, act = cmd_ok(dev, CMD_BOOT, 2, bytes([0]))
+    assert act == ACT_RESET
+    dev.power_cycle()
+    assert dev.boot_select() == slot
+    assert dev.flash_read(dev.slot_base(slot), len(image)) == image
 
 
 def test_ch57x_boot_after_commit_despite_stale_record_view(dev57):
@@ -583,9 +662,8 @@ def test_ch57x_bless_then_boot_resets(dev57):
     """Even a bless COMMIT writes the record page (a controller write), so
     the conservative reset-to-launch applies after it too."""
     image = bytes(range(1, 65))
-    full_update(dev57, image)
-    dev57.power_cycle()                          # image is now history
-    hello(dev57)
+    swd_install(dev57, image, slot=0)
+    write_target(dev57)
     commit(dev57, image, 1)                      # bless: no app mutation
     _pl, act = cmd_ok(dev57, CMD_BOOT, 2, bytes([0]))
     assert act == ACT_RESET
@@ -760,28 +838,110 @@ def test_ch57x_no_bless_after_erase_only(dev57):
     """ERASE alone dirties XIP; a zero-write COMMIT must not bless stale
     pre-erase bytes into a record."""
     prior = bytes(range(10, 74))
-    full_update(dev57, prior)
-    dev57.power_cycle()                          # committed history
-    hello(dev57)
-    erase(dev57, APP_START, BLOCK, seq=1)
+    swd_install(dev57, prior, slot=0)
+    _slot, base, _cap = write_target(dev57)
+    erase(dev57, base, BLOCK, seq=1)
     cmd_err(dev57, CMD_COMMIT, 2, u32(len(prior)) + u32(zlib.crc32(prior)),
             E_VERIFY, DET_NONSEQ)
+
+
+# --- A/B slot selection -------------------------------------------------
+
+def test_consecutive_updates_alternate_slots(dev):
+    """Every update targets the slot the device is NOT currently able to
+    boot, so the previous image stays whole until the new one is committed.
+    Both images are in flash at once — that is what makes the fallback in
+    test_boot_mid_update_falls_back_to_the_untouched_slot real."""
+    first = bytes(range(1, 65))
+    second = bytes(range(100, 228))
+    assert full_update(dev, first) == 0
+    dev.power_cycle()
+    assert dev.boot_select() == 0
+    assert full_update(dev, second) == 1
+    dev.power_cycle()
+    assert dev.boot_select() == 1
+    assert dev.flash_read(dev.slot_base(0), len(first)) == first
+    assert dev.flash_read(dev.slot_base(1), len(second)) == second
+    assert full_update(dev, first) == 0          # and back round to A
+    dev.power_cycle()
+    assert dev.boot_select() == 0
+
+
+def test_hello_reports_the_slot_lifecycle(dev):
+    """Nothing bootable, then A active and B the target, then the reverse."""
+    active, wslot, base, cap = slot_view(hello(dev))
+    assert (active, wslot, base) == (OB_SLOT_ID_NONE, 0, dev.slot_base(0))
+    assert cap == dev.slot_capacity(0)
+    full_update(dev, bytes(range(1, 65)))
+    dev.power_cycle()
+    assert slot_view(hello(dev))[:3] == (0, 1, dev.slot_base(1))
+    full_update(dev, bytes(range(2, 66)))
+    dev.power_cycle()
+    assert slot_view(hello(dev))[:3] == (1, 0, dev.slot_base(0))
+
+
+def test_the_active_slot_is_unreachable(dev):
+    """The range gate is bounded by the write slot rather than by the app
+    region, so no command a host can send names the image the device is
+    currently able to boot — by mistake, by a stale address, or on purpose."""
+    image = bytes(range(1, 65))
+    slot = full_update(dev, image)
+    dev.power_cycle()
+    wslot, base, cap = write_target(dev)
+    assert wslot != slot
+    live = dev.slot_base(slot)
+    cmd_err(dev, CMD_ERASE, 1, u32(live) + u32(BLOCK), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_WRITE, 2, u32(live) + bytes(4), E_ADDR, DET_RANGE)
+    # The write slot's own record block is off limits too — only the disarm
+    # step may erase it, which is why capacity stops one block short.
+    cmd_err(dev, CMD_ERASE, 4, u32(base + cap) + u32(BLOCK), E_ADDR, DET_RANGE)
+    # CRC is NOT confined this way: it changes nothing, and `openboot verify`
+    # has to be able to read the committed image, which is never the target.
+    pl, _act = cmd_ok(dev, CMD_CRC, 5, u32(live) + u32(len(image)))
+    assert int.from_bytes(pl[1:5], "little") == zlib.crc32(image)
+    assert dev.flash_read(live, len(image)) == image
+    assert dev.violations() == 0
+
+
+def test_commit_moves_the_write_target_within_one_session(dev):
+    """COMMIT is the commit point, so it is where the target moves: without
+    a new HELLO the slot just committed becomes unreachable and the other
+    one takes the next update. That the second COMMIT attests at all is the
+    session re-arm working — on CH57x the sequential run has to be
+    re-anchored to the new base or nothing there can be attested."""
+    first = bytes(range(1, 65))
+    slot = full_update(dev, first)               # session stays open
+    other = dev.slot_base(1 - slot)
+    cmd_err(dev, CMD_ERASE, 0x61, u32(dev.slot_base(slot)) + u32(BLOCK),
+            E_ADDR, DET_RANGE)
+    second = bytes(range(100, 164))
+    erase(dev, other, BLOCK, seq=0x62)
+    seq = 0x63
+    for off in range(0, len(second), MAX_WRITE):
+        write(dev, other + off, second[off:off + MAX_WRITE], seq)
+        seq += 1
+    commit(dev, second, seq)
+    assert dev.record_raw(1 - slot) == expected_record(second, generation=2)
+    dev.power_cycle()
+    assert dev.boot_select() == 1 - slot
 
 
 # --- power-cut injection ------------------------------------------------
 
 def _drive_update_frames(dev, image):
     """Fire a full update, ignoring responses (host oblivious to the cut)."""
-    dev.frame(frame(CMD_HELLO, 0, HELLO_PAYLOAD))
+    resp, _ = dev.frame(frame(CMD_HELLO, 0, HELLO_PAYLOAD))
+    base = slot_view(parse(resp)[2])[2]
     blocks = (len(image) + BLOCK - 1) // BLOCK
-    dev.frame(frame(CMD_ERASE, 1, u32(APP_START) + u32(blocks * BLOCK)))
+    dev.frame(frame(CMD_ERASE, 1, u32(base) + u32(blocks * BLOCK)))
     seq = 2
     for off in range(0, len(image), MAX_WRITE):
         dev.frame(frame(CMD_WRITE, seq & 0xFF,
-                        u32(APP_START + off) + image[off:off + MAX_WRITE]))
+                        u32(base + off) + image[off:off + MAX_WRITE]))
         seq += 1
     dev.frame(frame(CMD_COMMIT, seq & 0xFF,
                     u32(len(image)) + u32(zlib.crc32(image))))
+    return base
 
 
 def test_power_cut_sweep(dev):
@@ -807,24 +967,24 @@ def test_power_cut_sweep(dev):
 
 def test_power_cut_disarm_ordering(dev):
     image_a = bytes(range(1, 129))
-    full_update(dev, image_a)
+    slot = full_update(dev, image_a)
     dev.power_cycle()
     assert dev.boot_decide() == 0
-    # Cut at the record invalidate itself: old record + old app intact.
-    dev.power_cycle()
-    dev.set_fail_after(0)
-    hello(dev)
-    cmd_err(dev, CMD_ERASE, 1, u32(APP_START) + u32(BLOCK), E_FLASH)
-    dev.power_cycle()
-    assert dev.boot_decide() == 0        # boots the old, untouched image
-    assert dev.flash_read(APP_START, len(image_a)) == image_a
-    # Cut just after the invalidate: no erase happened, but we must stay.
-    dev.power_cycle()
-    dev.set_fail_after(1)
-    hello(dev)
-    cmd_err(dev, CMD_ERASE, 1, u32(APP_START) + u32(BLOCK), E_FLASH)
-    dev.power_cycle()
-    assert dev.boot_decide() == 1        # disarmed before any mutation
+    # fail_after=0 cuts at the record invalidate itself; fail_after=1 lets
+    # the invalidate land and cuts the image erase that follows it. Under
+    # A/B both are survivable for the same reason: the invalidate can only
+    # ever reach the write slot's own record block, so wherever the cut
+    # falls the previous image and its record are untouched.
+    for fail_after in (0, 1):
+        dev.power_cycle()
+        dev.set_fail_after(fail_after)
+        wslot, base, _cap = write_target(dev)
+        assert wslot != slot
+        cmd_err(dev, CMD_ERASE, 1, u32(base) + u32(BLOCK), E_FLASH)
+        dev.power_cycle()
+        assert dev.boot_decide() == 0            # the old image still boots
+        assert dev.boot_select() == slot         # and it is the one chosen
+        assert dev.flash_read(dev.slot_base(slot), len(image_a)) == image_a
 
 
 # --- boot decision ------------------------------------------------------
@@ -836,10 +996,10 @@ def _setup_app(dev, record_ok, erased_first):
                  else bytes(range(1, 65)))
         full_update(dev, image)
     else:
-        hello(dev)
-        erase(dev, APP_START, BLOCK)
+        _slot, base, _cap = write_target(dev)
+        erase(dev, base, BLOCK)
         if not erased_first:
-            write(dev, APP_START, bytes(range(1, 49)), 2)
+            write(dev, base, bytes(range(1, 49)), 2)
     dev.power_cycle()
 
 
@@ -940,15 +1100,18 @@ def test_hello_reports_the_silicon_app_end_not_the_build(dev):
 
 def test_writes_past_the_silicon_end_are_refused(dev):
     smaller = APP_START + BLOCK
-    dev.set_silicon_app_end(smaller)
-    hello(dev)
-    erase(dev, APP_START, BLOCK)
-    # last legal chunk still works
-    write(dev, smaller - MAX_WRITE, bytes(MAX_WRITE), seq=3)
-    # one past the clamped end does not, even though the BUILD allows it
     assert smaller < dev.app_end, "test needs the clamp to be the tighter bound"
-    cmd_err(dev, CMD_WRITE, 4, u32(smaller) + bytes(4), E_ADDR, DET_RANGE)
-    cmd_err(dev, CMD_ERASE, 5, u32(smaller) + u32(BLOCK), E_ADDR, DET_RANGE)
+    dev.set_silicon_app_end(smaller)
+    _active, _wslot, base, cap = slot_view(hello(dev))
+    # A slot the silicon cannot hold is unusable WHOLESALE rather than
+    # shrunk: shrinking it would move the record and break the address the
+    # application was linked against. So the clamp does not narrow the
+    # writable window, it removes it — and HELLO says so before the host
+    # tries anything.
+    assert cap == 0
+    cmd_err(dev, CMD_ERASE, 1, u32(base) + u32(BLOCK), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_WRITE, 2, u32(base) + bytes(4), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_COMMIT, 3, u32(4) + u32(0), E_ADDR, DET_RANGE)
 
 
 def test_commit_length_is_bounded_by_the_silicon(dev):
@@ -977,14 +1140,15 @@ def test_a_board_clamped_build_bound_holds_on_larger_silicon(dev):
     dev.set_silicon_app_end(dev.app_end + 0x1000)
     pl = hello(dev)
     assert int.from_bytes(pl[12:16], "little") == dev.app_end
-    # the last in-bound block still works...
-    erase(dev, dev.app_end - BLOCK, BLOCK, seq=1)
-    write(dev, dev.app_end - MAX_WRITE, bytes(MAX_WRITE), seq=2)
-    # ...but nothing at or past the build bound does, silicon or not
-    cmd_err(dev, CMD_WRITE, 3, u32(dev.app_end) + bytes(4), E_ADDR, DET_RANGE)
-    cmd_err(dev, CMD_ERASE, 4, u32(dev.app_end) + u32(BLOCK), E_ADDR, DET_RANGE)
-    over = dev.app_end - APP_START + 4
-    cmd_err(dev, CMD_COMMIT, 5, u32(over) + u32(0), E_ADDR, DET_RANGE)
+    _active, _wslot, base, cap = slot_view(pl)
+    assert cap != 0, "the build bound must still leave slot A usable"
+    # the last in-bound block of the slot still works...
+    erase(dev, base + cap - BLOCK, BLOCK, seq=1)
+    write(dev, base + cap - MAX_WRITE, bytes(MAX_WRITE), seq=2)
+    # ...but nothing at or past the slot bound does, silicon or not
+    cmd_err(dev, CMD_WRITE, 3, u32(base + cap) + bytes(4), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_ERASE, 4, u32(base + cap) + u32(BLOCK), E_ADDR, DET_RANGE)
+    cmd_err(dev, CMD_COMMIT, 5, u32(cap + 4) + u32(0), E_ADDR, DET_RANGE)
 
 
 # --- idle auto-boot timing ----------------------------------------------
