@@ -159,9 +159,11 @@ impl Bundle {
         out
     }
 
-    /// Is this file a bundle? Checked by magic alone, so an ordinary `.bin`
-    /// is never mistaken for one and a corrupt bundle still reports as a
-    /// bundle (and then fails parsing with a reason).
+    /// Is this file a bundle? By magic alone, which is a heuristic and not a
+    /// proof: an image whose first four bytes happen to be "OBB1" is taken
+    /// for a bundle and then fails to parse. That is rare and loud rather
+    /// than silent, and it is the trade for a corrupt bundle still being
+    /// recognised as one so parsing can say what is wrong with it.
     pub fn looks_like_bundle(raw: &[u8]) -> bool {
         raw.len() >= 4 && &raw[..4] == MAGIC
     }
@@ -374,7 +376,12 @@ pub fn load_source(path: &std::path::Path, base_override: Option<u32>) -> Result
                 path.display()
             );
         }
-        let b = Bundle::parse(&raw).with_context(|| format!("parse {}", path.display()))?;
+        let b = Bundle::parse(&raw).with_context(|| {
+            format!(
+                "{} was read as a bundle because it begins with the OBB1 magic",
+                path.display()
+            )
+        })?;
         return Ok(Source::Bundle(b));
     }
     Ok(Source::Single(crate::image::load_image(
@@ -441,10 +448,17 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_binary_is_not_mistaken_for_a_bundle() {
+    fn detection_is_by_magic_and_says_so() {
         assert!(!Bundle::looks_like_bundle(&[0xFF; 64]));
         assert!(!Bundle::looks_like_bundle(b"OB"));
         assert!(Bundle::looks_like_bundle(&two().encode()));
+        // A heuristic, not a proof: an image starting with the magic is taken
+        // for a bundle. It then fails to parse rather than being misread, and
+        // load_source says which assumption led there.
+        let mut collides = b"OBB1".to_vec();
+        collides.extend_from_slice(&[0x5A; 60]);
+        assert!(Bundle::looks_like_bundle(&collides));
+        assert!(Bundle::parse(&collides).is_err());
     }
 
     #[test]

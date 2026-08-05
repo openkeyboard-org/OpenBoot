@@ -224,12 +224,27 @@ enum BundleCmd {
     },
 }
 
-/// `PATH@BASE`, split on the LAST '@' so a path containing one still works.
+/// `PATH@BASE`, split on the LAST '@' so a path may itself contain one —
+/// provided a base follows. The format cannot tell `my@file.bin` (a path)
+/// from a path with a malformed base, so that case is an error rather than a
+/// bare path, and says so.
 fn parse_image_spec(spec: &str) -> Result<(PathBuf, Option<u32>)> {
-    match spec.rsplit_once('@') {
-        Some((path, base)) if !path.is_empty() => Ok((PathBuf::from(path), Some(parse_u32(base)?))),
-        _ => Ok((PathBuf::from(spec), None)),
+    let Some((path, base)) = spec.rsplit_once('@') else {
+        return Ok((PathBuf::from(spec), None));
+    };
+    if path.is_empty() {
+        bail!("{spec:?}: nothing before the '@' — the form is PATH@BASE");
     }
+    if base.is_empty() {
+        bail!("{spec:?}: nothing after the '@' — the form is PATH@BASE");
+    }
+    let addr = parse_u32(base).map_err(|_| {
+        anyhow::anyhow!(
+            "{spec:?}: {base:?} is not an address. The form is PATH@BASE, and a \
+             path containing '@' still has to be followed by its base."
+        )
+    })?;
+    Ok((PathBuf::from(path), Some(addr)))
 }
 
 fn parse_u32(s: &str) -> Result<u32> {
