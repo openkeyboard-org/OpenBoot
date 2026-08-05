@@ -431,10 +431,11 @@ mod tests {
             let mut bad = good.clone();
             bad[at] ^= 0x01;
             let err = Bundle::parse(&bad).unwrap_err().to_string();
-            assert!(
-                err.contains("CRC mismatch") || err.contains("variants"),
-                "byte {at} not caught: {err}"
-            );
+            // Specifically the CRC, not "some error": these three bytes carry
+            // no structural meaning, so the whole-file CRC is the only thing
+            // that can catch them. A looser assertion would also accept a
+            // count or magic complaint and stop proving that.
+            assert!(err.contains("CRC mismatch"), "byte {at} not caught: {err}");
         }
     }
 
