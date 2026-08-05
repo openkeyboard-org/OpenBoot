@@ -2,9 +2,8 @@
 """Build the host-native test libraries: the REAL core sources compiled
 against the mock port into firmware/build/host/ob_{ch57x,ch59x}.so.
 
-main.c is excluded (it needs a transport); it and the OB_BOOT_IMAGE_CRC
-path are still syntax-checked so they cannot rot. The compiler selection is
-HOST_CC, then CC, then cc.
+main.c is excluded (it needs a transport) and is syntax-checked so it cannot
+rot. The compiler selection is HOST_CC, then CC, then cc.
 """
 import os
 import subprocess
@@ -27,7 +26,15 @@ CFLAGS = [
     "-DOB_TRANSPORT_ID=OB_TRANSPORT_ID_USB",
 ]
 
-FAMILIES = {"ch57x": "-DOB_HOST_CH57X", "ch59x": "-DOB_HOST_CH59X"}
+# ch57x_imagecrc is the same core with the opt-in boot-time image check
+# turned on. It gets a real library rather than a syntax check because
+# OB_BOOT_IMAGE_CRC decides whether a device boots: it was compile-only, so
+# nothing ever executed the comparison, and deleting it broke no test.
+FAMILIES = {
+    "ch57x": "-DOB_HOST_CH57X",
+    "ch59x": "-DOB_HOST_CH59X",
+    "ch57x_imagecrc": "-DOB_HOST_CH57X -DOB_BOOT_IMAGE_CRC=1",
+}
 
 DEPS = CORE_SRC + HOST_SRC + [
     HERE / "ob_host_port.h",
@@ -56,13 +63,11 @@ def host_compiler():
 def build(cc=None):
     cc = cc or host_compiler()
     OUT.mkdir(parents=True, exist_ok=True)
-    for fam, dflag in FAMILIES.items():
+    for fam, dflags in FAMILIES.items():
         so = OUT / f"ob_{fam}.so"
-        _run([cc, *CFLAGS, dflag, "-fPIC", "-shared",
+        _run([cc, *CFLAGS, *dflags.split(), "-fPIC", "-shared",
               *CORE_SRC, *HOST_SRC, "-o", so])
-    # Compile-only gates for code the .so builds don't reach.
-    _run([cc, *CFLAGS, "-DOB_HOST_CH57X", "-DOB_BOOT_IMAGE_CRC=1",
-          "-fsyntax-only", FW / "core" / "boot_decision.c"])
+    # Compile-only gates for code the .so builds do not reach.
     _run([cc, *CFLAGS, "-DOB_HOST_CH59X", "-Dmain=ob_fw_main",
           "-fsyntax-only", FW / "core" / "main.c"])
     for interval, millis, expected in ((20, 50, 2500), (333, 1, 4), (1500, 1, 1)):

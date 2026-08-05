@@ -1,5 +1,43 @@
 """Host-native tests for the OpenBoot portable core (real C sources compiled
-against the simulated-flash mock port; see core_host/)."""
+against the simulated-flash mock port; see core_host/).
+
+Coverage here is checked by MUTATION: neutralise a guard in boot_core.c or
+boot_decision.c and a test must fail. A guard whose removal leaves this suite
+green is either untested, or reached only by a test that gets there down
+another path - the shape behind every "passes for the wrong reason" defect
+found so far.
+
+Six guards survive that treatment on purpose, and are listed so the next sweep
+does not re-derive them:
+
+  boot_core.c  boot_record_trusted, the OB_REC_FLASH branch
+      Equivalent to the branch below it in the state that selects it:
+      active_slot was set from ob_boot_select() and nothing has written flash,
+      so both answer the same. Not a coverage gap.
+
+  boot_core.c  do_write, the mutation_begin() result check
+      Unreachable. WRITE requires a block marked in the erase bitmap, bits are
+      set only by a successful ERASE, and ERASE disarms first - so by the time
+      any WRITE is accepted the record is already invalidated and
+      mutation_begin() returns 0 without touching flash.
+
+  boot_core.c  handle_frame, the first length check
+      Redundant with the second one for the RESPONSE: either alone refuses a
+      runt (test_a_runt_frame_is_ignored fails only when both are gone). Its
+      own contribution is not reading header bytes that were never received,
+      which cannot be seen here because the harness always passes a full-size
+      buffer.
+
+  boot_decision.c  ob_record_load / ob_record_store, slot >= OB_SLOT_COUNT
+      Defensive against a caller bug. Neither function is exported to the
+      harness, so no test can pass an out-of-range slot.
+
+  boot_decision.c  ob_record_load, the capacity == 0 early return
+      Redundant for the ANSWER - the img_len-against-capacity check below
+      refuses the same records. It exists to avoid READING a record address
+      that lands beyond a smaller die's flash, and sim_flash is always the
+      full build size, so the hazard cannot be modelled.
+"""
 import random
 import zlib
 
@@ -472,22 +510,50 @@ def test_reset_restores_ch57x_f26_default(dev57):
     assert observed != zlib.crc32(image)
 
 
-def test_ch57x_nonseq_commit_rejected(dev57):
+def test_ch57x_a_broken_run_is_refused_even_when_it_covers_the_image(dev57):
+    """Isolates the POISONING from the length arithmetic.
+
+    An earlier version wrote two chunks out of order and asserted NONSEQ. That
+    passed with the poisoning deleted, because the shuffled run never reached
+    img_len and stream_covers() refused it anyway - so it proved nothing about
+    the poisoning it was named for.
+
+    Here the run does cover img_len, and the folded bytes are exactly the
+    image, so the ONLY thing left to refuse it is that a same-range rewrite
+    with different bytes broke the run. Delete the poisoning and this commits."""
     image = bytes(range(16, 80))
+    claim = u32(len(image)) + u32(zlib.crc32(image))
+
+    dev57.reset()
     hello(dev57)
     erase(dev57, APP_START, BLOCK)
-    write(dev57, APP_START + 48, image[48:], 2)           # out of order
-    write(dev57, APP_START, image[:48], 3)
-    cmd_err(dev57, CMD_COMMIT, 4, u32(len(image)) + u32(zlib.crc32(image)),
-            E_VERIFY, DET_NONSEQ)
+    write(dev57, APP_START, image[:48], 2)               # folds
+    over = bytes(b & 0xF0 for b in image[:48])           # same range, further 1->0
+    write(dev57, APP_START, over, 3)                     # accepted by flash, breaks the run
+    write(dev57, APP_START + 48, image[48:], 4)          # folds; the run now spans img_len
+    cmd_err(dev57, CMD_COMMIT, 5, claim, E_VERIFY, DET_NONSEQ)
     assert dev57.record_raw() == dev57.erased(dev57.slot_record_addr(0), RECORD_SIZE)
 
 
-def test_ch57x_short_stream_commit_rejected(dev57):
-    """Sequential but shorter than img_len: also NONSEQ."""
+def test_ch57x_a_stream_shorter_than_the_claim_is_refused(dev57):
+    """Sequential but shorter than img_len.
+
+    The control commits the 48 bytes that were actually written, which is what
+    makes the refusal below about the LENGTH CLAIMED rather than about folding
+    having silently done nothing: with folding deleted the cursor never moves,
+    every commit is short, and the negative case passes for the wrong reason."""
+    body = bytes(48)
+
+    dev57.reset()
     hello(dev57)
     erase(dev57, APP_START, BLOCK)
-    write(dev57, APP_START, bytes(48), 2)
+    write(dev57, APP_START, body, 2)
+    cmd_ok(dev57, CMD_COMMIT, 3, u32(48) + u32(zlib.crc32(body)))
+
+    dev57.reset()
+    hello(dev57)
+    erase(dev57, APP_START, BLOCK)
+    write(dev57, APP_START, body, 2)
     cmd_err(dev57, CMD_COMMIT, 3, u32(96) + u32(zlib.crc32(bytes(96))),
             E_VERIFY, DET_NONSEQ)
 
@@ -1391,3 +1457,96 @@ def test_a_factory_image_is_updated_into_the_other_slot(dev):
     assert dev.boot_select() == SLOT_B
     ra, rb = dev.record_raw(SLOT_A), dev.record_raw(SLOT_B)
     assert int.from_bytes(rb[4:8], "little") > int.from_bytes(ra[4:8], "little")
+
+
+def test_a_failed_disarm_leaves_app_flash_alone(dev):
+    """Disarm before mutation: if invalidating the record fails, the erase
+    must not be attempted at all.
+
+    Op COUNT is the only thing that separates the two behaviours here. The
+    status is E_FLASH either way and the flash is unchanged either way,
+    because the simulator keeps failing once it starts - so removing the guard
+    changed nothing any assertion could see. On real silicon a TRANSIENT
+    invalidate failure would let the erase run with a valid record still in
+    place, which is precisely what this ordering exists to prevent."""
+    _slot, base, _cap = write_target(dev)
+    dev.set_fail_after(0)                       # the record invalidate fails
+    before = dev.op_total()
+    cmd_err(dev, CMD_ERASE, 1, u32(base) + u32(BLOCK), E_FLASH)
+    assert dev.op_total() - before == 1, "the erase was attempted after a failed disarm"
+
+
+def test_a_runt_frame_is_ignored(dev):
+    """Shorter than the 8-byte overhead: there is no header to trust, so the
+    device must not answer at all. Nothing covered this before.
+
+    It pins the CONTRACT, not a particular line: two length checks enforce it
+    and either alone suffices, so this only fails when both are gone. The
+    first one's own contribution - not reading header bytes that were never
+    received - cannot be observed here, because the harness always hands the
+    core a full-size buffer."""
+    for length in range(0, 8):
+        resp, act = dev.frame(bytes(length))
+        assert resp == b"", f"answered a {length}-byte frame"
+        assert act == ACT_NONE
+
+
+# --- OB_BOOT_IMAGE_CRC --------------------------------------------------
+# The opt-in boot-time image check. It decides whether a device boots, and
+# until now it was only ever syntax-checked: nothing executed the comparison,
+# and deleting it from boot_decision.c broke no test. These run the same core
+# built both ways and require them to DISAGREE, which is the only way to show
+# the check is what made the difference.
+
+@pytest.fixture()
+def dev57crc():
+    d = get_device("ch57x_imagecrc")
+    d.reset()
+    return d
+
+
+def _install(dev, image, generation=1):
+    """Put an image and a matching record in slot A out of band, as SWD or a
+    factory programmer would."""
+    dev.reset()
+    dev.write_flash(dev.slot_base(SLOT_A), image)
+    dev.set_record_raw(expected_record(image, generation), SLOT_A)
+
+
+def test_image_crc_build_boots_an_image_that_matches_its_record(dev57crc):
+    image = bytes(range(1, 65))
+    _install(dev57crc, image)
+    assert dev57crc.boot_select() == SLOT_A
+    assert dev57crc.boot_decide() == 0
+    assert dev57crc.jumped_to() == dev57crc.slot_base(SLOT_A)
+
+
+def test_image_crc_build_refuses_an_image_that_does_not(dev57crc):
+    """A byte changed under a surviving record — corruption, or an
+    out-of-band reflash that diverges from what was committed."""
+    image = bytes(range(1, 65))
+    _install(dev57crc, image)
+    corrupt = bytes([image[0] ^ 0x01]) + image[1:]
+    dev57crc.write_flash(dev57crc.slot_base(SLOT_A), corrupt)
+    assert dev57crc.boot_select() == SLOT_NONE
+    assert dev57crc.boot_decide() == 1, "must stay in the bootloader"
+
+
+def test_without_the_option_the_same_corruption_still_boots(dev57):
+    """The contrast that makes the test above meaningful. The default build
+    checks the record and the first word only, so it boots the corrupted
+    image — which is exactly what the option exists to change."""
+    image = bytes(range(1, 65))
+    _install(dev57, image)
+    dev57.write_flash(dev57.slot_base(SLOT_A), bytes([image[0] ^ 0x01]) + image[1:])
+    assert dev57.boot_select() == SLOT_A
+    assert dev57.boot_decide() == 0
+
+
+def test_image_crc_checks_the_recorded_length_only(dev57crc):
+    """Documented prefix property: bytes past img_len are never checked, so a
+    longer image sharing the recorded prefix still validates."""
+    image = bytes(range(1, 65))
+    _install(dev57crc, image)
+    dev57crc.write_flash(dev57crc.slot_base(SLOT_A) + len(image), b"\xA5" * 32)
+    assert dev57crc.boot_select() == SLOT_A

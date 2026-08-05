@@ -67,7 +67,9 @@ def test_an_application_larger_than_the_region_is_refused():
     boot = b"\xAA" * 100
 
     compose(boot, b"\x11" * 64, 64)                  # exactly the bound is fine
-    with pytest.raises(ValueError, match="exceeds"):
+    # Matched on the region wording, not a bare "exceeds": the capacity error
+    # carries that word too, and this test must not pass on it.
+    with pytest.raises(ValueError, match="application region"):
         compose(boot, b"\x11" * 65, 64)
 
 
@@ -120,9 +122,15 @@ def test_the_record_describes_the_application_that_was_packed():
 
 
 def test_generation_zero_is_never_emitted():
-    """ob_record_load() rejects it, so a record claiming it would leave a
-    factory part unbootable in a way nothing here would notice."""
-    assert compose_factory.FACTORY_GENERATION >= 1
+    """ob_record_load() rejects generation 0, so a record claiming it leaves a
+    factory part unbootable.
+
+    Reads the EMITTED record rather than the constant: asserting
+    FACTORY_GENERATION >= 1 tested the constant and nothing else, and the
+    composer could have ignored it entirely while this stayed green."""
+    rec = record_of(compose(BOOT, APP, bless_capacity=CAPACITY))
+    assert int.from_bytes(rec[4:8], "little") >= 1
+    assert int.from_bytes(rec[4:8], "little") == compose_factory.FACTORY_GENERATION
 
 
 @pytest.mark.parametrize("extra", [1, 2, 3])
