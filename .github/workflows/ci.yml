@@ -29,6 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # hidapi reaches libudev through libudev-sys, whose build script shells
+      # out to pkg-config and panics when it is missing. Present on any desk
+      # that has built this, absent on a bare runner - which is precisely the
+      # difference a local "it passes here" cannot show.
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --manifest-path tools/Cargo.toml -- --check
       - run: cargo clippy --manifest-path tools/Cargo.toml --all-targets -- -D warnings
