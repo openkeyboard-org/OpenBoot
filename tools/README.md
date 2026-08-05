@@ -33,6 +33,10 @@ openboot erase --start 0x2000 --length 0x2000 --force
 openboot boot
 openboot boot --stay
 openboot bless app.bin
+openboot bundle create -o app.obb --chip ch592 \
+    app-slot-a.bin@0x2000 app-slot-b.bin@0x39000
+openboot bundle info app.obb
+openboot flash app.obb --force                # picks the slot's build itself
 ```
 
 Global selectors:
@@ -54,6 +58,38 @@ updates, so the artifact to supply alternates too: an application is linked
 for a slot base and cannot be relocated on these parts. `probe` prints the
 active slot, the write slot and the window, and a mismatch is refused before
 anything is erased.
+
+## Slot bundles
+
+Handing over a single `.bin` means deciding which slot's build it is and
+passing the matching `--base` — a decision that changes every update and is
+silently wrong if you get it backwards. A bundle removes the decision: it
+carries every per-slot build together with the base each was linked for, and
+the tool asks the device which slot it is writing.
+
+```sh
+openboot bundle create -o app.obb --chip ch592 \
+    app-slot-a.bin@0x2000 app-slot-b.bin@0x39000
+openboot flash app.obb --force
+```
+
+`PATH@BASE` is the address the image was **linked** for. A `.bin` has to state
+it, because the file does not carry one and guessing is the mistake bundles
+exist to prevent. Intel HEX takes its base from its own records, so `PATH`
+alone is used and `@BASE` is rejected.
+
+One release is then one file with one digest, whichever slot each device
+happens to be on. `flash` and `bless` select the variant for the write slot;
+`verify` selects the one the device is **running**, which is the variant that
+is not the write target. A bundle with no build for the slot the device wants
+is refused by name, and so is one whose `--chip` does not match what HELLO
+reports — a wrong-family image can share the same addresses and still not run,
+and the device cannot tell, because OBP carries addresses, a length and a CRC,
+never what the code is.
+
+`bundle info` prints the contents without a device attached. Everything is
+covered by a CRC over the whole file, so a truncated or edited bundle fails
+before any of it is believed.
 
 Exit status is `0` for success, `1` for device, I/O, or usage errors, and `2`
 for a verification mismatch. Idempotent commands are retried up to three times

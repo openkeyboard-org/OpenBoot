@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 
+use crate::bundle::Source;
 use crate::client::{BootClient, BootMode, ClientError};
 use crate::image::Image;
 use crate::proto::consts::{OB_DET_VERIFY_MISMATCH, OB_E_VERIFY};
@@ -467,10 +468,16 @@ fn execute_flash(
 /// Full flash flow: HELLO -> bounds check -> plan (dry run unless forced)
 /// -> chunked ERASE -> sequential WRITEs -> COMMIT -> optional CRC
 /// cross-check -> BOOT.
-pub fn flash(transport: &mut dyn Transport, image: &Image, opts: &FlashOpts) -> Result<()> {
+pub fn flash(transport: &mut dyn Transport, source: &Source, opts: &FlashOpts) -> Result<()> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
     print_device_brief(&info);
+
+    // Which build to send is the device's answer, not the operator's: it
+    // names the slot it will write, and an application only runs at the base
+    // it was linked for.
+    source.check_family(info.chip_family, &info.family_name())?;
+    let image = source.for_base(info.write_base, "device write")?;
 
     let plan = plan_flash(&info, image, opts)?;
     print_flash_plan(image, &plan);
@@ -482,10 +489,14 @@ pub fn flash(transport: &mut dyn Transport, image: &Image, opts: &FlashOpts) -> 
 }
 
 /// Read-only comparison: device CRC over `[base, base+len)` vs local image.
-pub fn verify(transport: &mut dyn Transport, image: &Image) -> Result<()> {
+pub fn verify(transport: &mut dyn Transport, source: &Source) -> Result<()> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
     print_device_brief(&info);
+    source.check_family(info.chip_family, &info.family_name())?;
+    // Verify checks what the device is RUNNING, which is never the slot it
+    // offers to write.
+    let image = source.for_running_image(info.write_base)?;
     check_in_region(&info, image.base, image.bytes.len())?;
 
     if !info.crc_live() {
@@ -592,10 +603,14 @@ pub fn boot(transport: &mut dyn Transport, stay: bool) -> Result<()> {
 
 /// Zero-write COMMIT for images already in flash (e.g. SWD-flashed dev
 /// builds): the device CRCs flash directly and writes the boot record.
-pub fn bless(transport: &mut dyn Transport, image: &Image) -> Result<()> {
+pub fn bless(transport: &mut dyn Transport, source: &Source) -> Result<()> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
     print_device_brief(&info);
+    source.check_family(info.chip_family, &info.family_name())?;
+    // Bless attests an image already in flash at the base COMMIT will read
+    // from, which is the write slot - same selection rule as flash.
+    let image = source.for_base(info.write_base, "device write")?;
     check_committable(&info, image)?;
 
     let len = image.bytes.len();
