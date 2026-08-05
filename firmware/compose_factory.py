@@ -117,16 +117,25 @@ def compose_factory(openboot: bytes, app: bytes, app_max: int | None = None,
     if bless_capacity is None:
         return head + app
 
+    # The two bounds are independent arguments with independent CLI flags, so
+    # they can disagree. The Makefile always derives them from one geometry
+    # and they never do - but that is a property of the caller, not of this
+    # function, and the composed image runs to bless_capacity + a record
+    # whatever app_max says. Checked here rather than assumed: passing
+    # --app-end 0x2065 with --bless-capacity 0x1000 used to emit a file
+    # reaching 4027 bytes past the region it had just been told about.
+    if app_max is not None and bless_capacity + RECORD_SIZE > app_max:
+        raise ValueError(
+            f"slot capacity {bless_capacity} plus its {RECORD_SIZE}-byte boot "
+            f"record does not fit the {app_max}-byte application region; the "
+            f"capacity and the region end describe different geometries")
+
     # img_len must be a whole number of flash words, so the recorded image is
     # the application rounded up. The pad is part of what the CRC covers, so
     # it has to be in the file too - and 0x00 for the same reason as the pad
-    # above.
-    #
-    # The app_max check above used the UNPADDED length, which is right: when
-    # blessing, the capacity below is the binding bound and it is strictly
-    # tighter. A slot is half the region rounded down to an erase block, less
-    # the block its record owns, so bless_capacity < app_max always and the
-    # padding cannot carry the image past the region.
+    # above. The unpadded app_max check above stays exact for the unblessed
+    # path, where nothing is padded; here the capacity bound governs, and the
+    # check above has just established it sits inside the region.
     image = app + b"\x00" * (-len(app) % 4)
     if len(image) > bless_capacity:
         raise ValueError(

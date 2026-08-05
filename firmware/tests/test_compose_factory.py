@@ -159,11 +159,32 @@ def test_not_blessing_leaves_the_old_layout_untouched():
         compose_factory.app_base() - len(BOOT)) + APP
 
 
-def test_the_capacity_bound_is_the_tighter_one_when_blessing():
-    """Pins why the region check above may use the unpadded length: a slot is
-    half the region less its record block, so an image that fits the slot
-    cannot reach the end of the region however it is padded."""
+def test_real_geometries_keep_the_capacity_inside_the_region():
+    """Every geometry the build derives leaves room for the slot and its
+    record inside the application region."""
     for app_end in (0x30000, 0x3A000, 0x3C000, 0x70000):
         region = app_end - compose_factory.app_base()
-        slot = (region // 2 // 4096) * 4096
-        assert slot - 4096 < region, f"capacity must stay under the region at {app_end:#x}"
+        capacity = (region // 2 // 4096) * 4096 - 4096
+        assert capacity + ob_consts.OB_BOOT_RECORD_SIZE <= region, f"{app_end:#x}"
+        compose(BOOT, APP, app_max=region, bless_capacity=capacity)
+
+
+def test_bounds_that_describe_different_geometries_are_refused():
+    """The Makefile derives both bounds from one geometry, so they always
+    agree — but they are independent arguments with independent CLI flags, and
+    disagreeing ones used to emit an image running far past the region end
+    (--app-end 0x2065 with --bless-capacity 0x1000 overran by 4027 bytes)."""
+    with pytest.raises(ValueError, match="different geometries"):
+        compose(BOOT, APP[:101], app_max=101, bless_capacity=0x1000)
+
+
+def test_a_padded_application_cannot_cross_the_region_end():
+    """The boundary from the report: 101 bytes fits a 101-byte region, and its
+    recorded image is 104."""
+    capacity = 104
+    with pytest.raises(ValueError, match="different geometries"):
+        compose(BOOT, APP[:101], app_max=101, bless_capacity=capacity)
+    # Consistent bounds at the same sizes compose, and stay inside the region.
+    img = compose(BOOT, APP[:101], app_max=capacity + ob_consts.OB_BOOT_RECORD_SIZE,
+                  bless_capacity=capacity)
+    assert len(img) - compose_factory.app_base() == capacity + ob_consts.OB_BOOT_RECORD_SIZE
