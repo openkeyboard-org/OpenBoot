@@ -640,8 +640,9 @@ and CRC-corrupt frames alike leave it alone, so nothing short of a session can
 keep a device out of its app indefinitely.
 
 The deadline is wall-clock, measured against a free-running hardware counter,
-so frame handling does not stretch it. A device without a valid record waits
-indefinitely.
+so frame handling does not stretch it. `OB_IDLE_TIMEOUT_MS = 0` **disables**
+idle auto-boot rather than expiring immediately, and a device without a valid
+record waits indefinitely either way.
 
 ## 11. Versioning and discovery
 

@@ -163,11 +163,15 @@ OB_BOOT_PIN_PORT_B ?= 0
 # and inside (app base, silicon end]. Board files are included above, after
 # the per-chip default is assigned, which is what makes the override land.
 ifneq ($(strip $(OB_APP_END)),)
+  # Arithmetic expansion rather than printf '%d': POSIX requires $(( )) to
+  # accept C integer constants including 0x hex, but does NOT require printf
+  # to. A malformed value makes the expansion fail, the group produces no
+  # output, and the $(error) below fires - the same outcome as before.
   APP_END_OK := $(shell \
-    want=$$(printf '%d' '$(strip $(OB_APP_END))' 2>/dev/null) && \
-    max=$$(printf '%d' '$(APP_END_$(CHIP))') && \
-    [ "$$want" -gt $(APP_BASE_BYTES) ] && [ "$$want" -le "$$max" ] && \
-    [ $$(( want % 4096 )) -eq 0 ] && echo ok)
+    { want=$$(( $(strip $(OB_APP_END)) )) && \
+      max=$$(( $(APP_END_$(CHIP)) )) && \
+      [ "$$want" -gt $(APP_BASE_BYTES) ] && [ "$$want" -le "$$max" ] && \
+      [ $$(( want % 4096 )) -eq 0 ] && echo ok; } 2>/dev/null)
   ifneq ($(strip $(APP_END_OK)),ok)
     $(error OB_APP_END=$(OB_APP_END) is not usable on $(CHIP): expected a \
             4096-aligned address above $(APP_BASE_BYTES) and no higher than \

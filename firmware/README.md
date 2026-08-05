@@ -123,9 +123,10 @@ No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
 `OB_APP_END` fences OBP off from flash the board reserves for something else —
 OpenDongle's CH570 keeps its RF bond at `0x3A000`, just below the boot-record
 page, so its board file sets `OB_APP_END := 0x0003A000` and no `ERASE`,
-`WRITE` or `COMMIT` can reach either page. It must be 4096-aligned and no
-higher than the silicon's own end; the device advertises the resulting bound
-over HELLO, so the host needs no per-board knowledge.
+`WRITE` or `COMMIT` can reach either page. It must be 4096-aligned and inside
+`(app base, silicon end]` — above `0x2000` and no higher than the silicon's own
+end; the device advertises the resulting bound over HELLO, so the host needs no
+per-board knowledge.
 
 `OB_IDLE_TIMEOUT_MS` is wall-clock milliseconds, measured against a
 free-running SysTick counter that the port starts once the clock is settled.
@@ -206,7 +207,9 @@ Bring up UART before USB, and leave CH57x USB until last.
 
 1. Build the image and confirm the size check passes.
 2. Flash through SWD, read it back, and power-cycle.
-3. Probe over UART or confirm USB enumerates as `1209:0001`.
+3. Probe over UART, or confirm USB enumerates as the board's configured
+   identity — `1209:0001` unless `OB_USB_VID`/`OB_USB_PID` are set, which the
+   product boards do (`0C45:FEFE`).
 4. Check HELLO reports the correct family, app bounds, geometry, features, and
    UID.
 5. Flash, COMMIT, verify, and boot a test application.

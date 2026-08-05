@@ -999,7 +999,7 @@ def test_idle_is_wrap_safe_across_the_millisecond_rollover(dev):
     """start near 2^32 and now past the wrap: unsigned subtraction has to
     give the true elapsed time, not a ~49-day answer."""
     start = 0xFFFFF000
-    assert not dev.idle_elapsed(start, 0x00000FFF, 10000)   # 4095 ms elapsed
+    assert not dev.idle_elapsed(start, 0x00000FFF, 10000)   # 8191 ms elapsed
     assert dev.idle_elapsed(start, 0x00001710, 10000)       # 10000 ms elapsed
 
 
