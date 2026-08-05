@@ -1,9 +1,11 @@
 use super::*;
+use crate::bundle::{Bundle, Source};
 use crate::image::Image;
 use crate::proto::consts::{
     OB_BOOT_APP, OB_CMD_BOOT, OB_CMD_COMMIT, OB_CMD_CRC, OB_CMD_ERASE, OB_CMD_HELLO, OB_CMD_WRITE,
     OB_DET_NONE, OB_E_NOT_ERASED, OB_FEAT_CRC_LIVE, OB_MAX_WRITE_DATA, OB_OK,
 };
+use crate::proto::consts::{OB_FAMILY_CH570, OB_FAMILY_CH592};
 use crate::proto::{self};
 use crate::testutil::*;
 
@@ -47,7 +49,7 @@ fn happy_flash_flow() {
 
     flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -83,7 +85,7 @@ fn dry_run_sends_only_hello() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: false,
             verify: true,
@@ -105,7 +107,7 @@ fn e_not_erased_propagates_without_retry() {
 
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -136,7 +138,7 @@ fn verify_mismatch_error_downcasts_for_exit_code_2() {
         vec![ok_resp(req, p)]
     });
 
-    let err = verify(&mut mock, &image).unwrap_err();
+    let err = verify(&mut mock, &Source::Single(image.clone())).unwrap_err();
     let mismatch = err
         .downcast_ref::<VerifyMismatch>()
         .expect("verify mismatch must downcast for the exit-code-2 path");
@@ -151,7 +153,7 @@ fn commit_mismatch_maps_to_verify_mismatch() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     mock.expect(|req| vec![status_err(req, OB_E_VERIFY, OB_DET_VERIFY_MISMATCH)]);
 
-    let err = bless(&mut mock, &image).unwrap_err();
+    let err = bless(&mut mock, &Source::Single(image.clone())).unwrap_err();
     let mismatch = err.downcast_ref::<VerifyMismatch>().expect("must downcast");
     assert_eq!(mismatch.device_crc, None);
     assert_eq!(mismatch.local_crc, image.crc32());
@@ -185,7 +187,7 @@ fn oversize_image_rejected_before_any_mutation() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -213,7 +215,7 @@ fn oversized_device_write_limit_rejected_before_any_mutation() {
 
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -235,7 +237,7 @@ fn offset_base_rejected_for_flash() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -261,7 +263,7 @@ fn verify_allows_offset_base_within_region() {
         p.extend_from_slice(&crc.to_le_bytes());
         vec![ok_resp(req, p)]
     });
-    verify(&mut mock, &image).unwrap();
+    verify(&mut mock, &Source::Single(image.clone())).unwrap();
 }
 
 #[test]
@@ -330,7 +332,7 @@ fn flash_skips_live_crc_when_feature_clear() {
 
     flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -387,7 +389,7 @@ fn flash_targets_the_slot_the_device_names() {
     });
     flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: true,
@@ -410,7 +412,7 @@ fn an_image_for_the_running_slot_is_rejected() {
     expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 0, 1);
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: false,
@@ -441,7 +443,7 @@ fn a_slot_that_does_not_fit_the_silicon_is_named_as_such() {
     });
     let err = flash(
         &mut mock,
-        &image,
+        &Source::Single(image.clone()),
         &FlashOpts {
             force: true,
             verify: false,
@@ -454,4 +456,165 @@ fn a_slot_that_does_not_fit_the_silicon_is_named_as_such() {
         "got: {err:#}"
     );
     assert_eq!(mock.log.len(), 1, "nothing after HELLO may be sent");
+}
+
+/* --- bundles ------------------------------------------------------------ */
+
+fn bundle_ab(family: u8) -> Source {
+    Source::Bundle(
+        Bundle::new(
+            family,
+            vec![
+                Image {
+                    base: 0x2000,
+                    bytes: vec![0xAA; 48],
+                },
+                Image {
+                    base: 0x39000,
+                    bytes: vec![0xBB; 48],
+                },
+            ],
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn a_bundle_flashes_the_variant_the_device_asks_for() {
+    // Slot A is running, so the device offers slot B. The operator names one
+    // file and picks nothing; the device's answer selects the build.
+    let mut mock = MockTransport::new();
+    expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 0, 1);
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_ERASE);
+        assert_eq!(req.payload, proto::erase_req_payload(0x39000, 4096));
+        vec![status_ok(req)]
+    });
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_WRITE);
+        assert_eq!(
+            u32::from_le_bytes(req.payload[..4].try_into().unwrap()),
+            0x39000
+        );
+        assert_eq!(
+            &req.payload[4..],
+            &[0xBB; 48],
+            "slot B's build, not slot A's"
+        );
+        vec![status_ok(req)]
+    });
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_COMMIT);
+        assert_eq!(
+            u32::from_le_bytes(req.payload[4..8].try_into().unwrap()),
+            crc32fast::hash(&[0xBBu8; 48])
+        );
+        vec![status_ok(req)]
+    });
+    flash(
+        &mut mock,
+        &bundle_ab(OB_FAMILY_CH592),
+        &FlashOpts {
+            force: true,
+            verify: false,
+            boot: false,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_same_bundle_flashes_slot_a_when_that_is_the_target() {
+    let mut mock = MockTransport::new();
+    expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 1, 0);
+    mock.expect(|req| {
+        assert_eq!(req.payload, proto::erase_req_payload(0x2000, 4096));
+        vec![status_ok(req)]
+    });
+    mock.expect(|req| {
+        assert_eq!(&req.payload[4..], &[0xAA; 48], "slot A's build");
+        vec![status_ok(req)]
+    });
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_COMMIT);
+        vec![status_ok(req)]
+    });
+    flash(
+        &mut mock,
+        &bundle_ab(OB_FAMILY_CH592),
+        &FlashOpts {
+            force: true,
+            verify: false,
+            boot: false,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_bundle_for_another_part_never_reaches_the_wire() {
+    let mut mock = MockTransport::new();
+    expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 0, 1);
+    let err = flash(
+        &mut mock,
+        &bundle_ab(OB_FAMILY_CH570),
+        &FlashOpts {
+            force: true,
+            verify: false,
+            boot: false,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("built for CH570"),
+        "got: {err:#}"
+    );
+    assert_eq!(mock.log.len(), 1, "nothing after HELLO may be sent");
+}
+
+#[test]
+fn a_bundle_missing_the_target_slot_says_what_it_has() {
+    // A one-variant bundle handed to a device that wants the other slot: the
+    // build simply is not there, and no amount of relocation would help.
+    let only_a = Source::Bundle(
+        Bundle::new(
+            0,
+            vec![Image {
+                base: 0x2000,
+                bytes: vec![0xAA; 48],
+            }],
+        )
+        .unwrap(),
+    );
+    let mut mock = MockTransport::new();
+    expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 0, 1);
+    let err = flash(
+        &mut mock,
+        &only_a,
+        &FlashOpts {
+            force: true,
+            verify: false,
+            boot: false,
+        },
+    )
+    .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("0x00039000"), "got: {msg}");
+    assert!(msg.contains("0x00002000"), "got: {msg}");
+    assert_eq!(mock.log.len(), 1, "nothing after HELLO may be sent");
+}
+
+#[test]
+fn verify_checks_the_running_slot_not_the_write_target() {
+    // Device is writing B, so A is running: verify must CRC slot A.
+    let mut mock = MockTransport::new();
+    expect_hello_slots(&mut mock, OB_FEAT_CRC_LIVE, 0x70000, 0, 1);
+    mock.expect(|req| {
+        assert_eq!(req.cmd, OB_CMD_CRC);
+        assert_eq!(req.payload, proto::crc_req_payload(0x2000, 48));
+        let mut p = vec![OB_OK];
+        p.extend_from_slice(&crc32fast::hash(&[0xAAu8; 48]).to_le_bytes());
+        vec![ok_resp(req, p)]
+    });
+    verify(&mut mock, &bundle_ab(OB_FAMILY_CH592)).unwrap();
 }

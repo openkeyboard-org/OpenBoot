@@ -70,8 +70,19 @@ addresses, a length and a CRC — never a link base — so a device asked to wri
 slot-A bytes at slot B's base will do exactly that, and commit an image that
 cannot run there. **Choosing the artifact that matches `write_slot` is the
 host's job.** The `openboot` CLI refuses a mismatch before anything is erased;
-any other host must make the same check itself. See
-[the A/B update design](../../docs/AB-UPDATE.md).
+any other host must make the same check itself.
+
+Ship the per-slot builds as one bundle rather than as loose `.bin` files, so
+that choice is made from the device's own answer instead of by hand:
+
+```sh
+openboot bundle create -o app.obb --chip ch592 \
+    app-slot-a.bin@0x2000 app-slot-b.bin@0x39000
+openboot flash app.obb --force
+```
+
+See [the A/B update design](../../docs/AB-UPDATE.md) and
+[the host tool](../../tools/README.md#slot-bundles).
 
 ### RAM boot request
 
