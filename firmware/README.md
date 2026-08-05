@@ -18,7 +18,7 @@ See the [protocol specification](../docs/PROTOCOL.md),
 | Tool | Requirement |
 |---|---|
 | GNU Make | 4.3 or newer |
-| MounRiver GCC | GCC 12 `riscv-wch-elf-*` toolchain |
+| MounRiver GCC | "RISC-V Embedded GCC" 12 (15 builds but is unvalidated) |
 | Python | Python 3 and pytest for host tests |
 | WCH SDK files | Initialized repository submodules |
 
@@ -35,8 +35,27 @@ export MRS_TOOLCHAIN=/path/to/toolchain/bin
 ```
 
 If the toolchain path causes Make quoting problems, use a space-free symlink.
-`make check-deps` verifies the pinned SDK revisions and GCC 12 toolchain. It
-warns when the compiler binary differs from the reference-build fingerprint.
+
+**Use GCC 12.** It is the only compiler validated on silicon.
+
+GCC 15 also builds the whole matrix, and the build detects its renamed tools
+(`riscv-wch-elf-*` became `riscv32-wch-elf-*`), so it is usable for
+development. It is not validated: on a CH572 it produced an idle auto-boot
+that fired early and erratically — 1.51 s, 1.71 s and 4.75 s against a
+configured 10 s — where GCC 12 on the same part gave 9.96 s every time, and it
+failed to return from a software reset 4 times in 32 against 0 in 32 for
+GCC 12. ch59x showed no such behaviour. The generated code for the timing
+functions is instruction-identical between the two, so the cause is elsewhere
+and unresolved. `check-deps` warns on it and builds anyway.
+
+The two also emit slightly different code (−12 to +80 bytes per image), so an
+image is only byte-reproducible against the compiler that built it.
+
+`make check-deps` treats the pinned SDK revisions as hard failures and the
+compiler as advisory: an unvalidated major and a SHA-256 that differs from the
+reference-build fingerprint both warn and build on. GCC 15's linker also warns
+once per image about the RWX `LOAD` segment — accurate for a no-MMU image, and
+GCC 12's linker rejects the option that would silence it.
 
 ## Build
 
@@ -54,8 +73,10 @@ make test                       # host-native core tests
 
 Every binary is limited to 8192 bytes by the linker and a post-build check.
 
-A project that packages the bootloader should ask where the image lands rather
-than reconstruct the directory name, which is a build-system detail:
+## Packaging OpenBoot in another project
+
+Ask where the image lands rather than reconstructing the directory name, which
+is a build-system detail:
 
 ```sh
 make --no-print-directory CHIP=ch592 TRANSPORT=usb BOARD=myboard print-image-path
@@ -65,6 +86,21 @@ It prints one absolute path and nothing else, builds nothing, and needs no
 `MRS_TOOLCHAIN`. The `.elf`, `.hex`, and `.map` share the directory and stem.
 `--no-print-directory` matters when the result is captured: Make writes its own
 "Entering directory" lines to stdout.
+
+Each build also writes a `.manifest` beside the `.bin` recording the OpenBoot
+revision, whether that checkout was dirty, the chip/transport/board, and the
+image sha256. Hash that file into your own build identity — the image sha256
+already accounts for every knob, source file and compiler choice, so it is the
+whole statement about what was built.
+
+To assert the checkout really is the pinned one before building:
+
+```sh
+python3 check_dependencies.py --expect-revision <sha> --toolchain "$MRS_TOOLCHAIN"
+```
+
+That fails if HEAD differs or the worktree is dirty. Without it, nothing
+compares a vendored OpenBoot against its gitlink.
 
 ## Board configuration
 

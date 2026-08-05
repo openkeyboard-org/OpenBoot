@@ -17,6 +17,7 @@
 #   make test                       host-native core tests, no cross toolchain
 #   make check-deps                 verify pinned SDKs + toolchain
 #   make print-image-path           absolute path of the current .bin, nothing else
+#   make factory APP=app.bin        whole-chip image: bootloader + pad + app
 #
 # Every image must fit the 8 KiB bootloader region. That is enforced three
 # ways: the linker script's FLASH MEMORY length, the post-objcopy byte gate in
@@ -115,6 +116,7 @@ BOOTREQ_NAME_ch57x := OB_BOOTREQ_ADDR_CH57X
 BOOTREQ_NAME_ch59x := OB_BOOTREQ_ADDR_CH59X
 BOOTREQ_NAME := $(BOOTREQ_NAME_$(PORT))
 PROTOCOL_H := $(abspath ../protocol/openboot_protocol.h)
+REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
 # Only headers and libISP come from here -- no SDK driver .c is compiled.
@@ -141,10 +143,14 @@ OB_IDLE_TIMEOUT_MS ?= 10000
 OB_BOOT_PIN_PORT_B ?= 0
 
 # ---------------------------------------------------------------------------
-# Toolchain: MounRiver GCC12 (riscv-wch-elf-*). The caller must point
+# Toolchain: a MounRiver "RISC-V Embedded GCC" install. The caller must point
 # MRS_TOOLCHAIN at its bin directory. Every recipe use is quoted so paths may
-# contain spaces:
+# contain spaces (the stock install directories do):
 #   make MRS_TOOLCHAIN=/path/to/bin ...
+#
+# GCC12 and GCC15 both build the matrix; check-deps warns rather than refuses
+# on anything else. Note GCC15 renamed the tool prefix and emits slightly
+# different code — see the TOOL_PREFIXES probe below and firmware/README.md.
 # ---------------------------------------------------------------------------
 MRS_TOOLCHAIN ?=
 
@@ -152,6 +158,7 @@ MRS_TOOLCHAIN ?=
 # firmware targets do, including the default goal and matrix convenience
 # targets, so fail at parse time with one actionable message.
 TOOLCHAIN_GOALS := image all matrix-report board-policy check-deps flash flash-isp \
+                   factory \
                    $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 ifeq ($(strip $(MAKECMDGOALS)),)
   NEEDS_TOOLCHAIN := 1
@@ -160,7 +167,7 @@ else ifneq ($(strip $(filter $(TOOLCHAIN_GOALS),$(MAKECMDGOALS))),)
 endif
 ifeq ($(NEEDS_TOOLCHAIN),1)
   ifeq ($(strip $(MRS_TOOLCHAIN)),)
-    $(error MRS_TOOLCHAIN is required; set it to the MounRiver GCC12 bin directory)
+    $(error MRS_TOOLCHAIN is required; set it to a MounRiver RISC-V Embedded GCC bin directory)
   endif
 endif
 
@@ -175,12 +182,31 @@ ifeq ($(strip $(HOST_CC)),)
 endif
 export HOST_CC
 
-CC := $(MRS_TOOLCHAIN)/riscv-wch-elf-gcc
+# MounRiver renamed the tool prefix at GCC15: riscv-wch-elf-* became
+# riscv32-wch-elf-*. Detect it instead of making every contributor bridge the
+# rename with a symlink farm. Probed with $(shell) rather than $(wildcard)
+# because MRS_TOOLCHAIN routinely contains a space ("RISC-V Embedded GCC12")
+# and $(wildcard) splits on whitespace. Kept in sync with detect_tool_prefix()
+# in check_dependencies.py, which enforces the same list.
+TOOL_PREFIXES := riscv-wch-elf- riscv32-wch-elf-
+ifneq ($(strip $(MRS_TOOLCHAIN)),)
+  TOOL_PREFIX := $(shell for p in $(TOOL_PREFIXES); do \
+                     if [ -x "$(MRS_TOOLCHAIN)/$${p}gcc" ]; then \
+                       printf '%s' "$$p"; break; \
+                     fi; \
+                   done)
+  ifeq ($(NEEDS_TOOLCHAIN)$(strip $(TOOL_PREFIX)),1)
+    $(error no MounRiver compiler in "$(MRS_TOOLCHAIN)" (expected one of \
+            $(addsuffix gcc,$(TOOL_PREFIXES))))
+  endif
+endif
+
+CC := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)gcc
 AS := $(CC)
 LD := $(CC)
-OBJCOPY := $(MRS_TOOLCHAIN)/riscv-wch-elf-objcopy
-SIZE := $(MRS_TOOLCHAIN)/riscv-wch-elf-size
-NM := $(MRS_TOOLCHAIN)/riscv-wch-elf-nm
+OBJCOPY := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objcopy
+SIZE := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)size
+NM := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)nm
 
 MINICHLINK ?= minichlink
 WCHLINK_SERIAL ?=
@@ -326,9 +352,10 @@ LDLIBS := -l$(ISPLIB)
 .DEFAULT_GOAL := image
 MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 .PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
-        print-image-path $(MATRIX)
+        print-image-path factory $(MATRIX)
 
-image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
+image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
+       $(BUILD)/$(TARGET).manifest
 
 # Where the current CHIP/TRANSPORT/BOARD image lands, for consumers that
 # package the bootloader (a superproject composing a factory image, say).
@@ -471,6 +498,57 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	"$(OBJCOPY)" -O ihex "$<" "$@"
+
+# Provenance for whoever packages this image. A superproject that vendors
+# OpenBoot (composing a factory image, say) otherwise has no way to record
+# WHICH bootloader it shipped: the gitlink is not consulted by any build step
+# and no revision reaches the artifact.
+#
+# The image sha256 is the whole statement about configuration — it already
+# subsumes every knob, source file and compiler choice — so this deliberately
+# does not restate the knobs. It records what produced the bytes and what they
+# hash to; openboot_config.h sits beside it for the expanded form.
+#
+# FORCE + cmp because the contents depend on git state, which moves without
+# any file in the build tree changing.
+$(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
+	@rev=$$(git -C "$(REPO_ROOT)" rev-parse HEAD 2>/dev/null || echo unknown); \
+	 if [ "$$rev" = unknown ]; then dirty=unknown; \
+	 elif [ -n "$$(git -C "$(REPO_ROOT)" status --porcelain 2>/dev/null)" ]; then dirty=1; \
+	 else dirty=0; fi; \
+	 if command -v sha256sum >/dev/null 2>&1; then sum=$$(sha256sum "$<"); \
+	 else sum=$$(shasum -a 256 "$<"); fi; \
+	 { echo "openboot_revision=$$rev"; \
+	   echo "openboot_dirty=$$dirty"; \
+	   echo "chip=$(CHIP)"; \
+	   echo "transport=$(TRANSPORT)"; \
+	   echo "board=$(BOARD)"; \
+	   echo "image=$(notdir $<)"; \
+	   echo "image_bytes=$$(wc -c < "$<" | tr -d ' ')"; \
+	   echo "image_sha256=$${sum%% *}"; \
+	 } > "$@.tmp"
+	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
+
+# Whole-chip factory image: this bootloader, 0x00 pad to the app base, then
+# the caller's application. One file to write at flash 0 on a blank part.
+#
+#   make factory APP=/path/to/app.bin CHIP=ch592 TRANSPORT=usb
+#
+# The pad must be 0x00 and not 0xFF — programming 0xFF programs nothing on
+# CH5xx, so an 0xFF pad never lands in flash and a post-flash readback compare
+# fails across it. compose_factory.py owns that rule and the tests pin it.
+FACTORY_BIN := $(BUILD)/$(TARGET)-factory.bin
+
+# check-deps, not just the .bin: a factory image is the artifact that ships,
+# so it must not be composable from an SDK or toolchain state that `make image`
+# would have refused.
+factory: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).manifest \
+         compose_factory.py
+	@test -n "$(strip $(APP))" || { \
+	  echo "set APP=<application .bin> — factory needs an application to package" >&2; \
+	  exit 1; }
+	$(HOST_PYTHON) compose_factory.py --openboot "$(BUILD)/$(TARGET).bin" \
+	    --app "$(APP)" --app-end $(APP_END) --output "$(FACTORY_BIN)"
 
 # SWD flash via a WCH-LinkE. minichlink ignores the return values of its
 # CH5xx erase/write calls and its byte-for-byte verify is disabled, so a zero
