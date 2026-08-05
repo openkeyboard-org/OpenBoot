@@ -1265,13 +1265,31 @@ def test_a_corrupt_record_never_validates_its_slot(dev):
     place_slot(dev, SLOT_A, image, 1)
     assert dev.boot_select() == SLOT_A
 
-    for bad in (
-        expected_record(image, 1)[:4] + b"\x00" + expected_record(image, 1)[5:],
-        expected_record(image, 1)[:-1] + b"\xAA",              # broken rec_crc32
-        expected_record(image, 1)[:16] + b"\x01" + expected_record(image, 1)[17:],
-    ):
+    good = expected_record(image, 1)
+    body = good[:RECORD_SIZE - 4]
+    cap = dev.slot_capacity(SLOT_A)
+
+    def resealed(mutated):
+        """Re-seal rec_crc32 over a mutated body. Without this every case
+        fails on the CRC check — which runs first — and the checks each case
+        is named for are never reached."""
+        assert len(mutated) == RECORD_SIZE - 4
+        return mutated + u32(zlib.crc32(mutated))
+
+    cases = {
+        "bad magic": resealed(u32(RECORD_MAGIC ^ 1) + body[4:]),
+        "generation 0": resealed(body[:4] + u32(0) + body[8:]),
+        "reserved byte nonzero": resealed(body[:16] + b"\x01" + body[17:]),
+        "img_len 0": resealed(body[:8] + u32(0) + body[12:]),
+        "img_len misaligned": resealed(body[:8] + u32(len(image) + 1) + body[12:]),
+        "img_len past capacity": resealed(body[:8] + u32(cap + 4) + body[12:]),
+        # The one case that must NOT be resealed: it IS the CRC check.
+        "broken rec_crc32": good[:-1] + b"\xAA",
+    }
+    for name, bad in cases.items():
+        assert len(bad) == RECORD_SIZE
         dev.set_record_raw(bad, SLOT_A)
-        assert dev.boot_select() == SLOT_NONE, f"accepted {bad[:8].hex()}"
+        assert dev.boot_select() == SLOT_NONE, f"accepted a record with {name}"
 
 
 def test_next_generation_outranks_every_valid_record(dev):

@@ -62,9 +62,16 @@ FLASH (rx) : ORIGIN = 0x00002000, LENGTH = 216K
 
 Each slot reserves its final 4096-byte block for its own boot record, so an
 application may use `slot_size - 4096` bytes. The device reports the base and
-capacity it wants over HELLO (`write_base`, `write_capacity`), and refuses an
-image linked for the other slot, so a mismatch fails before anything is
-erased. See [the A/B update design](../../docs/AB-UPDATE.md).
+capacity it will accept over HELLO (`write_base`, `write_capacity`), and that
+base alternates from one update to the next.
+
+Nothing on the device can tell one slot's build from the other's. OBP carries
+addresses, a length and a CRC — never a link base — so a device asked to write
+slot-A bytes at slot B's base will do exactly that, and commit an image that
+cannot run there. **Choosing the artifact that matches `write_slot` is the
+host's job.** The `openboot` CLI refuses a mismatch before anything is erased;
+any other host must make the same check itself. See
+[the A/B update design](../../docs/AB-UPDATE.md).
 
 ### RAM boot request
 

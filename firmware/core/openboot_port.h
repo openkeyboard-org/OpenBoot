@@ -17,7 +17,7 @@
 /* OB_FLASH_APP_START   app base (0x2000 everywhere; see OB_APP_BASE)
  * OB_FLASH_APP_END     exclusive app end — supplied per chip VARIANT by the
  *                      Makefile's generated openboot_config.h:
- *                      ch570/ch572 0x3B000, ch591 0x30000, ch592 0x70000
+ *                      ch570/ch572 0x3C000, ch591 0x30000, ch592 0x70000
  * OB_FLASH_ERASE_BLOCK 4096
  * OB_FLASH_WRITE_PAGE  256
  * OB_ERASED_WORD       XIP value of an erased word (0xF3F9BDA9, both families)

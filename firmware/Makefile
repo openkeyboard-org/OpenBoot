@@ -199,7 +199,7 @@ endif
 # is left unused at the top rather than making the slots unequal, which the
 # per-slot link addresses could not express anyway.
 #
-#   ch570/ch572 (0x3B000): A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
+#   ch570/ch572 (0x3C000): A [0x02000,0x1F000)  B [0x1F000,0x3C000)  116 KiB
 #   ch570 clamped 0x3A000: A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
 #   ch591       (0x30000): A [0x02000,0x19000)  B [0x19000,0x30000)   92 KiB
 #   ch592       (0x70000): A [0x02000,0x39000)  B [0x39000,0x70000)  220 KiB

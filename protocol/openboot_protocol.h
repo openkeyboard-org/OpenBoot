@@ -100,8 +100,10 @@
  *
  * app_start/app_end still describe the WHOLE application region — the
  * geometry of the part, unchanged by slots. write_base/write_capacity are
- * the window this session may actually mutate, and every ERASE, WRITE, CRC
- * and COMMIT is bounded by them.
+ * the window this session may MUTATE: ERASE, WRITE and COMMIT are bounded
+ * by them. CRC is NOT — it is bounded by the app region, because reading
+ * changes nothing and a host has to be able to check the slot it is not
+ * writing (PROTOCOL.md section 6.4).
  *
  * The host must send the image linked for `write_slot` and must not derive
  * that slot's address itself: write_base is authoritative. active_slot is
