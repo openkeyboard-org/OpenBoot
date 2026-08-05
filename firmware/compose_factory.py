@@ -27,6 +27,7 @@ any programmer can write at address 0.
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import os
 from pathlib import Path
 import re
@@ -38,6 +39,13 @@ import zlib
 PROTOCOL_H = Path(__file__).resolve().parent.parent / "protocol" / "openboot_protocol.h"
 
 
+@lru_cache(maxsize=1)
+def _header_text() -> str:
+    """The header is a fixed input, so read it once and say so — several
+    constants are pulled from it at import and each was re-reading the file."""
+    return PROTOCOL_H.read_text()
+
+
 def header_const(name: str) -> int:
     """A numeric #define from the protocol header — the one source of truth.
 
@@ -46,7 +54,7 @@ def header_const(name: str) -> int:
     same anchored extraction firmware/Makefile uses for OB_BOOTREQ_ADDR."""
     match = re.search(
         rf"^#define\s+{re.escape(name)}\s+(0x[0-9A-Fa-f]+|\d+)u?\b",
-        PROTOCOL_H.read_text(),
+        _header_text(),
         re.M,
     )
     if match is None:
