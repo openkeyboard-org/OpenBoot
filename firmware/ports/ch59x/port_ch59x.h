@@ -48,10 +48,6 @@
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH59X
 #define OB_FEATURES           OB_FEAT_CRC_LIVE
 
-/* boot record in the last DataFlash block (offset into 32 K DataFlash);
- * the bottom 28 K of DataFlash stays free for applications */
-#define OB_RECORD_ADDR        0x00007000u
-
 /* ---- safe access ------------------------------------------------------ */
 /* window auto-closes ~16 sys cycles after SIG2; protected writes must
  * follow immediately; never nest enables. always_inline: callers in

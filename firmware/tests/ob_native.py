@@ -26,6 +26,7 @@ from ob_consts import (
     OB_E_FLASH, OB_E_LEN, OB_E_NOT_ERASED, OB_E_PROTO, OB_E_STATE,
     OB_E_VERIFY, OB_FAMILY_CH570, OB_FAMILY_CH592, OB_FEAT_CRC_LIVE,
     OB_BOOT_RECORD_SIZE, OB_MAX_WRITE_DATA, OB_OK, OB_RECORD_MAGIC,
+    OB_RECORD_RSVD_BYTES,
 )
 
 APP_START = OB_APP_BASE
@@ -33,6 +34,8 @@ BLOCK = 4096                      # erase granularity; a port fact, not wire
 MAX_WRITE = OB_MAX_WRITE_DATA
 BOOTREQ_MAGIC = OB_BOOTREQ_MAGIC
 RECORD_MAGIC = OB_RECORD_MAGIC
+RECORD_SIZE = OB_BOOT_RECORD_SIZE
+RSVD = OB_RECORD_RSVD_BYTES   # zeroed filler covered by rec_crc32
 
 OK, E_CRC, E_LEN, E_CMD = OB_OK, OB_E_CRC, OB_E_LEN, OB_E_CMD
 E_STATE, E_ARG, E_ADDR = OB_E_STATE, OB_E_ARG, OB_E_ADDR
@@ -53,7 +56,7 @@ ACT_NONE, ACT_RESET = 0, 2        # 1 was ACT_JUMP_APP (retired: reset-to-launch
 # and features ARE protocol constants, so they come from the generated module
 # rather than being written out again here.
 PARAMS = {
-    "ch57x": dict(app_end=0x3B000, erased_word=0xF3F9BDA9,
+    "ch57x": dict(app_end=0x3C000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH570, features=0),
     "ch59x": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),
@@ -108,10 +111,21 @@ class OpenBootNative:
         L.host_frame.restype = None
         L.host_flash_read.argtypes = [c_uint32, c_char_p, c_uint32]
         L.host_flash_read.restype = None
-        L.host_record_raw.argtypes = [c_char_p]
+        L.host_record_raw.argtypes = [c_uint32, c_char_p]
         L.host_record_raw.restype = None
-        L.host_set_record_raw.argtypes = [c_char_p]
+        L.host_set_record_raw.argtypes = [c_uint32, c_char_p]
         L.host_set_record_raw.restype = None
+        L.host_jumped_to.restype = c_uint32
+        L.host_write_flash.argtypes = [c_uint32, c_char_p, c_uint32]
+        L.host_write_flash.restype = None
+        L.ob_slot_base.argtypes = [c_uint32]
+        L.ob_slot_base.restype = c_uint32
+        L.ob_slot_record_addr.argtypes = [c_uint32]
+        L.ob_slot_record_addr.restype = c_uint32
+        L.ob_slot_capacity.argtypes = [c_uint32]
+        L.ob_slot_capacity.restype = c_uint32
+        L.ob_boot_select.restype = c_uint32
+        L.ob_next_generation.restype = c_uint32
         L.host_set_fail_after.argtypes = [c_int32]
         L.host_set_fail_after.restype = None
         L.host_violations.restype = c_uint32
@@ -166,14 +180,36 @@ class OpenBootNative:
         self._lib.host_flash_read(addr, buf, length)
         return buf.raw
 
-    def record_raw(self) -> bytes:
+    def record_raw(self, slot: int = 0) -> bytes:
         buf = ctypes.create_string_buffer(OB_BOOT_RECORD_SIZE)
-        self._lib.host_record_raw(buf)
+        self._lib.host_record_raw(slot, buf)
         return buf.raw
 
-    def set_record_raw(self, raw: bytes):
+    def set_record_raw(self, raw: bytes, slot: int = 0):
         assert len(raw) == OB_BOOT_RECORD_SIZE
-        self._lib.host_set_record_raw(raw)
+        self._lib.host_set_record_raw(slot, raw)
+
+    # --- A/B slots ---------------------------------------------------
+    def slot_base(self, slot: int) -> int:
+        return self._lib.ob_slot_base(slot)
+
+    def slot_record_addr(self, slot: int) -> int:
+        return self._lib.ob_slot_record_addr(slot)
+
+    def slot_capacity(self, slot: int = 0) -> int:
+        return self._lib.ob_slot_capacity(slot)
+
+    def boot_select(self) -> int:
+        return self._lib.ob_boot_select()
+
+    def next_generation(self) -> int:
+        return self._lib.ob_next_generation()
+
+    def write_flash(self, addr: int, data: bytes):
+        self._lib.host_write_flash(addr, data, len(data))
+
+    def jumped_to(self) -> int:
+        return self._lib.host_jumped_to()
 
     def set_fail_after(self, n: int):
         self._lib.host_set_fail_after(n)

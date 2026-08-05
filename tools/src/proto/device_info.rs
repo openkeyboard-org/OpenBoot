@@ -1,16 +1,17 @@
-//! HELLO response parsing: the 36-byte device-info payload that makes the
-//! host chip-database-free. Longer payloads are tolerated per the spec
-//! ("device must send >= this; host must tolerate more").
+//! HELLO response parsing: the device-info payload that makes the host
+//! chip-database-free. Longer payloads are tolerated per the spec ("device
+//! must send >= this; host must tolerate more").
 
 use anyhow::{bail, Result};
 
 use super::consts::{
     OB_FAMILY_CH570, OB_FAMILY_CH572, OB_FAMILY_CH591, OB_FAMILY_CH592, OB_FEAT_CRC_LIVE,
-    OB_FEAT_READ, OB_HELLO_RESP_LEN, OB_MAX_WRITE_DATA, OB_TRANSPORT_ID_UART, OB_TRANSPORT_ID_USB,
+    OB_FEAT_READ, OB_HELLO_RESP_LEN, OB_MAX_WRITE_DATA, OB_SLOT_ID_NONE, OB_TRANSPORT_ID_UART,
+    OB_TRANSPORT_ID_USB,
 };
 
-/// Parsed HELLO device info (response payload offsets 1..36; offset 0 is the
-/// status byte, checked by the caller before parsing).
+/// Parsed HELLO device info (offset 0 is the status byte, checked by the
+/// caller before parsing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub proto_major: u8,
@@ -27,6 +28,21 @@ pub struct DeviceInfo {
     pub max_write_data: u8,
     pub features: u32,
     pub uid: u64,
+    /// How many A/B slots the device has.
+    pub slot_count: u8,
+    /// The slot the device can currently boot, or `OB_SLOT_ID_NONE`.
+    pub active_slot: u8,
+    /// The slot this session may mutate — always the one that is NOT
+    /// active, so an interrupted update leaves the previous image intact.
+    pub write_slot: u8,
+    /// Where an image for `write_slot` must start. Authoritative: never
+    /// derive it from `app_start` and the slot index.
+    pub write_base: u32,
+    /// Largest image `write_slot` accepts, or 0 when this silicon cannot
+    /// hold that slot at all (a wrong-variant build; every mutation is
+    /// then refused, so the flows must say so rather than let the device
+    /// answer with a bare range error).
+    pub write_capacity: u32,
 }
 
 fn le16(b: &[u8]) -> u16 {
@@ -68,6 +84,11 @@ impl DeviceInfo {
             max_write_data: payload[23],
             features: le32(&payload[24..28]),
             uid: le64(&payload[28..36]),
+            slot_count: payload[36],
+            active_slot: payload[37],
+            write_slot: payload[38],
+            write_base: le32(&payload[40..44]),
+            write_capacity: le32(&payload[44..48]),
         };
         if info.app_start >= info.app_end {
             bail!(
@@ -95,7 +116,49 @@ impl DeviceInfo {
                 OB_MAX_WRITE_DATA
             );
         }
+        // Slot coherence. A zero capacity is NOT rejected here: it is a
+        // truthful report from a device whose silicon cannot hold the slot,
+        // and `probe` has to be able to show it. The mutating flows refuse
+        // it by name instead.
+        if info.slot_count == 0 {
+            bail!("device reported zero slots");
+        }
+        if info.write_slot >= info.slot_count {
+            bail!(
+                "device reported write slot {} with only {} slot(s)",
+                info.write_slot,
+                info.slot_count
+            );
+        }
+        if info.active_slot != OB_SLOT_ID_NONE && info.active_slot >= info.slot_count {
+            bail!(
+                "device reported active slot {} with only {} slot(s)",
+                info.active_slot,
+                info.slot_count
+            );
+        }
+        if info.write_base < info.app_start
+            || u64::from(info.write_base) + u64::from(info.write_capacity) > u64::from(info.app_end)
+        {
+            bail!(
+                "device reported a write window 0x{:08X}..0x{:08X} outside its app region \
+                 0x{:08X}..0x{:08X}",
+                info.write_base,
+                u64::from(info.write_base) + u64::from(info.write_capacity),
+                info.app_start,
+                info.app_end
+            );
+        }
         Ok(info)
+    }
+
+    /// Human name for a slot id: "A", "B", or "none" for OB_SLOT_ID_NONE.
+    pub fn slot_name(slot: u8) -> String {
+        match slot {
+            OB_SLOT_ID_NONE => "none".to_string(),
+            0..=25 => ((b'A' + slot) as char).to_string(),
+            other => other.to_string(),
+        }
     }
 
     pub fn family_name(&self) -> String {
@@ -192,6 +255,7 @@ device has clamped its app region to what the part actually has",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::consts::{OB_PROTO_MAJOR, OB_PROTO_MINOR};
 
     /// A CH592 image on a CH591 is the dangerous pairing: same port, same
     /// family code path, but 448 KiB advertised on a 192 KiB die.
@@ -229,7 +293,7 @@ mod tests {
     }
 
     fn valid_payload() -> Vec<u8> {
-        let mut p = vec![0x00, 0, 1, 9];
+        let mut p = vec![0x00, OB_PROTO_MAJOR, OB_PROTO_MINOR, 9];
         p.extend_from_slice(&0x000Au16.to_le_bytes());
         p.push(OB_FAMILY_CH592);
         p.push(OB_TRANSPORT_ID_USB);
@@ -241,14 +305,18 @@ mod tests {
         p.push(48);
         p.extend_from_slice(&OB_FEAT_CRC_LIVE.to_le_bytes());
         p.extend_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());
+        p.extend_from_slice(&[2, OB_SLOT_ID_NONE, 0, 0]);
+        p.extend_from_slice(&0x2000u32.to_le_bytes());
+        p.extend_from_slice(&0x0003_6000u32.to_le_bytes());
         assert_eq!(p.len(), OB_HELLO_RESP_LEN);
         p
     }
 
     #[test]
     fn short_payload_rejected() {
-        let err = DeviceInfo::parse(&valid_payload()[..35]).unwrap_err();
-        assert!(err.to_string().contains("35 bytes"), "got: {err}");
+        let err = DeviceInfo::parse(&valid_payload()[..OB_HELLO_RESP_LEN - 1]).unwrap_err();
+        let want = format!("{} bytes", OB_HELLO_RESP_LEN - 1);
+        assert!(err.to_string().contains(&want), "got: {err}");
     }
 
     #[test]

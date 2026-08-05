@@ -22,13 +22,15 @@
 
 static uint8_t  sim_flash[OB_FLASH_APP_END]; /* true content, [0, app_end) */
 static uint8_t  sim_stale[OB_FLASH_APP_END]; /* pre-modification snapshots */
+/* Bits still available to program, per byte: 0xFF after erase, ANDed by every
+ * write. Kept separate from sim_flash because an ERASED word on these parts
+ * reads back as the scrambled OB_ERASED_WORD pattern rather than all-ones, so
+ * sim_flash cannot double as the cell state. */
+static uint8_t  sim_prog[OB_FLASH_APP_END];
 static uint8_t  blk_erased[SIM_BLOCKS];      /* erased this power cycle */
 static uint8_t  blk_dirty[SIM_BLOCKS];       /* modified this power cycle */
-static uint8_t  sim_record[OB_BOOT_RECORD_SIZE];
-static uint8_t  sim_record_stale[OB_BOOT_RECORD_SIZE]; /* pre-modification snapshot */
-_Static_assert(sizeof sim_record == sizeof(ob_boot_record_t),
+_Static_assert(OB_BOOT_RECORD_SIZE == sizeof(ob_boot_record_t),
                "simulated record must match ob_boot_record_t");
-static uint8_t  record_dirty;                /* record mutated this power cycle */
 static uint32_t violations;
 static uint32_t op_total;
 static int32_t  fail_after = -1;
@@ -40,6 +42,7 @@ static uint32_t sim_silicon_app_end;   /* 0 = unknown chip id */
 #define OB_HOST_F26_DEFAULT 0
 #endif
 static int32_t  f26_mode = OB_HOST_F26_DEFAULT;
+static uint32_t jumped_to;   /* slot base the boot decision chose */
 
 uint32_t ob_host_bootreq;
 
@@ -52,6 +55,9 @@ static void fill_erased(uint8_t *dst, uint32_t addr, uint32_t len)
 
     for (i = 0; i < len; i++)
         dst[i] = (uint8_t)(OB_ERASED_WORD >> (8u * ((addr + i) & 3u)));
+    /* Only the true-content array carries programmable state. */
+    if (dst == &sim_flash[addr])
+        memset(&sim_prog[addr], 0xFF, len);
 }
 
 static void touch_block(uint32_t blk)
@@ -65,14 +71,6 @@ static void touch_block(uint32_t blk)
 
 /* F26 applies to the record page too: XIP-style reads after a controller
  * write serve the pre-modification record until the next reset. */
-static void touch_record(void)
-{
-    if (!record_dirty) {
-        memcpy(sim_record_stale, sim_record, sizeof sim_record);
-        record_dirty = 1;
-    }
-}
-
 /* One mutating flash op. Nonzero = power is out, op must fail. */
 static int op_cut(void)
 {
@@ -133,18 +131,31 @@ uint32_t ob_flash_erase(uint32_t addr, uint32_t len)
     return 0;
 }
 
+/* Program `len` bytes at `addr`. NOR flash can only clear bits, so this ANDs
+ * rather than copies: writing over non-erased content yields the bitwise AND
+ * of old and new, exactly as the hardware would, and ob_flash_verify then
+ * fails. A memcpy here would hide that whole class of bug. */
+static void program_bytes(uint32_t addr, const uint8_t *src, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        sim_prog[addr + i] &= src[i];      /* programming only clears bits */
+        sim_flash[addr + i] = sim_prog[addr + i];
+    }
+}
+
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
 {
     uint32_t b;
+    int cut = op_cut();
 
-    if (op_cut())
-        return 0xE2;
     if ((addr % 4u) || (len % 4u) || len == 0 || ((uintptr_t)buf & 3u))
         violations++;
     if (addr < OB_FLASH_APP_START || addr >= OB_FLASH_APP_END ||
         len > OB_FLASH_APP_END - addr) {
         violations++;                    /* would write outside the app region */
-        return 0;
+        return cut ? 0xE2 : 0;
     }
     for (b = addr / OB_FLASH_ERASE_BLOCK;
          b <= (addr + len - 1) / OB_FLASH_ERASE_BLOCK; b++) {
@@ -152,7 +163,15 @@ uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
             violations++;                /* write into a non-erased block */
         touch_block(b);
     }
-    memcpy(&sim_flash[addr], buf, len);
+    if (cut) {
+        /* Power cut mid-program: a whole-word prefix has landed and the rest
+         * has not. This is what makes a torn record possible, which is the
+         * case the A/B invariant leans on - a partial record must fail its
+         * CRC so the other slot still wins. */
+        program_bytes(addr, (const uint8_t *)buf, (len / 2u) & ~3u);
+        return 0xE2;
+    }
+    program_bytes(addr, (const uint8_t *)buf, len);
     return 0;
 }
 
@@ -165,34 +184,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
     }
     /* Controller read path: always coherent, F26 does not apply. */
     return memcmp(&sim_flash[addr], buf, len) ? 0xE5 : 0;
-}
-
-int ob_record_read(ob_boot_record_t *rec)
-{
-    memcpy(rec, (f26_mode && record_dirty) ? sim_record_stale : sim_record,
-           sizeof sim_record);
-    return 0;
-}
-
-uint32_t ob_record_write(const ob_boot_record_t *rec)
-{
-    if (op_cut()) {
-        touch_record();
-        memcpy(sim_record, rec, sizeof sim_record / 2u); /* half the record lands */
-        return 0xE6;
-    }
-    touch_record();
-    memcpy(sim_record, rec, sizeof sim_record);
-    return 0;
-}
-
-uint32_t ob_record_invalidate(void)
-{
-    if (op_cut())
-        return 0xE7;
-    touch_record();
-    fill_erased(sim_record, 0, sizeof sim_record);
-    return 0;
 }
 
 int ob_bootpin_asserted(void)
@@ -243,8 +234,9 @@ void host_set_uptime_ms(uint32_t v)
     host_now_ms = v;
 }
 
-void ob_jump_app(void)
+void ob_jump_app(uint32_t base)
 {
+    jumped_to = base;
     if (jump_armed)
         longjmp(jump_env, 1);
     abort();                             /* jump outside host_boot_decide_result */
@@ -263,8 +255,6 @@ void host_reset(void)
     fill_erased(sim_flash, 0, sizeof sim_flash);
     memset(blk_erased, 0, sizeof blk_erased);
     memset(blk_dirty, 0, sizeof blk_dirty);
-    fill_erased(sim_record, 0, sizeof sim_record);
-    record_dirty = 0;
     violations = 0;
     op_total = 0;
     fail_after = -1;
@@ -280,7 +270,6 @@ void host_power_cycle(void)
     host_now_ms = 0;
     memset(blk_erased, 0, sizeof blk_erased);   /* erases don't survive reset */
     memset(blk_dirty, 0, sizeof blk_dirty);     /* XIP coherent again */
-    record_dirty = 0;                           /* record view coherent again */
     fail_after = -1;
     ob_host_bootreq = 0;                        /* RAM lost */
     ob_core_init();
@@ -308,14 +297,33 @@ void host_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
     memcpy(buf, &sim_flash[addr], len);
 }
 
-void host_record_raw(uint8_t out[OB_BOOT_RECORD_SIZE])
+void host_write_flash(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
-    memcpy(out, sim_record, sizeof sim_record);
+    /* Bypasses the controller entirely: models bytes that arrived by SWD or
+     * a factory image, so a test can stage a slot without driving OBP.
+     * Bounds-checked like host_flash_read: a mis-sized test payload should
+     * fail loudly as a violation, not corrupt the harness's heap. */
+    if (addr >= OB_FLASH_APP_END || len > OB_FLASH_APP_END - addr) {
+        violations++;
+        return;
+    }
+    memcpy(&sim_flash[addr], buf, len);
+    memset(&sim_prog[addr], 0, len);       /* staged bytes are programmed */
 }
 
-void host_set_record_raw(const uint8_t in[OB_BOOT_RECORD_SIZE])
+uint32_t host_jumped_to(void)
 {
-    memcpy(sim_record, in, sizeof sim_record);
+    return jumped_to;
+}
+
+void host_record_raw(uint32_t slot, uint8_t out[OB_BOOT_RECORD_SIZE])
+{
+    memcpy(out, &sim_flash[ob_slot_record_addr(slot)], OB_BOOT_RECORD_SIZE);
+}
+
+void host_set_record_raw(uint32_t slot, const uint8_t in[OB_BOOT_RECORD_SIZE])
+{
+    memcpy(&sim_flash[ob_slot_record_addr(slot)], in, OB_BOOT_RECORD_SIZE);
 }
 
 void host_set_fail_after(int32_t n) { fail_after = n; }

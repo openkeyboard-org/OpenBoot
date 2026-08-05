@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 pub const OB_PROTO_MAJOR: u8 = 0x0;
-pub const OB_PROTO_MINOR: u8 = 0x1;
+pub const OB_PROTO_MINOR: u8 = 0x2;
 pub const OB_FRAME_HDR_LEN: usize = 0x4;
 pub const OB_FRAME_CRC_LEN: usize = 0x4;
 pub const OB_FRAME_OVERHEAD: usize = 0x8;
@@ -48,7 +48,8 @@ pub const OB_DET_VERIFY_NONSEQ: u8 = 0x2;
 pub const OB_DET_VERIFY_NORECORD: u8 = 0x3;
 pub const OB_HELLO_MAGIC: u32 = 0x3150424F;
 pub const OB_HELLO_REQ_LEN: usize = 0x6;
-pub const OB_HELLO_RESP_LEN: usize = 0x24;
+pub const OB_HELLO_RESP_LEN: usize = 0x30;
+pub const OB_SLOT_ID_NONE: u8 = 0xFF;
 pub const OB_FAMILY_CH570: u8 = 0x1;
 pub const OB_FAMILY_CH572: u8 = 0x2;
 pub const OB_FAMILY_CH591: u8 = 0x3;
@@ -59,8 +60,10 @@ pub const OB_FEAT_READ: u32 = 0x1;
 pub const OB_FEAT_CRC_LIVE: u32 = 0x2;
 pub const OB_BOOT_APP: u8 = 0x0;
 pub const OB_BOOT_STAY: u8 = 0x1;
-pub const OB_BOOT_RECORD_SIZE: usize = 0x10;
-pub const OB_RECORD_MAGIC: u32 = 0x3152424F;
+pub const OB_BOOT_RECORD_SIZE: usize = 0x20;
+pub const OB_RECORD_MAGIC: u32 = 0x3252424F;
+pub const OB_RECORD_RSVD_BYTES: u8 = 0xC;
+pub const OB_RECORD_CRC_LEN: u8 = 0x1C;
 pub const OB_BOOTREQ_MAGIC: u32 = 0xB007CA11;
 pub const OB_BOOTREQ_ADDR_CH57X: u32 = 0x20002FF0;
 pub const OB_BOOTREQ_ADDR_CH59X: u32 = 0x200067F0;

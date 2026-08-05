@@ -1,4 +1,4 @@
-/* OBP v0.1 protocol engine. Transport- and chip-agnostic; see openboot_port.h
+/* OBP v0.2 protocol engine. Transport- and chip-agnostic; see openboot_port.h
  * for the hooks it consumes. */
 #ifndef OB_BOOT_CORE_H
 #define OB_BOOT_CORE_H

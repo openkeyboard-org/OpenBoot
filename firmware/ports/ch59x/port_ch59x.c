@@ -58,63 +58,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
     return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
 }
 
-/* ---- boot record (DataFlash offset 0x7000, last 4 K block) ------------ */
-/* All DataFlash access goes through FLASH_EEPROM_CMD; the ISP592.h
- * EEPROM_ERASE inline is never used (hangs CH592A on partial lengths) and
- * erase length is ALWAYS the full 4096-byte block for the same reason. */
-int ob_record_read(ob_boot_record_t *rec)
-{
-    /* ROM API needs a 4-aligned RAM buffer */
-    uint32_t buf[sizeof(*rec) / 4u];
-    uint32_t *dst = (uint32_t *)rec;
-    uint32_t i;
-
-    if (FLASH_EEPROM_CMD(CMD_EEPROM_READ, OB_RECORD_ADDR, buf, sizeof(buf)) != 0) {
-        return -1;
-    }
-    for (i = 0; i < sizeof(buf) / 4u; i++) {
-        dst[i] = buf[i];
-    }
-    return 0;
-}
-
-uint32_t ob_record_write(const ob_boot_record_t *rec)
-{
-    uint32_t buf[sizeof(*rec) / 4u];
-    uint32_t chk[sizeof(*rec) / 4u];
-    const uint32_t *src = (const uint32_t *)rec;
-    uint32_t i, rc;
-
-    for (i = 0; i < sizeof(buf) / 4u; i++) {
-        buf[i] = src[i];
-    }
-
-    rc = FLASH_EEPROM_CMD(CMD_EEPROM_ERASE, OB_RECORD_ADDR, NULL, OB_FLASH_ERASE_BLOCK);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = FLASH_EEPROM_CMD(CMD_EEPROM_WRITE, OB_RECORD_ADDR, buf, sizeof(buf));
-    if (rc != 0) {
-        return rc;
-    }
-    /* read-back verify (controller read, not XIP) */
-    rc = FLASH_EEPROM_CMD(CMD_EEPROM_READ, OB_RECORD_ADDR, chk, sizeof(chk));
-    if (rc != 0) {
-        return rc;
-    }
-    for (i = 0; i < sizeof(buf) / 4u; i++) {
-        if (chk[i] != buf[i]) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-uint32_t ob_record_invalidate(void)
-{
-    return FLASH_EEPROM_CMD(CMD_EEPROM_ERASE, OB_RECORD_ADDR, NULL, OB_FLASH_ERASE_BLOCK);
-}
-
 /* ---- boot strap pin (active low) -------------------------------------- */
 int ob_bootpin_asserted(void)
 {
@@ -239,10 +182,10 @@ void ob_delay_us(uint32_t us)
         : "+r"(n));
 }
 
-void ob_jump_app(void)
+void ob_jump_app(uint32_t base)
 {
     OB_STK_CTLR = 0;                     /* hand the app a stopped SysTick */
-    ((void (*)(void))OB_FLASH_APP_START)();
+    ((void (*)(void))(uintptr_t)base)();
     __builtin_unreachable();
 }
 

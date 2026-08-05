@@ -1,4 +1,4 @@
-/* OBP v0.1 engine. All frame/argument validation lives here — transports
+/* OBP v0.2 engine. All frame/argument validation lives here — transports
  * only move bytes, ports only touch hardware. */
 #include <string.h>
 
@@ -6,6 +6,47 @@
 #include "boot_decision.h"
 #include "crc32.h"
 #include "openboot_port.h"
+
+/* --- which slot this power cycle writes --------------------------------
+ *
+ * Mutations target the INACTIVE slot, so the image the device is currently
+ * able to boot is never the one being overwritten. That is the whole point
+ * of A/B: see docs/AB-UPDATE.md.
+ *
+ * Both are POWER-CYCLE-scoped and derived from flash exactly once, in
+ * ob_core_init(), before anything can have been written. They are
+ * deliberately NOT recomputed per session, for two reasons.
+ *
+ * The target must not move under a host that is mid-update. Re-sending HELLO
+ * is a legitimate thing to do after a transport hiccup, and it must answer
+ * with the slot the half-written image is actually going into — a session
+ * reset that also moved the target would leave the erase bitmap and the
+ * bytes already written describing different slots.
+ *
+ * And re-deriving means re-reading records this power cycle has erased,
+ * which is exactly the read CH57x (F26) makes unreliable. Nothing here has
+ * to reason about whether that view can be trusted, because nothing here
+ * takes it. Only boot_record_trusted() consults flash after a mutation, and
+ * it is careful about which slot it asks.
+ *
+ * COMMIT is the only thing that moves them, because COMMIT is the only thing
+ * that changes which slot is bootable. */
+static uint32_t active_slot;   /* bootable slot, or OB_SLOT_NONE */
+static uint32_t write_slot;    /* the slot ERASE, WRITE and COMMIT address */
+
+static uint32_t other_slot(uint32_t slot)
+{
+    return slot == OB_SLOT_A ? OB_SLOT_B : OB_SLOT_A;
+}
+
+/* Invalidate a slot's record by erasing the block that holds it. That block
+ * is inside the slot being mutated, so the other slot's record - and with it
+ * the device's ability to boot - is never at risk. */
+static uint32_t record_invalidate(uint32_t slot)
+{
+    /* The record owns its block outright, so this erases no image bytes. */
+    return ob_flash_erase(ob_slot_record_addr(slot), OB_FLASH_ERASE_BLOCK);
+}
 
 #ifndef OB_TRANSPORT_ID
 #error "build must inject OB_TRANSPORT_ID"
@@ -58,6 +99,19 @@ static uint8_t rec_state;                /* power-cycle-scoped, see above */
 static uint32_t committed_img_len;        /* valid only in OB_REC_FRESH */
 static uint32_t committed_img_crc;        /* exact replay key */
 
+/* Highest generation this power cycle has WRITTEN, or 0. RAM truth, for the
+ * same reason boot_record_trusted() prefers it: ob_next_generation() reads
+ * the slot records through XIP, and on CH57x (F26) a record written this
+ * power cycle can still read as the erased block it replaced. It would then
+ * report a generation the previous COMMIT has already used, and a second
+ * update in one power cycle would leave BOTH slots claiming it — a tie the
+ * boot decision resolves by position, not by recency, so the device could
+ * come back up on the image that was just replaced.
+ *
+ * Only reachable since mutations began alternating slots: with a single
+ * write slot the stale value was rewritten over itself and nothing tied. */
+static uint32_t committed_gen;
+
 /* WRITE classification against the sequential run. */
 #define WR_FOLD   0u   /* next chunk of the run: fold it on success */
 #define WR_RETRY  1u   /* byte-exact re-send of the previous chunk  */
@@ -102,14 +156,39 @@ static uint32_t ok_resp(uint8_t *resp, uint8_t cmd, uint8_t seq)
     return finish(resp, cmd | OB_CMD_RESP_BIT, seq, 1);
 }
 
-/* Single shared range gate: [addr, addr+len) inside the app region, len
- * nonzero, overflow-safe. The bootloader region is unreachable by design. */
-static int range_ok(uint32_t addr, uint32_t len)
+/* Two range gates, because reading and changing are not the same risk.
+ *
+ * READS (CRC) are bounded by the app region, as they always were. A CRC
+ * changes nothing, and a host has to be able to read the slot it is not
+ * writing: `openboot verify` runs in a fresh session, where the image it
+ * wants to check is the ACTIVE one and the write target is already the
+ * other slot. Bounding reads to the write slot would leave a committed
+ * image with no way to check it. */
+static int read_range_ok(uint32_t addr, uint32_t len)
 {
     uint32_t end = ob_app_end();
 
     return addr >= OB_FLASH_APP_START && addr < end &&
            len != 0 && len <= end - addr;
+}
+
+/* MUTATIONS (ERASE, WRITE) are bounded by the write slot's image area, and
+ * that is what makes the other slot unreachable: no command a host can send
+ * changes a byte outside the slot being updated, so the image the device is
+ * currently able to boot cannot be damaged — by mistake, by a stale address,
+ * or deliberately. The bootloader region was already unreachable.
+ *
+ * The bound is the slot CAPACITY, not its size, so the slot's own record
+ * block at the top is excluded too: only mutation_begin() may erase it, at
+ * the moment it invalidates the record. A capacity of 0 (silicon too small
+ * to hold this slot) rejects everything, which is the intent. */
+static int write_range_ok(uint32_t addr, uint32_t len)
+{
+    uint32_t base = ob_slot_base(write_slot);
+    uint32_t cap = ob_slot_capacity(write_slot);
+
+    return cap != 0 && addr >= base && addr < base + cap &&
+           len != 0 && len <= base + cap - addr;
 }
 
 /* --- state transitions ------------------------------------------------ */
@@ -121,7 +200,7 @@ static void session_open(void)
     memset(&s, 0, sizeof s);
     s.session = 1;
     s.stream = OB_STREAM_RUN;
-    s.expected_next = OB_FLASH_APP_START;
+    s.expected_next = ob_slot_base(write_slot);
     s.crc_state = ob_crc32_init();
 }
 
@@ -140,7 +219,7 @@ static uint32_t mutation_begin(void)
     rec_state = OB_REC_INVALID;
     committed_img_len = 0;
     committed_img_crc = 0;
-    r = ob_record_invalidate();
+    r = record_invalidate(write_slot);
     if (r == 0)
         s.disarmed = 1;
     return r;
@@ -211,11 +290,11 @@ static int attest_via_xip(void)
     return (OB_FEATURES & OB_FEAT_CRC_LIVE) || rec_state == OB_REC_FLASH;
 }
 
-/* Does the sequential run cover exactly [app_start, app_start + img_len)? */
+/* Does the sequential run cover exactly [write_base, write_base+img_len)? */
 static int stream_covers(uint32_t img_len)
 {
     return s.stream == OB_STREAM_RUN &&
-           s.expected_next == OB_FLASH_APP_START + img_len;
+           s.expected_next == ob_slot_base(write_slot) + img_len;
 }
 
 /* The run's CRC over everything folded so far (valid iff stream_covers). */
@@ -231,12 +310,36 @@ static void record_begin_write(void)
     committed_img_crc = 0;
 }
 
-static void record_note_committed(uint32_t img_len, uint32_t img_crc)
+static void record_note_committed(uint32_t img_len, uint32_t img_crc,
+                                  uint32_t generation)
 {
     rec_state = OB_REC_FRESH;
     committed_img_len = img_len;
     committed_img_crc = img_crc;
+    committed_gen = generation;
+
+    /* The slot just committed now holds the highest valid generation, so it
+     * is what the boot decision will pick — and the next update must target
+     * the other one. This is the only place the pair moves, because COMMIT
+     * is the only thing that changes which slot is bootable.
+     *
+     * The session's erase bitmap, sequential run and disarm flag all
+     * describe the slot we have just left, so re-arm them against the new
+     * target: a second update within one session then starts from the same
+     * clean state a fresh HELLO would give it. Each of these is fail-safe if
+     * it were left stale — an old bitmap rejects writes with E_NOT_ERASED,
+     * an old run poisons the stream — but failing somewhere downstream is
+     * not the property to want from the commit point. */
+    active_slot = write_slot;
+    write_slot = other_slot(active_slot);
+
     s.disarmed = 0;                      /* a later mutation must re-disarm */
+    memset(s.bitmap, 0, sizeof s.bitmap);
+    s.stream = OB_STREAM_RUN;
+    s.expected_next = ob_slot_base(write_slot);
+    s.crc_state = ob_crc32_init();
+    s.last_addr = 0;
+    s.last_len = 0;
 }
 
 /* The failed write may still have landed a complete, CRC-valid record, so
@@ -247,17 +350,32 @@ static void record_note_write_failed(void)
     s.disarmed = 0;
 }
 
-/* BOOT's record gate. RAM truth beats the flash record wherever the two can
- * disagree under F26: after an invalidate the flash may still read as the
- * old (valid) record, and after a fresh COMMIT it may still read as erased.
- * Only the untouched-since-reset state consults flash — and then applies
- * the FULL boot-decision validation, so an explicit BOOT can never launch
- * an app the reset path would refuse. */
+/* BOOT's record gate: will the reset this is about to perform actually land
+ * in an application? It answers that per state, because F26 makes the flash
+ * view untrustworthy for exactly the slot we have written this power cycle
+ * — after an invalidate it may still read as the old (valid) record, and
+ * after a fresh COMMIT it may still read as erased.
+ *
+ * The A/B answer differs from the single-image one in the INVALID case.
+ * There, the write slot is mid-update and unbootable, but the other slot was
+ * never touched this power cycle: its record and image are exactly what the
+ * reset path will find. So an interrupted update no longer strands the
+ * device in the bootloader — BOOT still returns it to the previous
+ * application, which is the behaviour A/B exists to provide.
+ *
+ * Every branch that consults flash applies the FULL boot-decision
+ * validation, so an explicit BOOT can never launch an app the reset path
+ * would refuse. */
 static int boot_record_trusted(void)
 {
     if (rec_state == OB_REC_FRESH)
-        return 1;
-    return rec_state == OB_REC_FLASH && ob_boot_app_valid();
+        return 1;                        /* just committed the write slot */
+    if (rec_state == OB_REC_FLASH)
+        return ob_boot_select() != OB_SLOT_NONE;   /* all of flash is truth */
+    /* OB_REC_INVALID: ask only the slot this power cycle has not written.
+     * ob_boot_select() is not usable here — it would read the write slot's
+     * possibly-stale record and could answer with the slot being updated. */
+    return active_slot != OB_SLOT_NONE && ob_boot_app_valid(active_slot);
 }
 
 void ob_core_init(void)
@@ -266,6 +384,15 @@ void ob_core_init(void)
     rec_state = OB_REC_FLASH;
     committed_img_len = 0;
     committed_img_crc = 0;
+    committed_gen = 0;
+    /* Derived once, from a flash view nothing has disturbed since reset —
+     * see the note on these two at the top of the file. With nothing
+     * bootable (a factory-fresh part) slot A is the target: there is no
+     * image to preserve, and starting at A keeps the common case aligned
+     * with the factory image. */
+    active_slot = ob_boot_select();
+    write_slot = (active_slot == OB_SLOT_NONE) ? OB_SLOT_A
+                                               : other_slot(active_slot);
 }
 
 int ob_core_session_active(void)
@@ -306,6 +433,15 @@ static uint32_t do_hello(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *res
     r[23] = OB_MAX_WRITE_DATA;
     put32(r + 24, OB_FEATURES);
     ob_read_uid(r + 28);
+    /* The A/B view, added in 0.2. app_start/app_end above still describe the
+     * whole region; these describe the window this session may mutate. */
+    r[36] = OB_SLOT_COUNT;
+    r[37] = (active_slot == OB_SLOT_NONE) ? OB_SLOT_ID_NONE
+                                          : (uint8_t)active_slot;
+    r[38] = (uint8_t)write_slot;
+    r[39] = 0;                       /* reserved */
+    put32(r + 40, ob_slot_base(write_slot));
+    put32(r + 44, ob_slot_capacity(write_slot));
     return finish(resp, OB_CMD_HELLO | OB_CMD_RESP_BIT, seq, OB_HELLO_RESP_LEN);
 }
 
@@ -319,7 +455,7 @@ static uint32_t do_erase(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *res
     len = get32(pl + 4);
     if ((addr % OB_FLASH_ERASE_BLOCK) || (len % OB_FLASH_ERASE_BLOCK))
         return err_resp(resp, OB_CMD_ERASE, seq, OB_E_ADDR, OB_DET_ADDR_ALIGN);
-    if (!range_ok(addr, len))
+    if (!write_range_ok(addr, len))
         return err_resp(resp, OB_CMD_ERASE, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
     stream_note_erase(addr);
     r = mutation_begin();
@@ -345,7 +481,7 @@ static uint32_t do_write(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *res
     dlen = (uint32_t)(n - 4);
     if (addr % 4)
         return err_resp(resp, OB_CMD_WRITE, seq, OB_E_ADDR, OB_DET_ADDR_ALIGN);
-    if (!range_ok(addr, dlen))
+    if (!write_range_ok(addr, dlen))
         return err_resp(resp, OB_CMD_WRITE, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
     if (!bitmap_covers(addr, dlen))
         return err_resp(resp, OB_CMD_WRITE, seq, OB_E_NOT_ERASED, 0);
@@ -376,7 +512,7 @@ static uint32_t do_crc(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *resp)
     len = get32(pl + 4);
     if ((addr % 4) || (len % 4))
         return err_resp(resp, OB_CMD_CRC, seq, OB_E_ADDR, OB_DET_ADDR_ALIGN);
-    if (!range_ok(addr, len))
+    if (!read_range_ok(addr, len))
         return err_resp(resp, OB_CMD_CRC, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
     resp[4] = OB_OK;
     put32(resp + 5, ob_xip_crc32(addr, len));
@@ -394,7 +530,8 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
     img_crc = get32(pl + 4);
     if (img_len == 0 || (img_len % 4))
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_LEN, 0);
-    if (img_len > ob_app_end() - OB_FLASH_APP_START)
+    /* The slot's own record sits at its top, so an image may not reach it. */
+    if (img_len > ob_slot_capacity(write_slot))
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_ADDR, OB_DET_ADDR_RANGE);
 
     /* A lost success response is safe to retry. The record write itself
@@ -407,10 +544,10 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
         return ok_resp(resp, OB_CMD_COMMIT, seq);
 
     if (attest_via_xip()) {
-        c = ob_xip_crc32(OB_FLASH_APP_START, img_len);
+        c = ob_xip_crc32(ob_slot_base(write_slot), img_len);
     } else {
         /* F26: XIP over freshly-written flash may be stale — only a fully
-         * sequential stream from app_start can be attested. */
+         * sequential stream from the write base can be attested. */
         if (!stream_covers(img_len))
             return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_VERIFY,
                             OB_DET_VERIFY_NONSEQ);
@@ -420,17 +557,20 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_VERIFY,
                         OB_DET_VERIFY_MISMATCH);
 
-    rec.magic = OB_RECORD_MAGIC;
+    /* Floor the generation with what this power cycle has already written,
+     * which flash may not yet admit to — see committed_gen. */
+    rec.generation = ob_next_generation();
+    if (rec.generation <= committed_gen)
+        rec.generation = committed_gen + 1;
     rec.img_len = img_len;
     rec.img_crc32 = img_crc;
-    rec.rec_crc32 = ob_crc32(&rec, 12);
     record_begin_write();
-    r = ob_record_write(&rec);
+    r = ob_record_store(write_slot, &rec);      /* fills magic/rsvd/rec_crc32 */
     if (r) {
         record_note_write_failed();
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_FLASH, (uint8_t)r);
     }
-    record_note_committed(img_len, img_crc);
+    record_note_committed(img_len, img_crc, rec.generation);
     return ok_resp(resp, OB_CMD_COMMIT, seq);
 }
 

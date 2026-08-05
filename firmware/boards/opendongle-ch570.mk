@@ -12,9 +12,10 @@ OB_IDLE_TIMEOUT_MS := 10000
 # Full image-CRC check at every boot: same rationale as opendongle-ch592.mk.
 OB_BOOT_IMAGE_CRC := 1
 
-# The dongle keeps its RF bond in code flash at 0x3A000, directly below the
-# OpenBoot boot record page at 0x3B000. Clamp the build's app region so no
-# OBP ERASE/WRITE/COMMIT can ever reach either page; the port's
+# The dongle keeps its RF bond in code flash at 0x3A000. Clamp the build's app
+# region so no OBP ERASE/WRITE/COMMIT can reach it. (OpenBoot itself no longer
+# reserves anything up here - records live inside their slots - so this bound
+# exists purely for the dongle's own data.) The port's
 # ob_app_end() takes min(silicon, build), so this bound also holds on
 # larger silicon. Covered by test_core_native.py (build-side clamp) and
 # test_board_config.py (this file really lands in the generated config).

@@ -6,7 +6,7 @@
 //! in the transport: a resend happens only on a timeout or on a `0xFF`
 //! frame-error report (the device saw a corrupt frame), each attempt with
 //! a fresh `seq`. A decoded status error is a definitive device answer and
-//! is never retried. All v0.1 mutating commands are idempotent by design
+//! is never retried. All v0.2 mutating commands are idempotent by design
 //! (addressed WRITE + erased-block bitmap; COMMIT re-attests the same
 //! record) — except BOOT, which is `RetryPolicy::Once`: a successful BOOT
 //! tears the session down, so a lost response is indistinguishable from

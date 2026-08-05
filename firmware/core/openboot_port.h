@@ -17,7 +17,7 @@
 /* OB_FLASH_APP_START   app base (0x2000 everywhere; see OB_APP_BASE)
  * OB_FLASH_APP_END     exclusive app end — supplied per chip VARIANT by the
  *                      Makefile's generated openboot_config.h:
- *                      ch570/ch572 0x3B000, ch591 0x30000, ch592 0x70000
+ *                      ch570/ch572 0x3C000, ch591 0x30000, ch592 0x70000
  * OB_FLASH_ERASE_BLOCK 4096
  * OB_FLASH_WRITE_PAGE  256
  * OB_ERASED_WORD       XIP value of an erased word (0xF3F9BDA9, both families)
@@ -57,6 +57,44 @@
 #error "port must define OB_FEATURES"
 #endif
 
+/* ---- A/B slot geometry (injected by the Makefile) --------------------- */
+/* Two equally sized slots inside the app region. They are equal because the
+ * application is LINKED per slot rather than copied between them — see the
+ * geometry block in firmware/Makefile for why a copy is not available on
+ * these parts. Any region remainder is left unused above slot B. */
+#ifndef OB_SLOT_SIZE
+#error "build must inject OB_SLOT_SIZE"
+#endif
+#ifndef OB_SLOT_A_BASE
+#error "build must inject OB_SLOT_A_BASE"
+#endif
+#ifndef OB_SLOT_B_BASE
+#error "build must inject OB_SLOT_B_BASE"
+#endif
+#if (OB_FLASH_APP_START % OB_FLASH_ERASE_BLOCK) != 0
+#error "app base must be erase-block aligned, or a slot record lands mid-block"
+#endif
+#if (OB_SLOT_SIZE % OB_FLASH_ERASE_BLOCK) != 0
+#error "slot size must be a multiple of the erase block"
+#endif
+/* Strictly greater, not merely non-zero: the top block of every slot belongs
+ * to its record, so a one-block slot has no room for an image at all. That
+ * configuration builds, and every ERASE and WRITE then fails the range check
+ * on a capacity of zero — a bootloader that cannot be flashed. It is
+ * reachable from a board setting OB_APP_END barely above the app base. */
+#if OB_SLOT_SIZE <= OB_FLASH_ERASE_BLOCK
+#error "slot size must exceed one erase block: the record owns the top block"
+#endif
+#if OB_SLOT_A_BASE != OB_FLASH_APP_START
+#error "slot A must start at the app base"
+#endif
+#if OB_SLOT_B_BASE != (OB_SLOT_A_BASE + OB_SLOT_SIZE)
+#error "slot B must start immediately after slot A"
+#endif
+#if (OB_SLOT_B_BASE + OB_SLOT_SIZE) > OB_FLASH_APP_END
+#error "slot B must end inside the app region"
+#endif
+
 /* Erased-block bitmap: 1 bit per erase block of the largest app region
  * (CH592: 440 KiB / 4 KiB = 110 blocks). */
 #define OB_BITMAP_BYTES 16
@@ -82,12 +120,9 @@ uint32_t ob_flash_erase(uint32_t addr, uint32_t len);
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len);
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);
 
-/* Boot-record storage (CH57x: code-flash page; CH59x: DataFlash last
- * block — always erased with a full 4096-byte length, never the SDK
- * EEPROM_ERASE inline). read returns 0 and fills *rec on success. */
-int      ob_record_read(ob_boot_record_t *rec);
-uint32_t ob_record_write(const ob_boot_record_t *rec);
-uint32_t ob_record_invalidate(void);
+/* No boot-record hooks: each slot's record lives INSIDE that slot, in code
+ * flash on both families, so it is read through XIP and written with the
+ * flash hooks above like any other app byte. See docs/AB-UPDATE.md. */
 
 /* Boot strap pin, debounced by the caller. Returns nonzero when the
  * stay-in-bootloader strap is asserted. Compiled to `return 0` when the
@@ -121,7 +156,9 @@ void ob_delay_us(uint32_t us);
  * calling it would lose time. */
 uint32_t ob_uptime_ms(void);
 
-void ob_jump_app(void) __attribute__((noreturn));
+/* Launch the application at `base` — the base of the slot the boot decision
+ * chose, not a fixed address, because either slot may be active. */
+void ob_jump_app(uint32_t base) __attribute__((noreturn));
 
 /* Soft-reset the chip. Where the next boot lands is not this function's
  * business — ob_boot_decide() re-runs and picks. BOOT uses it to LAUNCH

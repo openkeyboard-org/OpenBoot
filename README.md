@@ -6,18 +6,22 @@ tool.
 
 | Chip | App region | RAM | Transports |
 |---|---|---|---|
-| CH570 / CH572 | `[0x2000, 0x3B000)` | 12 KiB | USB, UART |
+| CH570 / CH572 | `[0x2000, 0x3C000)` | 12 KiB | USB, UART |
 | CH591 | `[0x2000, 0x30000)` | 26 KiB | USB, UART |
 | CH592 | `[0x2000, 0x70000)` | 26 KiB | USB, UART |
 
-The bootloader occupies `[0x0000, 0x2000)`; applications are linked at
-`0x2000`. Each chip and transport combination produces a separate image.
+The bootloader occupies `[0x0000, 0x2000)`. The application region is split
+into two equally sized A/B slots, and an application is linked for one slot
+base. Each chip and transport combination produces a separate bootloader
+image.
 
 OpenBoot prevents protocol requests from modifying the bootloader, requires a
-block to be erased before it can be written, invalidates the previous boot
-record before an update, and makes the new image bootable only after COMMIT
-verifies its CRC. The device reports its flash geometry and identity through
-HELLO, so the host tool needs no per-chip database.
+block to be erased before it can be written, and makes an image bootable only
+after COMMIT verifies its CRC. Updates are written into the slot the device is
+**not** running, so power loss part-way through leaves the previous
+application intact and the device comes back up on it unaided. The device
+reports its flash geometry, slot layout and identity through HELLO, so the
+host tool needs no per-chip database.
 
 ## Repository layout
 
@@ -27,7 +31,7 @@ HELLO, so the host tool needs no per-chip database.
 | `protocol/` | Shared protocol constants and golden frames |
 | `firmware/` | Bootloader, ports, transports, boards, and tests |
 | `tools/` | `openboot` host CLI |
-| `docs/` | [Protocol](docs/PROTOCOL.md) and [architecture](docs/ARCHITECTURE.md) |
+| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [A/B update design](docs/AB-UPDATE.md) |
 | `third_party/openwch/` | Pinned WCH SDK submodules |
 
 ## Build

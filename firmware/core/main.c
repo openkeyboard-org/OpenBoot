@@ -74,11 +74,13 @@ int main(void)
 
         if (!ob_core_session_active() &&
             ob_idle_elapsed(idle_start, now_ms, OB_IDLE_TIMEOUT_MS)) {
-            if (ob_boot_app_valid()) {
+            uint32_t slot = ob_boot_select();
+
+            if (slot != OB_SLOT_NONE) {
                 tr_deinit();
-                ob_jump_app();
+                ob_jump_app(ob_slot_base(slot));
             }
-            idle_start = now_ms;         /* invalid app: recheck next period */
+            idle_start = now_ms;         /* nothing bootable: recheck later */
         }
 
         ob_delay_us(OB_POLL_INTERVAL_US);

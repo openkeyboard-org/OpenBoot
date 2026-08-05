@@ -11,7 +11,8 @@ use anyhow::Result;
 
 use crate::image::Image;
 use crate::proto::consts::{
-    OB_CMD_HELLO, OB_CMD_RESP_BIT, OB_FAMILY_CH592, OB_OK, OB_TRANSPORT_ID_USB,
+    OB_CMD_HELLO, OB_CMD_RESP_BIT, OB_FAMILY_CH592, OB_OK, OB_PROTO_MAJOR, OB_PROTO_MINOR,
+    OB_SLOT_ID_NONE, OB_TRANSPORT_ID_USB,
 };
 use crate::proto::{self, Frame};
 use crate::transport::{xfer_link, FrameLink, Transport, TransportError};
@@ -86,7 +87,13 @@ pub(crate) fn status_err(req: &Frame, status: u8, detail: u8) -> Vec<u8> {
 }
 
 pub(crate) fn info_payload(features: u32, app_end: u32) -> Vec<u8> {
-    let mut p = vec![OB_OK, 0, 1, 9];
+    info_payload_slots(features, app_end, OB_SLOT_ID_NONE, 0)
+}
+
+/// A HELLO payload with an explicit A/B view, for the cases where which
+/// slot the device is willing to write is the thing under test.
+pub(crate) fn info_payload_slots(features: u32, app_end: u32, active: u8, write: u8) -> Vec<u8> {
+    let mut p = vec![OB_OK, OB_PROTO_MAJOR, OB_PROTO_MINOR, 9];
     p.extend_from_slice(&0x000Au16.to_le_bytes());
     p.push(OB_FAMILY_CH592);
     p.push(OB_TRANSPORT_ID_USB);
@@ -98,14 +105,40 @@ pub(crate) fn info_payload(features: u32, app_end: u32) -> Vec<u8> {
     p.push(48);
     p.extend_from_slice(&features.to_le_bytes());
     p.extend_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());
+    // The geometry is the real one a device derives — half the region rounded
+    // down to a whole erase block, less the block the record owns — so the
+    // flows are exercised against a window a device actually reports.
+    let slot_size = ((app_end - 0x2000) / 2 / 4096) * 4096;
+    p.push(2);
+    p.push(active);
+    p.push(write);
+    p.push(0);
+    p.extend_from_slice(&(0x2000 + u32::from(write) * slot_size).to_le_bytes());
+    p.extend_from_slice(&(slot_size - 4096).to_le_bytes());
     p
 }
 
 pub(crate) fn expect_hello(mock: &mut MockTransport, features: u32, app_end: u32) {
+    expect_hello_slots(mock, features, app_end, OB_SLOT_ID_NONE, 0)
+}
+
+pub(crate) fn expect_hello_slots(
+    mock: &mut MockTransport,
+    features: u32,
+    app_end: u32,
+    active: u8,
+    write: u8,
+) {
     mock.expect(move |req| {
         assert_eq!(req.cmd, OB_CMD_HELLO);
-        assert_eq!(req.payload, proto::hello_req_payload(0, 1));
-        vec![ok_resp(req, info_payload(features, app_end))]
+        assert_eq!(
+            req.payload,
+            proto::hello_req_payload(OB_PROTO_MAJOR, OB_PROTO_MINOR)
+        );
+        vec![ok_resp(
+            req,
+            info_payload_slots(features, app_end, active, write),
+        )]
     });
 }
 

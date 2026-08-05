@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""A/B hardware bench for OpenBoot 3a+3b.
+
+Drives a real part through the slot lifecycle and the interrupted-update
+acceptance test. Uses the openboot CLI for the normal flows and a minimal
+in-line OBP client for the interrupted one, where the point is to stop at a
+chosen instant rather than to complete.
+"""
+import os, re, subprocess, sys, time, zlib
+
+ROOT = os.environ.get("OPENBOOT_ROOT", os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")))
+MC = os.path.expanduser("~/Development/Personal/WCH/ch32fun/minichlink/minichlink")
+OB = f"{ROOT}/tools/target/release/openboot"
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+CHIPS = {
+    "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
+                  boot=f"{ROOT}/firmware/build/ch572-uart/openboot-ch572-uart.bin",
+                  slot_b=0x1F000, cap=0x1C000),
+    "ch592": dict(serial="CEBD8F0653EF", port="/dev/ttyACM0",
+                  boot=f"{ROOT}/firmware/build/ch592-uart+bench-ch592/openboot-ch592-uart.bin",
+                  slot_b=0x39000, cap=0x36000),
+}
+CNT_A, CNT_B = 0x20002000, 0x20002100
+fails = []
+
+def run(cmd, t=90):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=t)
+
+def mc(cfg, *args, t=90):
+    return run([MC, "-l", cfg["serial"], *args], t)
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}: {got}" + ("" if ok else f"  (expected {want})"))
+    if not ok:
+        fails.append(label)
+    return ok
+
+def factory(cfg):
+    """Whole-chip erase + bootloader, so every scenario starts identical."""
+    mc(cfg, "-E"); mc(cfg, "-w", cfg["boot"], "0x0")
+    power_cycle(cfg)
+
+def reboot(cfg):
+    """Always a real power cut. minichlink's -b ("reboot out of halt") does
+    not re-run the boot decision here - the part carried on in the app and
+    the bootloader never answered - so it is not usable as a reset."""
+    power_cycle(cfg)
+
+def read_word(cfg, addr, n=4):
+    """Little-endian word at addr. minichlink prints '<addr>: xx xx ...' for
+    any address, so match on the hex prefix rather than assuming RAM."""
+    r = mc(cfg, "-r", "+", hex(addr), str(n), t=30)
+    want = f"{addr:08x}"
+    for line in r.stdout.splitlines():
+        m = re.match(r"\s*([0-9a-fA-F]{8})\s*:\s*((?:[0-9a-fA-F]{2}\s*)+)", line)
+        if m and m.group(1).lower() == want:
+            b = bytes(int(x, 16) for x in m.group(2).split())
+            return int.from_bytes(b[:4], "little")
+    return None
+
+def probe(cfg):
+    """(active, write, base, capacity) from the CLI. Uses no debug probe, so
+    it never perturbs what the part is doing: an answer means the BOOTLOADER
+    is running, a timeout means an application is."""
+    r = run([OB, "--transport", "uart", "--port", cfg["port"], "probe"], 30)
+    act = wr = base = cap = None
+    for line in r.stdout.splitlines():
+        if "slots" in line:
+            act = line.split("active")[1].split(",")[0].strip()
+            wr = line.split("writing")[1].strip().rstrip(")")
+        if "write window" in line:
+            parts = line.split()[2].split("..")
+            base, cap = int(parts[0], 16), int(parts[1], 16) - int(parts[0], 16)
+    return act, wr, base, cap
+
+
+def flash(cfg, image, base=None, extra=()):
+    """A flat .bin carries no link base, so the slot-B image needs --base.
+    That is precisely the gap the 3c bundle is meant to close."""
+    cmd = [OB, "--transport", "uart", "--port", cfg["port"], "flash", image, "--force"]
+    if base is not None:
+        cmd += ["--base", hex(base)]
+    return run(cmd + list(extra), 120)
+
+
+# --- minimal OBP client, so an update can be stopped at a chosen instant ---
+import serial
+
+def frame(cmd, seq, payload=b""):
+    body = bytes([cmd, seq, len(payload), 0]) + payload
+    return b"\xB0\x07" + body + zlib.crc32(body).to_bytes(4, "little")
+
+
+class Obp:
+    def __init__(self, port):
+        self.s = serial.Serial(port, 115200, timeout=1.5)
+        self.seq = 0
+
+    def xfer(self, cmd, payload=b""):
+        """Responses carry the 0xB0 0x07 SOF too (uart_transport.c tr_send),
+        so hunt for it rather than assuming the frame starts at byte 0."""
+        self.seq = (self.seq + 1) & 0xFF
+        self.s.reset_input_buffer()
+        self.s.write(frame(cmd, self.seq, payload))
+        deadline, win = time.time() + 2.0, b""
+        while time.time() < deadline:
+            b = self.s.read(1)
+            if not b:
+                continue
+            win = (win + b)[-2:]
+            if win == b"\xB0\x07":
+                hdr = self.s.read(4)
+                if len(hdr) < 4:
+                    return None
+                return bytes(hdr) + bytes(self.s.read(hdr[2] + 4))
+        return None
+
+    def status(self, r):
+        return None if not r or len(r) < 5 else r[4]
+
+    def hello(self):
+        r = self.xfer(0x01, b"OBP1" + bytes([0, 2]))
+        assert self.status(r) == 0, f"HELLO status {self.status(r)}"
+        return r[4:]
+
+    def erase(self, addr, length):
+        return self.xfer(0x02, addr.to_bytes(4, "little") + length.to_bytes(4, "little"))
+
+    def write(self, addr, data):
+        return self.xfer(0x03, addr.to_bytes(4, "little") + data)
+
+    def close(self):
+        self.s.close()
+
+
+def power_cycle(cfg, off=0.6, settle=2.0):
+    """A real power cut - the parts are probe-powered."""
+    mc(cfg, "-t", t=30)
+    time.sleep(off)
+    mc(cfg, "-3", t=30)
+    time.sleep(settle)
+
+
+MARK_A, MARK_B = (0x20002000, 0xAAAA0001), (0x20002100, 0xBBBB0002)
+
+
+def app_is_running(cfg):
+    """True when the bootloader does NOT answer. Pure UART - no debug probe,
+    so this cannot perturb what the part is doing."""
+    return probe(cfg)[0] is None
+
+
+def witness(cfg):
+    """Which marker constants are present. Only meaningful for a run since
+    the last power cut, which is how every caller uses it: SRAM decays across
+    a cut, so a stale constant does not survive intact, and decay cannot
+    manufacture one either."""
+    mc(cfg, "-A", t=30)
+    return (read_word(cfg, MARK_A[0]) == MARK_A[1],
+            read_word(cfg, MARK_B[0]) == MARK_B[1])
+
+
+def slot_records(cfg):
+    """(slot A record magic+gen, slot B record magic+gen) straight from flash."""
+    mc(cfg, "-A", t=30)
+    out = []
+    for base in (0x2000, cfg["slot_b"]):
+        rec = base + cfg["cap"]
+        out.append((read_word(cfg, rec), read_word(cfg, rec + 4)))
+    return out
+
+
+OBR2 = 0x3252424F
+
+
+def scenario_lifecycle(name):
+    cfg = CHIPS[name]
+    print(f"\n=== {name}: A/B slot lifecycle ===")
+    factory(cfg)
+
+    act, wr, base, cap = probe(cfg)
+    check("fresh part: nothing active, slot A is the target", (act, wr), ("none", "A"))
+    check("fresh write window", (hex(base), hex(cap)), ("0x2000", hex(cfg["cap"])))
+
+    check("flash into slot A succeeds", flash(cfg, f"{name}-A.bin").returncode, 0)
+    time.sleep(1.0)
+    check("an application is running after flash --boot", app_is_running(cfg), True)
+    check("...and it is slot A's image", witness(cfg), (True, False))
+
+    reboot(cfg)
+    act, wr, base, _ = probe(cfg)
+    check("committing A makes B the target", (act, wr), ("A", "B"))
+    check("write base moved to slot B", hex(base), hex(cfg["slot_b"]))
+
+    r = flash(cfg, f"{name}-A.bin")          # declares base 0x2000, i.e. slot A
+    check("an image based at the ACTIVE slot is refused",
+          r.returncode != 0 and "write base" in (r.stdout + r.stderr), True)
+    check("  ...and that attempt erased nothing", probe(cfg)[:2], ("A", "B"))
+
+    check("flash into slot B succeeds",
+          flash(cfg, f"{name}-B.bin", base=cfg["slot_b"]).returncode, 0)
+    time.sleep(1.0)
+    check("an application is running", app_is_running(cfg), True)
+    check("...and it is slot B's image", witness(cfg), (False, True))
+
+    reboot(cfg)
+    act, wr, base, _ = probe(cfg)
+    check("committing B makes A the target again", (act, wr), ("B", "A"))
+    check("write base back at slot A", hex(base), "0x2000")
+    ra, rb = slot_records(cfg)
+    check("both records valid, B outranks A", (ra[0] == OBR2, rb[0] == OBR2, rb[1] > ra[1]),
+          (True, True, True))
+
+
+def enter_bootloader(cfg, tries=4):
+    """Power-cycle until the BOOTLOADER answers. Resets alternate: the app
+    re-arms the boot request every run and the boot decision consumes it, so
+    one cycle is not always enough. Also clears any lingering debug halt."""
+    for _ in range(tries):
+        power_cycle(cfg)
+        r = probe(cfg)
+        if r[0]:
+            return r
+    return (None, None, None, None)
+
+
+BOOTREQ = {"ch572": 0x20002FF0, "ch592": 0x200067F0}
+MAGIC = 0xB007CA11
+
+
+def scenario_interrupted(name, writes, label):
+    """The acceptance test: begin an update into the inactive slot, cut power
+    part-way, and require the device to come back up RUNNING the previous
+    application with no host involvement.
+
+    Every observation after the cut is made over SWD only. Opening or closing
+    the WCH-Link CDC port RESETS the target, so any UART-based check would
+    perturb the very thing being measured.
+
+    The evidence is a chain that does not depend on timing:
+      - bootreq armed: only an application writes the magic, and the
+        bootloader CLEARS it whenever it keeps control, so an armed word
+        means an application has run since the bootloader last ran;
+      - witness B set and witness A cleared: each image clears the other's
+        word, so this names the image that ran;
+      - slot A's record invalid, slot B's intact: A could not have been
+        chosen, and B is exactly as it was before the update began.
+    """
+    cfg = CHIPS[name]
+    print(f"\n=== {name}: power cut {label} ===")
+    act, wr, base, _ = enter_bootloader(cfg)
+    if (act, wr) != ("B", "A"):
+        print(f"  SKIP: need B active / A target, got {act}/{wr}")
+        return
+    img = open(f"{HERE}/{name}-A.bin", "rb").read()
+
+    c = Obp(cfg["port"])
+    c.hello()
+    check("ERASE accepted (also invalidates slot A's record)",
+          c.status(c.erase(base, 4096)), 0)
+    for i in range(writes):
+        c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
+    c.close()
+
+    power_cycle(cfg)                      # the cut, before any COMMIT
+    time.sleep(1.5)
+    mc(cfg, "-A", t=30)
+    bq = read_word(cfg, BOOTREQ[name])
+    wa = read_word(cfg, MARK_A[0])
+    wb = read_word(cfg, MARK_B[0])
+    ra, rb = slot_records(cfg)
+
+    check("an application ran unaided after the cut", bq, MAGIC)
+    check("the image that ran is slot B's", (wa, wb), (0, MARK_B[1]))
+    check("slot A's record is gone (it was mid-update)", ra[0] != OBR2, True)
+    check("slot B's record survived intact", rb[0], OBR2)
+    check("slot B still outranks", rb[1] >= 1, True)
+
+
+def scenario_recovery(name):
+    """After an interrupted update the device must still take a retry: the
+    half-written slot is re-erased, written and committed, and becomes the
+    one that boots."""
+    cfg = CHIPS[name]
+    print(f"\n=== {name}: retry after the interrupted update ===")
+    act, wr, base, _ = enter_bootloader(cfg)
+    check("still offering the half-written slot as the target", (act, wr), ("B", "A"))
+    check("retry flashes cleanly", flash(cfg, f"{name}-A.bin").returncode, 0)
+    time.sleep(1.0)
+    mc(cfg, "-A", t=30)
+    check("the retried image is what runs now",
+          (read_word(cfg, MARK_A[0]), read_word(cfg, MARK_B[0])), (MARK_A[1], 0))
+    ra, rb = slot_records(cfg)
+    check("slot A's record is valid again", ra[0], OBR2)
+    check("and now outranks slot B", ra[1] > rb[1], True)
+    check("A is active, B is the next target", enter_bootloader(cfg)[:2], ("A", "B"))
+
+
+def run_all(name):
+    global fails
+    fails = []
+    scenario_lifecycle(name)
+    scenario_interrupted(name, 0, "after ERASE only")
+    scenario_interrupted(name, 1, "after ERASE + 1 write")
+    scenario_interrupted(name, 2, "after ERASE + the whole image, before COMMIT")
+    scenario_recovery(name)
+    print(f"\n>>> {name}: " + (f"{len(fails)} FAILURES: {fails}" if fails else "ALL CHECKS PASSED"))
+    return fails

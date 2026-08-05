@@ -26,8 +26,10 @@
 #if (OB_CHIP_FAMILY != OB_FAMILY_CH570) && (OB_CHIP_FAMILY != OB_FAMILY_CH572)
 #error "port_ch57x only supports OB_FAMILY_CH570 / OB_FAMILY_CH572"
 #endif
-#if OB_FLASH_APP_END > 0x3B000
-#error "OB_FLASH_APP_END overlaps the ch57x boot-record page at 0x3B000"
+/* 0x3C000 is FLASH_ROM_MAX_SIZE in ISP572.h and the end of CodeFlash in the
+ * datasheet memory map; nothing above it is programmable. */
+#if OB_FLASH_APP_END > 0x3C000
+#error "OB_FLASH_APP_END exceeds ch57x code flash"
 #endif
 
 /* ---- contract constants ---------------------------------------------- */
@@ -38,10 +40,6 @@
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH57X
 #define OB_FEATURES           0u   /* no OB_FEAT_CRC_LIVE: XIP may serve stale
                                     * data after controller writes (F26) */
-
-/* no DataFlash on ch57x: boot record lives in the last code-flash block,
- * outside the app region */
-#define OB_RECORD_ADDR        0x0003B000u
 
 /* ---- safe access ------------------------------------------------------ */
 /* window auto-closes ~16 sys cycles after SIG2; protected writes must
