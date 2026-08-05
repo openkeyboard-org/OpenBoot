@@ -336,6 +336,10 @@ void tr_send(const uint8_t *frame, uint32_t len)
 
     /* Bounded ~10 ms wait for the host to poll the IN endpoint, still
      * servicing EP0 (and a possible early EP1 OUT) meanwhile. */
+    /* Same degenerate-divisor guard as the UART path: zero polls here would
+     * skip the drain wait entirely rather than bound it. */
+    _Static_assert(10000u / OB_POLL_INTERVAL_US > 0,
+                   "OB_POLL_INTERVAL_US too large: the USB drain wait rounds to zero polls");
     for (i = 0; i < 10000u / OB_POLL_INTERVAL_US && tx_busy; i++) {
         usb_process();
         ob_delay_us(OB_POLL_INTERVAL_US);

@@ -115,6 +115,12 @@ const uint8_t *tr_poll(uint32_t *avail)
  * peripheral reaches it. Giving up truncates the frame, which the host's CRC
  * catches and retries, rather than hanging the device. */
 #define UART_TX_TIMEOUT_POLLS (100000u / OB_POLL_INTERVAL_US)
+/* Integer division: an OB_POLL_INTERVAL_US above the numerator yields ZERO
+ * polls, and a for-loop bounded by zero never runs - uart_put() would stop
+ * writing bytes at all rather than time out. The header only rejects 0, so
+ * catch the degenerate case here, where the numerator that matters lives. */
+_Static_assert(UART_TX_TIMEOUT_POLLS > 0,
+               "OB_POLL_INTERVAL_US too large: the UART TX timeout rounds to zero polls");
 
 static void uart_put(uint8_t b)
 {
