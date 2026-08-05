@@ -227,3 +227,13 @@ Bring up UART before USB, and leave CH57x USB until last.
 
 A variant remains build-validated only until this sequence passes on its own
 silicon.
+
+Steps 6 and 7 are automated in [`tests/bench/`](tests/bench/), which drives a
+part through the slot lifecycle and cuts power at three points of an update.
+It is bench-specific (probe serials and ports) and is not part of `make test`.
+CH572 and CH592 pass it; CH570 and CH591 remain build-validated.
+
+One trap it documents, because it wastes an afternoon otherwise: **opening or
+closing the WCH-Link CDC port resets the target**, so any UART-based check of
+"did it boot the application?" perturbs the answer. Observe boot outcomes over
+SWD.
