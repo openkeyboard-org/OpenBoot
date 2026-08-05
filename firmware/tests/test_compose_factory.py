@@ -157,3 +157,13 @@ def test_the_pad_between_application_and_record_is_0x00():
 def test_not_blessing_leaves_the_old_layout_untouched():
     assert compose(BOOT, APP) == BOOT + bytes(
         compose_factory.app_base() - len(BOOT)) + APP
+
+
+def test_the_capacity_bound_is_the_tighter_one_when_blessing():
+    """Pins why the region check above may use the unpadded length: a slot is
+    half the region less its record block, so an image that fits the slot
+    cannot reach the end of the region however it is padded."""
+    for app_end in (0x30000, 0x3A000, 0x3C000, 0x70000):
+        region = app_end - compose_factory.app_base()
+        slot = (region // 2 // 4096) * 4096
+        assert slot - 4096 < region, f"capacity must stay under the region at {app_end:#x}"

@@ -121,6 +121,12 @@ def compose_factory(openboot: bytes, app: bytes, app_max: int | None = None,
     # the application rounded up. The pad is part of what the CRC covers, so
     # it has to be in the file too - and 0x00 for the same reason as the pad
     # above.
+    #
+    # The app_max check above used the UNPADDED length, which is right: when
+    # blessing, the capacity below is the binding bound and it is strictly
+    # tighter. A slot is half the region rounded down to an erase block, less
+    # the block its record owns, so bless_capacity < app_max always and the
+    # padding cannot carry the image past the region.
     image = app + b"\x00" * (-len(app) % 4)
     if len(image) > bless_capacity:
         raise ValueError(
