@@ -49,6 +49,10 @@ DEPS = CORE_SRC + HOST_SRC + [
     POLL_TEST,
     ROOT / "protocol" / "openboot_protocol.h",
     Path(__file__).resolve(),
+    FW / "app" / "openboot_app.c",
+    FW / "app" / "openboot_app.h",
+    FW / "tests" / "app_host" / "CH572SFR.h",
+    FW / "tests" / "app_host" / "ob_app_host.c",
 ]
 
 
@@ -67,6 +71,18 @@ def build(cc=None):
         so = OUT / f"ob_{fam}.so"
         _run([cc, *CFLAGS, *dflags.split(), "-fPIC", "-shared",
               *CORE_SRC, *HOST_SRC, "-o", so])
+    # Application companion as a host library: this repo ships it but
+    # nothing here compiled it until the review that added this - a rename
+    # or an API drift was invisible. The record validator is then testable
+    # against bytes the real core wrote (test_app_companion.py).
+    app_dir = FW / "app"
+    stub = FW / "tests" / "app_host"
+    _run([cc, "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+          f"-I{stub}", "-DOPENBOOT_CHIP_CH57X",
+          "-DOPENBOOT_SLOT_BASE=0x2000", "-DOPENBOOT_SLOT_SIZE=0x1D000",
+          "-fPIC", "-shared",
+          app_dir / "openboot_app.c", stub / "ob_app_host.c",
+          "-o", OUT / "ob_app.so"])
     # Compile-only gates for code the .so builds do not reach.
     _run([cc, *CFLAGS, "-DOB_HOST_CH59X", "-Dmain=ob_fw_main",
           "-fsyntax-only", FW / "core" / "main.c"])

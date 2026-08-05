@@ -562,6 +562,19 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
     rec.generation = ob_next_generation();
     if (rec.generation <= committed_gen)
         rec.generation = committed_gen + 1;
+    /* 0xFFFFFFFF is never stored. Storing it would create a generation the
+     * other slot can never outrank — ob_next_generation() saturates there,
+     * so the next commit stores the SAME value and ob_boot_select() resolves
+     * the tie by slot position, silently booting the older image ever after.
+     * The floor above can also wrap 0xFFFFFFFF + 1 to 0, a record
+     * ob_record_load() rejects. Both ends of the counter are therefore
+     * refused here, loudly, before any flash is touched. Unreachable in
+     * practice — ~2^32 commits against a flash endurance ~10^4..10^5 erase
+     * cycles — so this guard is for a hand-crafted record claiming the
+     * ceiling, not for wear. E_FLASH with detail 0: no ROM error code is 0,
+     * and the spec (section 6.5) names this case. */
+    if (rec.generation == 0xFFFFFFFFu || rec.generation == 0u)
+        return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_FLASH, OB_DET_NONE);
     rec.img_len = img_len;
     rec.img_crc32 = img_crc;
     record_begin_write();
