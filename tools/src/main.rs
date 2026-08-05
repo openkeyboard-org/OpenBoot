@@ -275,6 +275,16 @@ fn run_bundle(cmd: BundleCmd) -> Result<()> {
                         path.display()
                     );
                 }
+                // Rejected here rather than left to load_image, whose message
+                // names --base: the user typed @BASE and would be told about a
+                // flag they never used.
+                if base.is_some() && is_hex {
+                    bail!(
+                        "{}: drop the @BASE — Intel HEX carries its own load \
+                         address in its records",
+                        path.display()
+                    );
+                }
                 loaded.push(load_image(&path, base)?);
             }
             let b = Bundle::new(family, loaded)?;

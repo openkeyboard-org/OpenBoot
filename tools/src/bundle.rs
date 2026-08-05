@@ -92,6 +92,21 @@ impl Bundle {
                 images.len()
             );
         }
+        // The same rules parse() enforces, applied here too. Without them
+        // `bundle create` happily writes a file it will refuse to read back:
+        // a misaligned base survives encode() and fails on the next parse.
+        for (i, img) in images.iter().enumerate() {
+            if img.base % 4 != 0 {
+                bail!("image {i} base 0x{:08X} is not 4-byte aligned", img.base);
+            }
+            if img.bytes.is_empty() || img.bytes.len() % 4 != 0 {
+                bail!(
+                    "image {i} is {} bytes, not a nonzero multiple of 4 \
+                     (flash writes are 4-byte units)",
+                    img.bytes.len()
+                );
+            }
+        }
         images.sort_by_key(|i| i.base);
         for pair in images.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
@@ -320,17 +335,26 @@ impl Source {
     pub fn for_running_image(&self, write_base: u32) -> Result<&Image> {
         match self {
             Source::Single(i) => Ok(i),
-            Source::Bundle(b) if b.images.len() == 1 => Ok(&b.images[0]),
             Source::Bundle(b) => {
                 let others: Vec<&Image> =
                     b.images.iter().filter(|i| i.base != write_base).collect();
                 match others.as_slice() {
                     [only] => Ok(only),
+                    // Deliberately no shortcut for a one-variant bundle. If
+                    // its build is the write target, handing it back would
+                    // make verify CRC the slot about to be OVERWRITTEN and
+                    // report OK about an image nothing is running.
+                    [] => bail!(
+                        "the bundle only carries the build for 0x{write_base:08X}, \
+                         which is the slot the device is about to WRITE, not the \
+                         one it is running — verifying it would report on the \
+                         wrong slot"
+                    ),
                     _ => bail!(
-                        "cannot tell which variant is running: the bundle has {} \
-                         variants and the device is writing 0x{write_base:08X}. \
+                        "cannot tell which variant is running: the bundle carries \
+                         {} builds besides the write target 0x{write_base:08X}. \
                          Pass the single image for the slot you want to check.",
-                        b.images.len()
+                        others.len()
                     ),
                 }
             }
@@ -451,10 +475,53 @@ mod tests {
     }
 
     #[test]
+    fn what_it_writes_it_can_read_back() {
+        // The round trip is the property: a bundle create emits must parse.
+        for bad in [
+            Bundle::new(0, vec![img(0x2001, 16, 1)]),
+            Bundle::new(0, vec![img(0x2000, 15, 1)]),
+            Bundle::new(
+                0,
+                vec![Image {
+                    base: 0x2000,
+                    bytes: vec![],
+                }],
+            ),
+        ] {
+            assert!(bad.is_err(), "construction must reject what parse would");
+        }
+        let good = two();
+        assert!(Bundle::parse(&good.encode()).is_ok());
+    }
+
+    #[test]
     fn selection_is_by_exact_base() {
         let b = two();
         assert_eq!(b.for_base(0x39000).unwrap().bytes.len(), 64);
         assert!(b.for_base(0x2004).is_none(), "a near miss is not a match");
+    }
+
+    #[test]
+    fn a_lone_variant_for_the_write_slot_is_not_treated_as_running() {
+        let only_b = Bundle::new(0, vec![img(0x39000, 16, 0xBB)]).unwrap();
+        // Device is writing slot B, and slot B's build is all the bundle has.
+        // Returning it means verify CRCs the slot being WRITTEN.
+        let err = Source::Bundle(only_b)
+            .for_running_image(0x39000)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("about to WRITE"), "got: {err}");
+
+        // The same lone variant IS the running one when the device is
+        // writing the other slot.
+        let only_b = Bundle::new(0, vec![img(0x39000, 16, 0xBB)]).unwrap();
+        assert_eq!(
+            Source::Bundle(only_b)
+                .for_running_image(0x2000)
+                .unwrap()
+                .base,
+            0x39000
+        );
     }
 
     #[test]
