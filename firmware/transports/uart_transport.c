@@ -108,11 +108,31 @@ const uint8_t *tr_poll(uint32_t *avail)
     return 0;
 }
 
+/* Bounded like the USB send path: a bootloader must not contain a loop that
+ * can spin forever on a hardware register. The FIFO drains at the line rate
+ * with no external dependency, so ~87 us per byte at 115200 is the honest
+ * wait and this ceiling is three orders of magnitude above it - only a wedged
+ * peripheral reaches it. Giving up truncates the frame, which the host's CRC
+ * catches and retries, rather than hanging the device. */
+#define UART_TX_TIMEOUT_POLLS (100000u / OB_POLL_INTERVAL_US)
+/* Integer division: an OB_POLL_INTERVAL_US above the numerator yields ZERO
+ * polls, and a for-loop bounded by zero never runs - uart_put() would stop
+ * writing bytes at all rather than time out. The header only rejects 0, so
+ * catch the degenerate case here, where the numerator that matters lives. */
+_Static_assert(UART_TX_TIMEOUT_POLLS > 0,
+               "OB_POLL_INTERVAL_US too large: the UART TX timeout rounds to zero polls");
+
 static void uart_put(uint8_t b)
 {
-    while (OB_UART_TFC >= UART_FIFO_SIZE) {
+    uint32_t i;
+
+    for (i = 0; i < UART_TX_TIMEOUT_POLLS; i++) {
+        if (OB_UART_TFC < UART_FIFO_SIZE) {
+            OB_UART_THR = b;
+            return;
+        }
+        ob_delay_us(OB_POLL_INTERVAL_US);
     }
-    OB_UART_THR = b;
 }
 
 void tr_send(const uint8_t *frame, uint32_t len)
@@ -125,7 +145,9 @@ void tr_send(const uint8_t *frame, uint32_t len)
 
 void tr_deinit(void)
 {
-    while (OB_UART_TFC != 0) {
-    }
+    uint32_t i;
+
+    for (i = 0; i < UART_TX_TIMEOUT_POLLS && OB_UART_TFC != 0; i++)
+        ob_delay_us(OB_POLL_INTERVAL_US);
     ob_delay_us(100);   /* last byte in the shifter: one char at 115200 is ~87 us */
 }

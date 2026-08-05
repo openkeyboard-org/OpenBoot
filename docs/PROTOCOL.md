@@ -626,23 +626,23 @@ COMMIT attests a length and a CRC by design, so any conforming host can flash
 anything that fits the app region.
 
 **Idle auto-boot:** a device that stays in the bootloader with a *valid*
-boot record starts a poll-iteration counter. Its limit is derived from the
-board's `OB_IDLE_TIMEOUT_MS` setting (default `10000`). If the counter expires
-while still in IDLE — no successful HELLO this power cycle — the device boots
-the app, so a device that entered the bootloader by strap glitch or stray boot
-request recovers by itself.
+boot record anchors a deadline `OB_IDLE_TIMEOUT_MS` milliseconds ahead
+(default `10000`). If it passes while still in IDLE — no successful HELLO this
+power cycle — the device boots the app, so one that entered the bootloader by
+strap glitch or stray boot request recovers by itself.
 
 A held strap does not inhibit idle auto-boot because it is not sampled again;
 it provides a connection window, not permanent residency.
 
 The first successful HELLO disables auto-boot until the next reset;
-**no traffic of any kind resets the timer** — valid, rejected, malformed and
-CRC-corrupt frames alike all advance it, so nothing short of a session can
+**no traffic of any kind resets the deadline** — valid, rejected, malformed
+and CRC-corrupt frames alike leave it alone, so nothing short of a session can
 keep a device out of its app indefinitely.
 
-The timer counts poll iterations rather than wall-clock time. Frame handling
-can stretch the interval, so treat `OB_IDLE_TIMEOUT_MS` as a lower bound. A
-device without a valid record waits indefinitely.
+The deadline is wall-clock, measured against a free-running hardware counter,
+so frame handling does not stretch it. `OB_IDLE_TIMEOUT_MS = 0` **disables**
+idle auto-boot rather than expiring immediately, and a device without a valid
+record waits indefinitely either way.
 
 ## 11. Versioning and discovery
 
@@ -686,12 +686,34 @@ section 6.5. **BOOT is never retried** (section 6.6).
 
 | Item | Value |
 |---|---|
-| VID:PID | `0x1209:0x0001` — the pid.codes **test PID**. Interim only: a permanent pid.codes allocation will be filed when the repository is public, and the PID will change. Hosts should select on VID:PID *plus* serial/HELLO identity, not PID alone. |
+| VID:PID | `0x1209:0x0001` by default — the pid.codes **test PID**, interim until a permanent allocation is filed. **Board-configurable** via `OB_USB_VID`/`OB_USB_PID`, and a product is expected to change it. Hosts MUST NOT select on VID:PID alone (see below). |
 | Class | HID, one interface, one configuration |
 | Report descriptor | vendor usage page `0xFF00`; 64-byte input and output reports; **no report IDs** |
 | Endpoints | EP1 IN + EP1 OUT, interrupt, 64 bytes |
 | `iSerial` | the 64-bit ROM UID as 16 hex digits, most-significant nibble first (`printf "%016X"` of the u64 reported in HELLO) — used by the host `--serial` selector |
 | `bcdDevice` | the bootloader version (= HELLO `bl_version`) |
+
+**Finding the device.** A product may build the bootloader with its
+*application's* VID:PID, so that a user sees one device changing mode rather
+than two unrelated ones. VID:PID is then ambiguous: the application's own
+interfaces — keyboard, mouse, its own vendor interface — enumerate behind the
+same pair. A host MUST therefore select on VID:PID **plus HID usage page
+`0xFF00` usage `0x01`**, which is what the report descriptor above declares.
+
+A product doing this MUST keep its application off that usage. (OpenDongle
+uses `0xFFFF` and `0xFF60` for its vendor interfaces, so the two never
+collide.)
+
+Where a platform's HID backend does not report a usage, it yields `0x0000`
+for both fields. A host SHOULD treat that as **"cannot tell", not "matches"**,
+and apply it only as a fallback: if any interface reports the exact usage,
+consider only those; use the `0x0000` entries solely when none does. Treating
+`0x0000` as a match lets every interface of a shared-identity device through.
+
+If more than one interface still matches, a host MUST refuse rather than pick
+one. It MUST NOT rely on the serial number to break the tie: `iSerialNumber`
+is a **device** descriptor, so every interface of one device reports the same
+string. A serial selects which device, never which interface on it.
 
 ## 13. UART parameters
 

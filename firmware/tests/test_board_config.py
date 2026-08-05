@@ -19,7 +19,11 @@ FW = Path(__file__).resolve().parent.parent
 
 
 def gen_config(chip: str, board: str) -> str:
-    cfg_rel = f"build/{chip}-usb+{board}/openboot_config.h"
+    # Mirrors build_dir in firmware/Makefile: only a NON-default board gets a
+    # +<board> suffix, so the default keeps the documented build/<chip>-<tr>
+    # path. Getting this wrong just fails to find a target, loudly.
+    suffix = "" if board.startswith("generic-") else f"+{board}"
+    cfg_rel = f"build/{chip}-usb{suffix}/openboot_config.h"
     subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          f"CHIP={chip}", "TRANSPORT=usb", f"BOARD={board}", cfg_rel],
@@ -43,6 +47,44 @@ def test_product_config_app_end(chip, board, app_end):
 def test_product_config_boot_image_crc(chip, board):
     cfg = gen_config(chip, board)
     assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
+
+
+@pytest.mark.parametrize("chip,board", [
+    ("ch570", "opendongle-ch570"),
+    ("ch592", "opendongle-ch592"),
+])
+def test_product_boards_use_the_dongle_usb_identity(chip, board):
+    """The product bootloader enumerates as the dongle, not as a separate
+    device; the host separates them by HID usage page (PROTOCOL.md 12)."""
+    cfg = gen_config(chip, board)
+
+    assert "#define OB_USB_VID 0x0C45\n" in cfg
+    assert "#define OB_USB_PID 0xFEFE\n" in cfg
+
+
+def test_default_board_leaves_the_usb_identity_alone():
+    """Absent knobs must emit no line at all, so usb_transport.c's #ifndef
+    defaults win — the same contract as every other optional knob."""
+    assert "OB_USB_" not in gen_config("ch592", "generic-ch59x")
+
+
+@pytest.mark.parametrize("bad", [
+    "0x0003A800",   # not 4096-aligned
+    "0x0003C000",   # past the silicon end
+    "0x1000",       # below the app base
+    "0xZZZ",        # not a number
+])
+def test_unusable_app_end_is_refused(bad):
+    """The C side #errors on an overlapping region anyway; this is the
+    friendlier message, and it also catches the cases C cannot see."""
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch570", "TRANSPORT=usb", f"OB_APP_END={bad}",
+         "build/ch570-usb/openboot_config.h"],
+        capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "is not usable on ch570" in result.stderr
 
 
 @pytest.mark.parametrize("chip,board", [

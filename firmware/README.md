@@ -111,26 +111,37 @@ line.
 |---|---|---|
 | `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
 | `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
-| `OB_IDLE_TIMEOUT_MS` | `10000` | Nominal idle auto-boot setting; `0` disables it |
+| `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it |
 | `OB_BOOT_IMAGE_CRC` | off | Check the complete image CRC on every boot |
 | `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
+| `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
+| `OB_USB_VID` / `OB_USB_PID` | `0x1209` / `0x0001` | USB identity; set both or neither |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
 
-`OB_IDLE_TIMEOUT_MS` is a nominal setting, not a duration: it converts to a
-count of main-loop iterations, and an iteration is only nominally 20 µs. Real
-timeouts measured on silicon for the default `10000`:
+`OB_APP_END` fences OBP off from flash the board reserves for something else —
+OpenDongle's CH570 keeps its RF bond at `0x3A000`, just below the boot-record
+page, so its board file sets `OB_APP_END := 0x0003A000` and no `ERASE`,
+`WRITE` or `COMMIT` can reach either page. It must be 4096-aligned and inside
+`(app base, silicon end]` — above `0x2000` and no higher than the silicon's own
+end; the device advertises the resulting bound over HELLO, so the host needs no
+per-board knowledge.
 
-| Image | Real timeout | Drift |
-|---|---|---|
-| CH570 USB at 100 MHz | ~273 s | ~27x |
-| CH592 USB at 60 MHz | ~86 s | ~8.6x |
+`OB_IDLE_TIMEOUT_MS` is wall-clock milliseconds, measured against a
+free-running SysTick counter that the port starts once the clock is settled.
+It used to be a poll count merely named after milliseconds, which drifted
+badly under load — the default `10000` measured about 273 seconds on CH570 USB
+and about 86 seconds on CH592 USB. The value is unchanged; what moved is that
+it now means what it says.
 
-The drift is per chip and transport, so a board that cares about the real
-figure has to measure it. Treat the setting as a lower bound in any case:
-frame handling stretches an iteration, and on USB a send against a host that
-is not draining can block for milliseconds while still crediting one slot.
+`OB_USB_VID` / `OB_USB_PID` let a product enumerate its bootloader under its
+own USB identity instead of a bootloader-specific one, so a user sees one
+device changing mode rather than two. Set both or neither. Doing this makes
+VID:PID ambiguous — the application's own HID interfaces sit behind the same
+pair — so the host distinguishes the bootloader by its vendor usage page
+`0xFF00` usage `0x01`, and the application must not use that pair. The
+`openboot` CLI already filters this way.
 
 ## Flash the bootloader
 
@@ -196,7 +207,9 @@ Bring up UART before USB, and leave CH57x USB until last.
 
 1. Build the image and confirm the size check passes.
 2. Flash through SWD, read it back, and power-cycle.
-3. Probe over UART or confirm USB enumerates as `1209:0001`.
+3. Probe over UART, or confirm USB enumerates as the board's configured
+   identity — `1209:0001` unless `OB_USB_VID`/`OB_USB_PID` are set, which the
+   product boards do (`0C45:FEFE`).
 4. Check HELLO reports the correct family, app bounds, geometry, features, and
    UID.
 5. Flash, COMMIT, verify, and boot a test application.

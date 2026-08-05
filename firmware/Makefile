@@ -81,7 +81,18 @@ APP_END_ch570 := 0x0003B000
 APP_END_ch572 := 0x0003B000
 APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
-APP_END := $(APP_END_$(CHIP))
+# `override` on both assignments: a variable set on the make COMMAND LINE
+# normally beats every assignment in the makefile, so without it
+#   make BOARD=opendongle-ch570 APP_END=0x0003B000
+# would silently defeat the board's validated clamp and hand OBP the dongle's
+# RF bond page. APP_END is Makefile-internal; OB_APP_END is the knob, and it
+# is validated below.
+override APP_END := $(APP_END_$(CHIP))
+# The app base is fixed at OB_APP_BASE for every chip; used below to bound a
+# board override. The C side is the safety net (openboot_port.h and the port
+# headers #error on an empty or overlapping region) — this is only here to
+# say so in Make's voice, before a confusing compile error.
+APP_BASE_BYTES := 8192
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
 FAMILY_ch570 := OB_FAMILY_CH570
@@ -141,6 +152,33 @@ include boards/$(BOARD).mk
 OB_IDLE_TIMEOUT_MS ?= 10000
 # A board that defines only a strap mask selects port A by default.
 OB_BOOT_PIN_PORT_B ?= 0
+
+# A board may shrink the app region below what the silicon offers, to fence
+# OBP off from flash it does not own. OpenDongle's CH570 keeps its RF bond at
+# 0x3A000, directly below the boot-record page, so no ERASE/WRITE/COMMIT may
+# reach either. The port's ob_app_end() takes min(silicon, build), so a bound
+# set here also holds on larger silicon.
+#
+# Bounded rather than trusted: must be 4096-aligned (the erase granularity)
+# and inside (app base, silicon end]. Board files are included above, after
+# the per-chip default is assigned, which is what makes the override land.
+ifneq ($(strip $(OB_APP_END)),)
+  # Arithmetic expansion rather than printf '%d': POSIX requires $(( )) to
+  # accept C integer constants including 0x hex, but does NOT require printf
+  # to. A malformed value makes the expansion fail, the group produces no
+  # output, and the $(error) below fires - the same outcome as before.
+  APP_END_OK := $(shell \
+    { want=$$(( $(strip $(OB_APP_END)) )) && \
+      max=$$(( $(APP_END_$(CHIP)) )) && \
+      [ "$$want" -gt $(APP_BASE_BYTES) ] && [ "$$want" -le "$$max" ] && \
+      [ $$(( want % 4096 )) -eq 0 ] && echo ok; } 2>/dev/null)
+  ifneq ($(strip $(APP_END_OK)),ok)
+    $(error OB_APP_END=$(OB_APP_END) is not usable on $(CHIP): expected a \
+            4096-aligned address above $(APP_BASE_BYTES) and no higher than \
+            $(APP_END_$(CHIP)))
+  endif
+  override APP_END := $(OB_APP_END)
+endif
 
 # ---------------------------------------------------------------------------
 # Toolchain: a MounRiver "RISC-V Embedded GCC" install. The caller must point
@@ -329,6 +367,20 @@ endif
 # ~0.5 s at the 6.4 MHz boot clock, see README knob table).
 ifneq ($(filter-out 0,$(strip $(OB_BOOT_IMAGE_CRC))),)
 CONFIG_LINES += '\#define OB_BOOT_IMAGE_CRC 1'
+endif
+# USB identity. Absent leaves the pid.codes test allocation compiled into
+# usb_transport.c. A product sets both so its bootloader enumerates under the
+# same identity as its application; the host then needs the HID usage page to
+# tell the two apart (docs/PROTOCOL.md section 12).
+ifneq ($(strip $(OB_USB_VID))$(strip $(OB_USB_PID)),)
+ifeq ($(strip $(OB_USB_VID)),)
+$(error set OB_USB_VID alongside OB_USB_PID, or neither)
+endif
+ifeq ($(strip $(OB_USB_PID)),)
+$(error set OB_USB_PID alongside OB_USB_VID, or neither)
+endif
+CONFIG_LINES += '\#define OB_USB_VID $(OB_USB_VID)' \
+                '\#define OB_USB_PID $(OB_USB_PID)'
 endif
 
 # Force-include the generated configuration ahead of every TU. Equivalent to

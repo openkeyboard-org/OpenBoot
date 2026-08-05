@@ -20,7 +20,6 @@
 # OB_BOOT_PIN_MASK intentionally unset -> ob_bootpin_asserted() compiles to
 # `return 0`. `make board-policy` enforces this for both families.
 
-# Idle auto-boot: with a valid boot record and no HELLO received, convert this
-# nominal millisecond setting to a poll count. 0 disables the timeout.
-# NOTE: this counts poll iterations, not wall-clock time.
+# Idle auto-boot: with a valid boot record and no HELLO received, boot the app
+# after this many milliseconds. 0 disables the timeout.
 OB_IDLE_TIMEOUT_MS := 10000

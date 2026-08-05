@@ -40,11 +40,24 @@ const uint8_t *tr_poll(uint32_t *avail);
 /* Blocking send of one complete logical frame (core built it, CRC
  * included). USB: zero-pads to a 64-byte IN report. UART: writes SOF then
  * the frame. */
+/* BEST EFFORT, and bounded. Both transports give up rather than spin: USB
+ * after ~10 ms against a host that never collects the report, UART after
+ * ~100 ms against a TX FIFO that never drains. Giving up truncates the frame
+ * and returns no status, deliberately - the only way to reach either bound is
+ * a host that has stopped listening or a wedged peripheral, and in neither
+ * case can a status be delivered or acted on. The host recovers by timeout
+ * and retry, which is the same path a frame lost to line noise takes.
+ *
+ * BOOT is the one command with no retry (PROTOCOL.md 11), and that is not a
+ * consequence of this: a successful BOOT resets the device before its response
+ * can arrive, so a missing BOOT response is defined as ambiguous regardless. */
 void tr_send(const uint8_t *frame, uint32_t len);
 
 /* Quiesce before jumping to the app: USB resets the SIE and drops the DP
- * pull-up then waits 10 ms; UART drains the TX FIFO plus one character
- * time. */
+ * pull-up then waits 10 ms; UART drains the TX FIFO plus one character time.
+ * Bounded for the same reason as tr_send: proceeding to the reset having
+ * dropped a few queued bytes beats hanging a bootloader on a dead
+ * peripheral. */
 void tr_deinit(void);
 
 #endif /* OPENBOOT_TRANSPORT_H */
