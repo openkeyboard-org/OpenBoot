@@ -175,7 +175,7 @@ ifneq ($(strip $(OB_APP_END)),)
     { want=$$(( $(strip $(OB_APP_END)) )) && \
       max=$$(( $(APP_END_$(CHIP)) )) && \
       [ "$$want" -gt $(APP_BASE_BYTES) ] && [ "$$want" -le "$$max" ] && \
-      [ $$(( want % 4096 )) -eq 0 ] && echo ok; } 2>/dev/null)
+      [ $$(( want % $(ERASE_BLOCK_BYTES) )) -eq 0 ] && echo ok; } 2>/dev/null)
   ifneq ($(strip $(APP_END_OK)),ok)
     $(error OB_APP_END=$(OB_APP_END) is not usable on $(CHIP): expected a \
             4096-aligned address above $(APP_BASE_BYTES) and no higher than \
