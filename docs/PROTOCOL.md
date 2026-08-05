@@ -167,13 +167,13 @@ set is available. There is no session timeout or return to IDLE except reset.
 
 | Event | Effect |
 |---|---|
-| Power-on / any reset | State = IDLE; idle auto-boot timer starts if a valid boot record exists |
+| Power-on / any reset | State = IDLE; idle auto-boot deadline is anchored if any slot is bootable |
 | Successful HELLO | State = SESSION; bitmap and stream CRC reset; auto-boot disabled until reset |
 | Pre-mutation error or frame-error report | No state change |
 | `E_FLASH` during mutation | Fail-safe partial state described in section 7 |
 | UART inter-byte gap > 50 ms | RX parser resynchronized only; session untouched |
-| First ERASE or WRITE | Boot record invalidated before the mutation |
-| COMMIT with status OK | New tuple: boot record written; exact successful replay: existing record remains valid without another write |
+| First ERASE or WRITE | The TARGET slot's record is erased before the mutation; the other slot's is untouched |
+| COMMIT with status OK | The target slot's record is written, claiming a higher `generation`; an exact successful replay leaves the existing record in place |
 | BOOT mode 0 | Respond, stop transport, reset, and launch the app through the boot decision |
 | BOOT mode 1 | Respond, set the RAM request, and reset back into OpenBoot |
 
@@ -573,25 +573,27 @@ block outside the app region (code flash `0x3B000` on CH57x, DataFlash
 and needs one `bless`.
 
 **What the record does not say.** It describes exactly `img_len` bytes from
-`app_start` and says nothing about the flash beyond them. Within an OBP session
-that distinction never surfaces, because the record is invalidated at the first
-mutation and only COMMIT writes a new one. It surfaces when an image is written
-**out of band** — over SWD or ROM ISP — and an older record survives.
+its own **slot base** and says nothing about the flash beyond them. Within an
+OBP session that distinction never surfaces: mutating a slot erases that
+slot's record before any image byte changes, and only COMMIT writes a new one.
 
-What happens then depends on the build. **By default no image CRC is computed
-at all**: the boot decision checks record integrity and that the first app word
-is not the erased pattern (section 10), so a surviving record validates almost
-any out-of-band image. With `OB_BOOT_IMAGE_CRC=1` the bootloader also
-recomputes the CRC over the recorded length, and the record then still
-validates whenever the newly written bytes have the recorded image as a
-*prefix* — re-flashing the same build is the usual case, and a longer image
-sharing the old one's leading bytes is the same case. Bytes beyond `img_len`
-are never checked under either setting.
+It surfaces when an image is written **out of band** — over SWD or ROM ISP —
+and the slot's record survives. What happens then depends on the build. **By
+default no image CRC is computed at all**: the boot decision checks record
+integrity and that the slot's first word is not the erased pattern
+(section 10), so a surviving record validates almost any out-of-band image.
+With `OB_BOOT_IMAGE_CRC=1` the bootloader also recomputes the CRC over the
+recorded length, and the record then still validates whenever the newly
+written bytes have the recorded image as a *prefix* — re-flashing the same
+build is the usual case, and a longer image sharing the old one's leading
+bytes is the same case. Bytes beyond `img_len` are never checked under either
+setting.
 
-A surviving record is the normal outcome on CH591/CH592, where the record lives
-in DataFlash and a code-flash erase does not reach it (`minichlink -E` does not
-touch DataFlash). On CH570/CH572 the record shares code flash, so a whole-chip
-erase takes it with the application and the device lands in the bootloader.
+Because every record lives inside the slot it describes, an out-of-band write
+to one slot cannot invalidate the other's record. The untouched slot keeps a
+valid record and may still win on `generation`, which is the same property
+that makes an interrupted update survivable. A whole-chip erase clears both
+slots and their records together, so the device lands in the bootloader.
 
 ### 9.2 RAM boot request (app → bootloader entry)
 
@@ -617,9 +619,16 @@ At reset the bootloader decides, in this exact order:
 
 1. Board boot strap asserted → stay in OpenBoot.
 2. RAM boot-request magic present → stay in OpenBoot.
-3. Boot record invalid → stay in OpenBoot.
-4. First app word is the erased pattern (`0xF3F9BDA9`) → stay in OpenBoot.
-5. Otherwise → jump to `0x2000`.
+3. No slot is bootable → stay in OpenBoot.
+4. Otherwise → jump to the base of the bootable slot with the highest
+   `generation`.
+
+A slot is bootable when its record validates (section 9.1), its first word is
+not the erased pattern (`0xF3F9BDA9`), and — with `OB_BOOT_IMAGE_CRC=1` — its
+image matches the recorded CRC. Each slot is judged independently, so a slot
+whose record claims a newer generation but whose image fails is skipped rather
+than fatal: that is the interrupted-update case, and the older slot still
+boots.
 
 The request word is always cleared after it is read, including when the strap
 wins, so it is one-shot. No shipped board defines the optional OpenBoot strap;
@@ -629,14 +638,14 @@ With the build-time `OB_BOOT_IMAGE_CRC=1` setting, the device also checks the
 full image against the record before jumping. This is off by default because
 of its startup cost; record integrity is always checked.
 
-Be precise about what that buys. It proves the app region still holds the bytes
+Be precise about what that buys. It proves the slot still holds the bytes
 COMMIT attested, which catches corruption and catches an out-of-band reflash
 that diverges from a surviving record (section 9.1). It is **not** an identity
 check: by the prefix property it also passes an image that merely begins with
 the recorded one, and nothing in the record names a product, a version, or a
 build. A device that must refuse foreign images needs a check above OBP —
 COMMIT attests a length and a CRC by design, so any conforming host can flash
-anything that fits the app region.
+anything that fits a slot.
 
 **Idle auto-boot:** a device that stays in the bootloader with a *valid*
 boot record anchors a deadline `OB_IDLE_TIMEOUT_MS` milliseconds ahead
