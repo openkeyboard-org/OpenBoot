@@ -6,8 +6,16 @@ actually run on parts, so the claim "an interrupted update leaves the previous
 application bootable" rests on hardware rather than on a model.
 
 **This is bench-specific.** Probe serials, serial ports and board files in
-`ab_bench.py` describe one desk; change `CHIPS` to match yours. It is not run
-by `make test` and needs a WCH-LinkE per part.
+`ab_bench.py` describe one desk; change `CHIPS` to match yours. It needs a
+WCH-LinkE per part, so `make test` cannot run it.
+
+What `make test` *does* check is `tests/test_bench_harness.py`: that the
+builder compiles a source that exists, that its `-D` macros and the witness
+source agree in both directions, that the README examples match its argument
+count, and that each chip config carries the keys the scenarios read. Those
+are static, need no hardware, and cover the way this directory has actually
+broken — a rename that left the builder pointing at a file that was no longer
+there.
 
 ```sh
 ./build_witness.sh 0x2000  0x20002000 0xAAAA0001 0x20002100 0x20002FF0 ch572-A.bin

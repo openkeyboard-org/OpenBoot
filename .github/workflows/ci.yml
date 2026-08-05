@@ -1,0 +1,35 @@
+# Everything that can be checked without the MounRiver toolchain or a bench.
+#
+# The firmware matrix build and its 8 KiB size gate need "RISC-V Embedded
+# GCC", which is a manual vendor install, so they stay a local step — see
+# firmware/README.md. The host suite deliberately compiles the production core
+# with the SYSTEM compiler, so the part that actually tests behaviour runs
+# here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  firmware-host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: python3 -m pip install --user pytest pyelftools
+      - name: Generated constants match the protocol header
+        run: python3 protocol/gen_protocol.py --check
+      - name: Host-native core tests
+        run: make -C firmware test
+
+  host-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --manifest-path tools/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path tools/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path tools/Cargo.toml
