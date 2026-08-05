@@ -71,11 +71,19 @@
 #ifndef OB_SLOT_B_BASE
 #error "build must inject OB_SLOT_B_BASE"
 #endif
-#if OB_SLOT_SIZE == 0
-#error "slot size must be non-zero"
+#if (OB_FLASH_APP_START % OB_FLASH_ERASE_BLOCK) != 0
+#error "app base must be erase-block aligned, or a slot record lands mid-block"
 #endif
 #if (OB_SLOT_SIZE % OB_FLASH_ERASE_BLOCK) != 0
 #error "slot size must be a multiple of the erase block"
+#endif
+/* Strictly greater, not merely non-zero: the top block of every slot belongs
+ * to its record, so a one-block slot has no room for an image at all. That
+ * configuration builds, and every ERASE and WRITE then fails the range check
+ * on a capacity of zero — a bootloader that cannot be flashed. It is
+ * reachable from a board setting OB_APP_END barely above the app base. */
+#if OB_SLOT_SIZE <= OB_FLASH_ERASE_BLOCK
+#error "slot size must exceed one erase block: the record owns the top block"
 #endif
 #if OB_SLOT_A_BASE != OB_FLASH_APP_START
 #error "slot A must start at the app base"

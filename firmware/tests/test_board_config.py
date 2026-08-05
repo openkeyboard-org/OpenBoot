@@ -92,8 +92,11 @@ def test_slot_geometry(chip, board, size, b_base):
 def test_both_slots_fit_inside_the_app_region(chip, board):
     """The C side #errors on this too; catching it here says which board."""
     cfg = gen_config(chip, board)
-    val = lambda name: int(
-        [l for l in cfg.splitlines() if l.startswith(f"#define {name} ")][0].split()[-1], 16)
+
+    def val(name):
+        line = next(ln for ln in cfg.splitlines()
+                    if ln.startswith(f"#define {name} "))
+        return int(line.split()[-1], 16)
 
     assert val("OB_SLOT_B_BASE") + val("OB_SLOT_SIZE") <= val("OB_FLASH_APP_END")
     assert val("OB_SLOT_A_BASE") + val("OB_SLOT_SIZE") == val("OB_SLOT_B_BASE")
