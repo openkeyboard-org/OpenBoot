@@ -703,10 +703,16 @@ A product doing this MUST keep its application off that usage. (OpenDongle
 uses `0xFFFF` and `0xFF60` for its vendor interfaces, so the two never
 collide.)
 
-Where a platform's HID backend does not report a usage it yields `0x0000`
-for both fields. A host SHOULD treat that as "cannot tell" and keep the
-candidate rather than discarding it — the reference tool does — since
-discarding would leave nothing to open.
+Where a platform's HID backend does not report a usage, it yields `0x0000`
+for both fields. A host SHOULD treat that as **"cannot tell", not "matches"**,
+and apply it only as a fallback: if any interface reports the exact usage,
+consider only those; use the `0x0000` entries solely when none does. Treating
+`0x0000` as a match lets every interface of a shared-identity device through.
+
+If more than one interface still matches, a host MUST refuse rather than pick
+one. It MUST NOT rely on the serial number to break the tie: `iSerialNumber`
+is a **device** descriptor, so every interface of one device reports the same
+string. A serial selects which device, never which interface on it.
 
 ## 13. UART parameters
 

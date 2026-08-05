@@ -57,7 +57,13 @@ mean the device already reset.
 
 USB uses a vendor-page HID interface and needs no custom driver. The tool
 selects on VID:PID **plus** HID usage page `0xFF00` usage `0x01`, so a device
-whose bootloader shares its application's VID:PID is still found unambiguously.
+whose bootloader shares its application's VID:PID is still found unambiguously
+— verified against a production dongle running its application and a
+bootloader on the same `0C45:FEFE`, ten HID interfaces between them.
+
+`--serial` chooses between *devices*; it cannot choose between interfaces on
+one device, because every interface reports the same serial. If more than one
+interface still matches, the tool refuses rather than guessing.
 
 Linux users may need a udev rule for the hidraw node:
 
