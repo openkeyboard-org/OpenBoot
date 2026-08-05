@@ -1,0 +1,4 @@
+# Witness images are built on demand; they are outputs, not sources.
+*.bin
+*.elf
+*.ld

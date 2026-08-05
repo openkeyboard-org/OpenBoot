@@ -16,12 +16,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHIPS = {
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
                   boot=f"{ROOT}/firmware/build/ch572-uart/openboot-ch572-uart.bin",
-                  slot_b=0x1F000, cap=0x1C000),
+                  slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
     "ch592": dict(serial="CEBD8F0653EF", port="/dev/ttyACM0",
                   boot=f"{ROOT}/firmware/build/ch592-uart+bench-ch592/openboot-ch592-uart.bin",
-                  slot_b=0x39000, cap=0x36000),
+                  slot_b=0x39000, cap=0x36000, bootreq=0x200067F0),
 }
-CNT_A, CNT_B = 0x20002000, 0x20002100
 fails = []
 
 def run(cmd, t=90):
@@ -146,10 +145,23 @@ def power_cycle(cfg, off=0.6, settle=2.0):
 MARK_A, MARK_B = (0x20002000, 0xAAAA0001), (0x20002100, 0xBBBB0002)
 
 
-def app_is_running(cfg):
-    """True when the bootloader does NOT answer. Pure UART - no debug probe,
-    so this cannot perturb what the part is doing."""
-    return probe(cfg)[0] is None
+def app_ran(cfg):
+    """True when an application has run since the bootloader last had control.
+
+    Only meaningful straight after a POWER CUT. The magic does not survive a
+    cut intact (SRAM decays), so the boot decision sees no request and hands
+    control to the application, which re-arms it. After a reset with SRAM
+    intact - which is what closing the CDC port causes - the bootloader finds
+    the magic still armed, keeps control and clears it, and this reads False
+    however the part actually behaved.
+
+    Read over SWD, never over UART: only an application writes the boot-request
+    magic, and ob_boot_decide() clears it whenever the bootloader keeps
+    control. The obvious UART version - "does the bootloader answer a probe?" -
+    is unsound here, because opening or closing the WCH-Link CDC port resets
+    the target, so asking the question changes the answer."""
+    mc(cfg, "-A", t=30)
+    return read_word(cfg, cfg["bootreq"]) == MAGIC
 
 
 def witness(cfg):
@@ -186,8 +198,11 @@ def scenario_lifecycle(name):
 
     check("flash into slot A succeeds", flash(cfg, f"{name}-A.bin").returncode, 0)
     time.sleep(1.0)
-    check("an application is running after flash --boot", app_is_running(cfg), True)
-    check("...and it is slot A's image", witness(cfg), (True, False))
+    # Evidence here is the witness words alone, not app_ran(): the CLI closes
+    # the CDC port on exit, which resets the target, so the bootloader has
+    # already consumed the boot-request magic by the time it could be read.
+    # The witness words are consumed by nothing and say which image ran.
+    check("slot A's image ran", witness(cfg), (True, False))
 
     reboot(cfg)
     act, wr, base, _ = probe(cfg)
@@ -202,8 +217,7 @@ def scenario_lifecycle(name):
     check("flash into slot B succeeds",
           flash(cfg, f"{name}-B.bin", base=cfg["slot_b"]).returncode, 0)
     time.sleep(1.0)
-    check("an application is running", app_is_running(cfg), True)
-    check("...and it is slot B's image", witness(cfg), (False, True))
+    check("slot B's image ran", witness(cfg), (False, True))
 
     reboot(cfg)
     act, wr, base, _ = probe(cfg)
@@ -226,7 +240,6 @@ def enter_bootloader(cfg, tries=4):
     return (None, None, None, None)
 
 
-BOOTREQ = {"ch572": 0x20002FF0, "ch592": 0x200067F0}
 MAGIC = 0xB007CA11
 
 
@@ -262,12 +275,17 @@ def scenario_interrupted(name, writes, label):
           c.status(c.erase(base, 4096)), 0)
     for i in range(writes):
         c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
-    c.close()
 
+    # Cut with the port still OPEN, and read the outcome before closing it.
+    # Closing resets the target, which would run the app and re-arm the magic
+    # before the cut - leaving "was it armed afterwards?" dependent on whether
+    # the word happened to decay, which is exactly the flake this avoids.
+    # Going in, the bootloader has had control, so the magic is clear; only an
+    # application can set it, so finding it armed after the cut is proof.
     power_cycle(cfg)                      # the cut, before any COMMIT
     time.sleep(1.5)
     mc(cfg, "-A", t=30)
-    bq = read_word(cfg, BOOTREQ[name])
+    bq = read_word(cfg, cfg["bootreq"])
     wa = read_word(cfg, MARK_A[0])
     wb = read_word(cfg, MARK_B[0])
     ra, rb = slot_records(cfg)
@@ -277,6 +295,7 @@ def scenario_interrupted(name, writes, label):
     check("slot A's record is gone (it was mid-update)", ra[0] != OBR2, True)
     check("slot B's record survived intact", rb[0], OBR2)
     check("slot B still outranks", rb[1] >= 1, True)
+    c.close()
 
 
 def scenario_recovery(name):

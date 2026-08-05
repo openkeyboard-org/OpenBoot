@@ -10,8 +10,8 @@ application bootable" rests on hardware rather than on a model.
 by `make test` and needs a WCH-LinkE per part.
 
 ```sh
-./build_witness.sh 0x2000  0x20002000 0xAAAA0001 0x20002FF0 ch572-A.bin 0x20002100
-./build_witness.sh 0x1F000 0x20002100 0xBBBB0002 0x20002FF0 ch572-B.bin 0x20002000
+./build_witness.sh 0x2000  0x20002000 0xAAAA0001 0x20002100 0x20002FF0 ch572-A.bin
+./build_witness.sh 0x1F000 0x20002100 0xBBBB0002 0x20002000 0x20002FF0 ch572-B.bin
 python3 -c "import ab_bench; ab_bench.run_all('ch572')"
 ```
 
@@ -54,3 +54,15 @@ The witness images arm the boot request because SWD RAM writes do not stick
 through minichlink, so it is the only way back into the bootloader once an app
 is installed. That makes resets alternate app/bootloader, which is why
 `enter_bootloader()` power-cycles in a loop.
+
+Two consequences of the reset-on-close behaviour are worth knowing before
+changing any of this:
+
+- The acceptance test cuts power with the serial port still **open**, and
+  reads the outcome over SWD before closing it. Closing first would reset the
+  part, run the app and re-arm the magic *before* the cut, which would leave
+  the check dependent on whether that word happened to decay — an intermittent
+  failure that has nothing to do with the firmware.
+- `app_ran()` is only meaningful straight after a power cut, for the same
+  reason. The lifecycle scenario therefore uses the witness words, which
+  nothing consumes.

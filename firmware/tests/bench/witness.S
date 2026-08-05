@@ -18,8 +18,8 @@
 _start:
     li   a0, OTHER_ADDR
     sw   zero, 0(a0)
-    li   a0, MARKER_ADDR
-    li   a1, MARKER_VALUE
+    li   a0, WITNESS_ADDR
+    li   a1, WITNESS_VALUE
     sw   a1, 0(a0)
     li   a0, BOOTREQ_ADDR
     li   a1, 0xB007CA11
