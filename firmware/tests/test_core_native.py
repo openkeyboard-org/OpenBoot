@@ -1332,3 +1332,62 @@ def test_a_cut_write_leaves_a_partial_prefix(dev):
 
     assert got[:8] == bytes([0xAA] * 8), "no prefix landed; write was atomic"
     assert got[8:] != bytes([0xAA] * 8), "whole write landed despite the cut"
+
+
+# --- factory images -----------------------------------------------------
+# compose_factory.py builds the boot record offline, with no device and no
+# host tool. Nothing else proves the bytes it writes are bytes the bootloader
+# accepts, so these drive the composed image through the REAL boot decision.
+
+def test_a_blessed_factory_image_boots_with_no_host_involved(dev):
+    """The factory case: one blob written to a blank part, and it comes up
+    running the application — no `openboot bless`, no host tool, no session."""
+    import compose_factory as cf
+
+    dev.reset()
+    boot = bytes((i * 3 + 1) & 0xFF for i in range(2048))   # stand-in OpenBoot
+    app = bytes((i * 7) & 0xFF for i in range(1000))
+    cap = dev.slot_capacity(SLOT_A)
+
+    image = cf.compose_factory(boot, app, bless_capacity=cap)
+    assert len(image) == dev.slot_record_addr(SLOT_A) + RECORD_SIZE, \
+        "the record must land exactly where the bootloader reads it"
+    dev.write_flash(0, image)
+
+    assert dev.boot_select() == SLOT_A
+    assert dev.boot_decide() == 0                    # jumped rather than stayed
+    assert dev.jumped_to() == dev.slot_base(SLOT_A)
+    assert dev.record_raw(SLOT_A) == expected_record(app, generation=1)
+
+
+def test_an_unblessed_factory_image_stays_in_the_bootloader(dev):
+    """The other half of the contract: omit the record and the part is NOT
+    bootable, which is the behaviour a bring-up image wants and a production
+    one does not."""
+    import compose_factory as cf
+
+    dev.reset()
+    boot = bytes((i * 3 + 1) & 0xFF for i in range(2048))
+    app = bytes((i * 7) & 0xFF for i in range(1000))
+    dev.write_flash(0, cf.compose_factory(boot, app))
+    assert dev.boot_select() == SLOT_NONE
+    assert dev.boot_decide() == 1                    # stays
+
+
+def test_a_factory_image_is_updated_into_the_other_slot(dev):
+    """A factory part is an ordinary A/B device afterwards: its first update
+    goes to slot B and outranks the factory record."""
+    import compose_factory as cf
+
+    dev.reset()
+    app = bytes((i * 7) & 0xFF for i in range(1000))
+    cap = dev.slot_capacity(SLOT_A)
+    dev.write_flash(0, cf.compose_factory(bytes(2048), app, bless_capacity=cap))
+    assert dev.boot_select() == SLOT_A
+
+    dev.power_cycle()
+    assert full_update(dev, bytes(range(1, 65))) == SLOT_B
+    dev.power_cycle()
+    assert dev.boot_select() == SLOT_B
+    ra, rb = dev.record_raw(SLOT_A), dev.record_raw(SLOT_B)
+    assert int.from_bytes(rb[4:8], "little") > int.from_bytes(ra[4:8], "little")

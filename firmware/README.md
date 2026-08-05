@@ -145,6 +145,34 @@ pair — so the host distinguishes the bootloader by its vendor usage page
 `0xFF00` usage `0x01`, and the application must not use that pair. The
 `openboot` CLI already filters this way.
 
+## Factory image
+
+One file that programs a blank part and leaves it running the application —
+no host tool, no `openboot bless`, nothing to do on the line after the write:
+
+```sh
+make CHIP=ch592 TRANSPORT=usb APP=app-slot-a.bin factory
+```
+
+It composes the bootloader, a `0x00` pad to the app base, the application, and
+**slot A's boot record**. Write the result at flash address 0 with any
+programmer. `APP` must be the slot A build: the record describes slot A, and
+an application only runs at the base it was linked for.
+
+The record is what makes it bootable. `FACTORY_BLESS=0` leaves it out, which
+gives the older behaviour — the part comes up in the bootloader awaiting a
+`bless`. That is occasionally useful for bring-up and never what production
+wants.
+
+Blessing costs size. The record sits at the top of slot A, so the image spans
+everything below it and is mostly zeros: about 224 KiB on ch592 and 116 KiB on
+a `OB_APP_END`-clamped ch570. That is the price of one contiguous blob any
+programmer can write at address 0, and it compresses to nothing.
+
+The composed record is byte-for-byte what a COMMIT would have written, so a
+factory part is an ordinary A/B device from its first power-on: it reports
+slot A active, and its first update goes to slot B like any other.
+
 ## Flash the bootloader
 
 Use either SWD through a WCH-LinkE or the chip's mask-ROM ISP:
