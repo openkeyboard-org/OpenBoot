@@ -82,9 +82,22 @@ static uint32_t ob_app_crc32(const void *data, uint32_t len)
     return ~crc;
 }
 
-int openboot_record_valid(const ob_boot_record_t *rec)
+int openboot_record_valid(const void *rec_bytes)
 {
+    /* Copy byte-wise into an aligned record before reading any field: the
+     * header invites arbitrary buffers (an update payload is often only
+     * byte-aligned), and dereferencing uint32_t members through such a
+     * pointer is undefined - a hard fault on cores that trap misaligned
+     * loads. The CRC below would tolerate any alignment; the field reads
+     * are what need the copy. */
+    ob_boot_record_t aligned;
+    const ob_boot_record_t *rec = &aligned;
+    const uint8_t *src = (const uint8_t *)rec_bytes;
+    uint8_t *dst = (uint8_t *)&aligned;
     uint32_t i;
+
+    for (i = 0; i < sizeof aligned; i++)
+        dst[i] = src[i];
 
     /* The bootloader's own rule (boot_decision.c ob_record_load), applied
      * field for field: a record the bootloader would refuse to boot must

@@ -22,18 +22,26 @@ APP_SLOT_CAPACITY = 0x1D000 - 4096
 @pytest.fixture(scope="module")
 def companion():
     lib = ctypes.CDLL(str(SO))
-    lib.openboot_record_valid.argtypes = [ctypes.c_char_p]
+    lib.openboot_record_valid.argtypes = [ctypes.c_void_p]
     lib.openboot_record_valid.restype = ctypes.c_int
     return lib
 
 
 def valid(companion, rec: bytes) -> bool:
     assert len(rec) == OB_BOOT_RECORD_SIZE
-    # Copied into a ctypes buffer rather than passed as raw bytes: the C side
-    # reads uint32_t fields, and a Python bytes object's data is not
-    # guaranteed aligned. malloc-backed buffers are.
     buf = ctypes.create_string_buffer(rec, len(rec))
-    return companion.openboot_record_valid(buf) != 0
+    return companion.openboot_record_valid(ctypes.addressof(buf)) != 0
+
+
+def test_any_alignment_is_accepted(companion, committed_record):
+    """The header promises byte-pointer semantics — an update payload is often
+    only byte-aligned. Called through a deliberately misaligned pointer; the
+    answer must not change. On x86 this DOCUMENTS the contract rather than
+    enforces it (misaligned loads do not fault here) — the enforcement is the
+    aligned copy inside the function, which review owns."""
+    raw = ctypes.create_string_buffer(b"\x00" + committed_record,
+                                      1 + len(committed_record))
+    assert companion.openboot_record_valid(ctypes.addressof(raw) + 1) != 0
 
 
 @pytest.fixture()

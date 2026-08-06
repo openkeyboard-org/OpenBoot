@@ -35,13 +35,16 @@ extern "C" {
 int openboot_get_record(ob_boot_record_t *out);
 
 /*
- * The validity rule alone, for a record obtained some other way (the other
- * slot's, or one carried in an update payload). Nonzero = valid by the
- * bootloader's definition, except the slot-capacity bound, which needs a
- * slot: img_len is checked against THIS build's slot capacity
- * (OPENBOOT_SLOT_SIZE - 4096).
+ * The validity rule alone, for OB_BOOT_RECORD_SIZE (32) bytes obtained some
+ * other way — the other slot's record, or one carried in an update payload.
+ * Takes a byte pointer of ANY alignment, which is why it is not typed
+ * ob_boot_record_t*: payload buffers are often byte-aligned, and the fields
+ * are read via an internal aligned copy rather than through the caller's
+ * pointer. Nonzero = valid by the bootloader's definition, except the
+ * slot-capacity bound, which needs a slot: img_len is checked against THIS
+ * build's slot capacity (OPENBOOT_SLOT_SIZE - 4096).
  */
-int openboot_record_valid(const ob_boot_record_t *rec);
+int openboot_record_valid(const void *rec_bytes);
 
 /*
  * Request a bootloader (IAP) session: writes OB_BOOTREQ_MAGIC to the
