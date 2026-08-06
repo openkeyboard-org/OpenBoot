@@ -52,6 +52,7 @@ DEPS = CORE_SRC + HOST_SRC + [
     FW / "app" / "openboot_app.c",
     FW / "app" / "openboot_app.h",
     FW / "tests" / "app_host" / "CH572SFR.h",
+    FW / "tests" / "app_host" / "ISP572.h",
     FW / "tests" / "app_host" / "ob_app_host.c",
 ]
 
@@ -96,7 +97,10 @@ def build(cc=None):
 
 
 def ensure_built(cc=None):
-    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES]
+    # ob_app.so included: freshness gated only on the family libraries would
+    # skip build() on a checkout where those exist from before the companion
+    # library did, and the companion tests then load a missing artifact.
+    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"]
     if all(so.exists() for so in sos):
         newest_src = max(p.stat().st_mtime for p in DEPS)
         if min(so.stat().st_mtime for so in sos) > newest_src:
@@ -106,5 +110,5 @@ def ensure_built(cc=None):
 
 if __name__ == "__main__":
     build()
-    print(f"built {', '.join(f'ob_{f}.so' for f in FAMILIES)} in {OUT}")
+    print(f"built {', '.join(f'ob_{f}.so' for f in FAMILIES)}, ob_app.so in {OUT}")
     sys.exit(0)

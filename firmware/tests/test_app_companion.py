@@ -29,7 +29,11 @@ def companion():
 
 def valid(companion, rec: bytes) -> bool:
     assert len(rec) == OB_BOOT_RECORD_SIZE
-    return companion.openboot_record_valid(rec) != 0
+    # Copied into a ctypes buffer rather than passed as raw bytes: the C side
+    # reads uint32_t fields, and a Python bytes object's data is not
+    # guaranteed aligned. malloc-backed buffers are.
+    buf = ctypes.create_string_buffer(rec, len(rec))
+    return companion.openboot_record_valid(buf) != 0
 
 
 @pytest.fixture()
