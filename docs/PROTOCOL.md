@@ -422,8 +422,14 @@ Attestation path:
   out-of-band (e.g. via SWD) without rewriting it.
 
 On match the device writes the write slot's boot record (section 8) and
-answers `[OB_OK]`; a record storage failure is `E_FLASH`. On mismatch **no
-record is written** — the device never converts an unverified image into a
+answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-ROM case
+shares that status: a stored generation never reaches `0xFFFFFFFF` (the value
+`ob_next_generation` saturates at, which the other slot could then never
+outrank), so a COMMIT that would need it is refused with `E_FLASH`, detail
+`0x00` — distinguishable because no ROM failure carries detail 0. Unreachable
+by wear (~2^32 commits against a flash endurance of ~10^4..10^5 cycles); a
+device can get there only via a hand-crafted record claiming the ceiling. On
+mismatch **no record is written** — the device never converts an unverified image into a
 bootable one, and a previously invalidated record stays invalid.
 
 A successful COMMIT is what makes the written slot bootable, so it is also

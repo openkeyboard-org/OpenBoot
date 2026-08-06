@@ -1400,6 +1400,46 @@ def test_a_cut_write_leaves_a_partial_prefix(dev):
     assert got[8:] != bytes([0xAA] * 8), "whole write landed despite the cut"
 
 
+def test_the_last_usable_generation_is_the_ceiling_minus_one(dev):
+    """Generations 1..0xFFFFFFFE are storable; a commit that would need
+    0xFFFFFFFF is refused before any flash is touched.
+
+    Storing the ceiling would be a silent brick of the update path:
+    ob_next_generation() saturates there, so the OTHER slot would forever
+    store the same value and ob_boot_select() would resolve the tie by slot
+    position — the new image committed, attested, and never booted. The
+    committed_gen floor could also wrap the ceiling to 0, a record
+    ob_record_load() rejects. Unreachable by wear (~2^32 commits against
+    ~10^4..10^5 erase cycles); reachable by a hand-crafted record, which is
+    what these plant."""
+    image = bytes(range(1, 65))
+
+    # One below the danger zone: the next generation is 0xFFFFFFFE, storable.
+    dev.reset()
+    place_slot(dev, SLOT_A, image, 0xFFFFFFFD)
+    dev.power_cycle()
+    slot, base, _cap = write_target(dev)
+    assert slot == SLOT_B
+    dev.write_flash(base, image)                  # stage the write slot (bless)
+    commit(dev, image, 1)
+    assert dev.record_raw(slot) == expected_record(image, generation=0xFFFFFFFE)
+
+    # At the edge: the next generation would be the ceiling. Refused, with
+    # nothing written — the write slot's record block still reads erased.
+    dev.reset()
+    place_slot(dev, SLOT_A, image, 0xFFFFFFFE)
+    dev.power_cycle()
+    slot, base, _cap = write_target(dev)
+    assert slot == SLOT_B
+    dev.write_flash(base, image)
+    before = dev.op_total()
+    cmd_err(dev, CMD_COMMIT, 1, u32(len(image)) + u32(zlib.crc32(image)),
+            E_FLASH, 0)
+    assert dev.op_total() == before, "the refused COMMIT touched flash"
+    assert dev.record_raw(slot) == dev.erased(dev.slot_record_addr(slot),
+                                              RECORD_SIZE)
+
+
 # --- factory images -----------------------------------------------------
 # compose_factory.py builds the boot record offline, with no device and no
 # host tool. Nothing else proves the bytes it writes are bytes the bootloader
