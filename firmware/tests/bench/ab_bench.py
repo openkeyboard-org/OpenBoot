@@ -37,8 +37,23 @@ def check(label, got, want):
     return ok
 
 def factory(cfg):
-    """Whole-chip erase + bootloader, so every scenario starts identical."""
+    """Whole-chip erase + bootloader, so every scenario starts identical.
+
+    The write is read back and compared. minichlink ignores the return values
+    of its CH5xx erase/write calls, so a zero exit status is NOT evidence the
+    image landed (the firmware Makefile's flash target documents the same
+    rule) - and a factory() that silently did nothing once cost a debugging
+    session that chased HELLO timeouts on a chip with no bootloader in it."""
+    import tempfile
+    boot = open(cfg["boot"], "rb").read()
     mc(cfg, "-E"); mc(cfg, "-w", cfg["boot"], "0x0")
+    with tempfile.NamedTemporaryFile(suffix=".bin") as rb:
+        mc(cfg, "-r", rb.name, "0x0", str(len(boot)))
+        got = open(rb.name, "rb").read()
+    if got != boot:
+        raise RuntimeError(
+            f"factory(): bootloader readback mismatch ({len(got)} B read); "
+            "minichlink reported success for a write that did not land")
     power_cycle(cfg)
 
 def reboot(cfg):
@@ -244,6 +259,10 @@ MAGIC = 0xB007CA11
 
 
 def scenario_interrupted(name, writes, label):
+    # writes=None means "the whole image": derived from the image length so
+    # the label stays true as the witness grows. It already lied once - the
+    # image is 42 bytes and the old hardcoded 2 writes covered 32 of them, so
+    # the "whole image, before COMMIT" cut had never actually been run.
     """The acceptance test: begin an update into the inactive slot, cut power
     part-way, and require the device to come back up RUNNING the previous
     application with no host involvement.
@@ -268,13 +287,19 @@ def scenario_interrupted(name, writes, label):
         print(f"  SKIP: need B active / A target, got {act}/{wr}")
         return
     img = open(f"{HERE}/{name}-A.bin", "rb").read()
+    if writes is None:
+        writes = (len(img) + 15) // 16
 
     c = Obp(cfg["port"])
     c.hello()
     check("ERASE accepted (also invalidates slot A's record)",
           c.status(c.erase(base, 4096)), 0)
     for i in range(writes):
-        c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
+        r = c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
+        # Setup, not a property under test: a failed write means the cut lands
+        # in a different state than the label claims, so abort rather than
+        # record a PASS/FAIL about the wrong scenario.
+        assert c.status(r) == 0, f"setup WRITE {i} failed: status {c.status(r)}"
 
     # Cut with the port still OPEN, and read the outcome before closing it.
     # Closing resets the target, which would run the app and re-arm the magic
@@ -323,7 +348,7 @@ def run_all(name):
     scenario_lifecycle(name)
     scenario_interrupted(name, 0, "after ERASE only")
     scenario_interrupted(name, 1, "after ERASE + 1 write")
-    scenario_interrupted(name, 2, "after ERASE + the whole image, before COMMIT")
+    scenario_interrupted(name, None, "after ERASE + the whole image, before COMMIT")
     scenario_recovery(name)
     print(f"\n>>> {name}: " + (f"{len(fails)} FAILURES: {fails}" if fails else "ALL CHECKS PASSED"))
     return fails
