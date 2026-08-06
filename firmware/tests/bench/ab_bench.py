@@ -46,7 +46,8 @@ def factory(cfg):
     session that chased HELLO timeouts on a chip with no bootloader in it."""
     import tempfile
     boot = open(cfg["boot"], "rb").read()
-    mc(cfg, "-E"); mc(cfg, "-w", cfg["boot"], "0x0")
+    mc(cfg, "-E")
+    mc(cfg, "-w", cfg["boot"], "0x0")
     with tempfile.NamedTemporaryFile(suffix=".bin") as rb:
         mc(cfg, "-r", rb.name, "0x0", str(len(boot)))
         got = open(rb.name, "rb").read()
@@ -136,7 +137,8 @@ class Obp:
 
     def hello(self):
         r = self.xfer(0x01, b"OBP1" + bytes([0, 2]))
-        assert self.status(r) == 0, f"HELLO status {self.status(r)}"
+        if self.status(r) != 0:
+            raise RuntimeError(f"HELLO status {self.status(r)}")
         return r[4:]
 
     def erase(self, addr, length):
@@ -291,36 +293,43 @@ def scenario_interrupted(name, writes, label):
         writes = (len(img) + 15) // 16
 
     c = Obp(cfg["port"])
-    c.hello()
-    check("ERASE accepted (also invalidates slot A's record)",
-          c.status(c.erase(base, 4096)), 0)
-    for i in range(writes):
-        r = c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
-        # Setup, not a property under test: a failed write means the cut lands
-        # in a different state than the label claims, so abort rather than
-        # record a PASS/FAIL about the wrong scenario.
-        assert c.status(r) == 0, f"setup WRITE {i} failed: status {c.status(r)}"
+    try:
+        c.hello()
+        check("ERASE accepted (also invalidates slot A's record)",
+              c.status(c.erase(base, 4096)), 0)
+        for i in range(writes):
+            r = c.write(base + i * 16, img[i * 16:i * 16 + 16].ljust(16, b"\xFF"))
+            # Setup, not a property under test: a failed write means the cut
+            # lands in a different state than the label claims, so abort
+            # rather than record a PASS/FAIL about the wrong scenario. A
+            # raise, not an assert: asserts vanish under python -O, and the
+            # try/finally guarantees the port closes on this path - left
+            # open, it would wedge every later scenario in this process.
+            if c.status(r) != 0:
+                raise RuntimeError(f"setup WRITE {i} failed: status {c.status(r)}")
 
-    # Cut with the port still OPEN, and read the outcome before closing it.
-    # Closing resets the target, which would run the app and re-arm the magic
-    # before the cut - leaving "was it armed afterwards?" dependent on whether
-    # the word happened to decay, which is exactly the flake this avoids.
-    # Going in, the bootloader has had control, so the magic is clear; only an
-    # application can set it, so finding it armed after the cut is proof.
-    power_cycle(cfg)                      # the cut, before any COMMIT
-    time.sleep(1.5)
-    mc(cfg, "-A", t=30)
-    bq = read_word(cfg, cfg["bootreq"])
-    wa = read_word(cfg, MARK_A[0])
-    wb = read_word(cfg, MARK_B[0])
-    ra, rb = slot_records(cfg)
+        # Cut with the port still OPEN, and read the outcome before closing
+        # it. Closing resets the target, which would run the app and re-arm
+        # the magic before the cut - leaving "was it armed afterwards?"
+        # dependent on whether the word happened to decay, which is exactly
+        # the flake this avoids. Going in, the bootloader has had control, so
+        # the magic is clear; only an application can set it, so finding it
+        # armed after the cut is proof.
+        power_cycle(cfg)                  # the cut, before any COMMIT
+        time.sleep(1.5)
+        mc(cfg, "-A", t=30)
+        bq = read_word(cfg, cfg["bootreq"])
+        wa = read_word(cfg, MARK_A[0])
+        wb = read_word(cfg, MARK_B[0])
+        ra, rb = slot_records(cfg)
 
-    check("an application ran unaided after the cut", bq, MAGIC)
-    check("the image that ran is slot B's", (wa, wb), (0, MARK_B[1]))
-    check("slot A's record is gone (it was mid-update)", ra[0] != OBR2, True)
-    check("slot B's record survived intact", rb[0], OBR2)
-    check("slot B still outranks", rb[1] >= 1, True)
-    c.close()
+        check("an application ran unaided after the cut", bq, MAGIC)
+        check("the image that ran is slot B's", (wa, wb), (0, MARK_B[1]))
+        check("slot A's record is gone (it was mid-update)", ra[0] != OBR2, True)
+        check("slot B's record survived intact", rb[0], OBR2)
+        check("slot B still outranks", rb[1] >= 1, True)
+    finally:
+        c.close()
 
 
 def scenario_recovery(name):
