@@ -18,15 +18,15 @@ import pytest
 FW = Path(__file__).resolve().parent.parent
 
 
-def gen_config(chip: str, board: str) -> str:
+def gen_config(chip: str, board: str, transport: str = "usb") -> str:
     # Mirrors build_dir in firmware/Makefile: only a NON-default board gets a
     # +<board> suffix, so the default keeps the documented build/<chip>-<tr>
     # path. Getting this wrong just fails to find a target, loudly.
     suffix = "" if board.startswith("generic-") else f"+{board}"
-    cfg_rel = f"build/{chip}-usb{suffix}/openboot_config.h"
+    cfg_rel = f"build/{chip}-{transport}{suffix}/openboot_config.h"
     subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
-         f"CHIP={chip}", "TRANSPORT=usb", f"BOARD={board}", cfg_rel],
+         f"CHIP={chip}", f"TRANSPORT={transport}", f"BOARD={board}", cfg_rel],
         check=True, capture_output=True, text=True)
     return (FW / cfg_rel).read_text()
 
@@ -129,3 +129,18 @@ def test_product_boards_define_no_strap(chip, board):
     """Strap policy: product boards must not define OB_BOOT_PIN_MASK
     (board-policy's nm-based gate only checks the default boards)."""
     assert "OB_BOOT_PIN_MASK" not in gen_config(chip, board)
+
+
+def test_opencontroller_board_lands_its_knobs():
+    """The keyboard module board is UART-transport with the PB12/PB13 remap;
+    a regression in the board file or the Makefile include ordering would
+    build a bootloader listening on the wrong pins (PA8/PA9) and brick the
+    module's only wired update path."""
+    cfg = gen_config("ch592", "opencontroller-ch592", transport="uart")
+    assert "#define OB_TRANSPORT_ID OB_TRANSPORT_ID_UART\n" in cfg
+    assert "#define OB_UART1_REMAP 1\n" in cfg
+    assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
+    assert "#define OB_IDLE_TIMEOUT_MS 10000\n" in cfg
+    # No OB_APP_END clamp: the module's bond lives in DataFlash, so the full
+    # app region stays available.
+    assert "#define OB_FLASH_APP_END 0x00070000\n" in cfg
