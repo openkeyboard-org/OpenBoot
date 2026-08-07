@@ -26,12 +26,6 @@ fails = []
 def run(cmd, t=90):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=t)
 
-# Actions minichlink recognises at argv[1] to skip programmer startup. It reads
-# argv[1] and nothing else (minichlink.c: skip_startup), so an option before the
-# action silently disables that.
-_SKIP_STARTUP_ACTIONS = ("-k", "-e", "-A", "-u", "-h", "-t", "-f", "-X")
-
-
 def mc(cfg, *args, t=90, check_status=True):
     """Run minichlink against one probe, action FIRST.
 
@@ -58,13 +52,18 @@ def mc(cfg, *args, t=90, check_status=True):
     never reached the chip, so the known "no target" strings are treated as
     failures too.
     """
-    action, rest = (args[0], list(args[1:])) if args else (None, [])
+    if not args:
+        # Would put an option at argv[1] and break the very invariant this
+        # function exists to hold. No caller does it; fail rather than emit a
+        # command that quietly disables skip_startup.
+        raise ValueError("mc() needs a minichlink action; see the docstring")
+    action, rest = args[0], list(args[1:])
     if action in ("-t", "-3"):
         # Power control must not need a live chip: -k skips programmer init so
         # the rail can be cut and restored on a part that is not responding,
         # which is the state a power-cut test creates.
         action = "-k" + action.lstrip("-")
-    cmd = [MC, action, *rest, "-l", cfg["serial"]] if action else [MC, "-l", cfg["serial"]]
+    cmd = [MC, action, *rest, "-l", cfg["serial"]]
     r = run(cmd, t)
     if check_status:
         blob = f"{r.stdout}\n{r.stderr}"
