@@ -121,6 +121,9 @@ line.
 | `OB_USB_VID` / `OB_USB_PID` | `0x1209` / `0x0001` | USB identity; set both or neither |
 
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
+Shipped product boards: `opendongle-ch570` and `opendongle-ch592` (USB
+transport) and `opencontroller-ch592` (the keyboard wireless module — UART
+transport on the PB12/PB13 remap, no USB).
 
 `OB_APP_END` fences OBP off from flash the board reserves for something else —
 OpenDongle's CH570 keeps its RF bond at `0x3A000`, just below the boot-record
