@@ -26,8 +26,57 @@ fails = []
 def run(cmd, t=90):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=t)
 
-def mc(cfg, *args, t=90):
-    return run([MC, "-l", cfg["serial"], *args], t)
+def mc(cfg, *args, t=90, check_status=True):
+    """Run minichlink against one probe, action FIRST.
+
+    Ordering is not cosmetic. minichlink derives skip_startup from argv[1]
+    alone, so `-l <serial> -A` runs SetupInterface where `-A -l <serial>` does
+    not - and LESetupInterface asserts ndmreset (pgm-wch-linke.c), i.e. it
+    RESETS the target. For -A and -t that is precisely what the flag is asking
+    to avoid, and this file's own README documents the action-first form
+    (firmware/README.md: `minichlink -kt -l <probe-serial>`).
+
+    Scope, so this is not oversold: -E/-w/-r are absent from argv[1]'s skip
+    list in EITHER ordering, so they always run SetupInterface and this change
+    does not make a read non-perturbing. It restores the intended behaviour for
+    -A and -t only.
+
+    -l trails the action's own operands: -w takes <file> <addr> and -r takes
+    <file> <addr> <len> positionally, so inserting "-l <serial>" between them
+    would hand "-l" to -w as a filename.
+
+    check_status: minichlink's exit status was previously discarded here, which
+    is how a power cut that never happened could still let a scenario report
+    PASS - the worst shape of failure for an acceptance test. A zero exit is
+    also not sufficient on its own: minichlink returns 0 on paths where it
+    never reached the chip, so the known "no target" strings are treated as
+    failures too.
+    """
+    if not args:
+        # Would put an option at argv[1] and break the very invariant this
+        # function exists to hold. No caller does it; fail rather than emit a
+        # command that quietly disables skip_startup.
+        raise ValueError("mc() needs a minichlink action; see the docstring")
+    action, rest = args[0], list(args[1:])
+    if action in ("-t", "-3"):
+        # Power control must not need a live chip: -k skips programmer init so
+        # the rail can be cut and restored on a part that is not responding,
+        # which is the state a power-cut test creates.
+        action = "-k" + action.lstrip("-")
+    cmd = [MC, action, *rest, "-l", cfg["serial"]]
+    r = run(cmd, t)
+    if check_status:
+        blob = f"{r.stdout}\n{r.stderr}"
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"{' '.join(cmd)} -> exit {r.returncode}\n{blob.strip()}")
+        for marker in ("Could not setup interface", "Chip Type unknown",
+                       "link error", "marchid : ffffffff"):
+            if marker in blob:
+                raise RuntimeError(
+                    f"{' '.join(cmd)} exited 0 but never reached the chip "
+                    f"({marker!r})\n{blob.strip()}")
+    return r
 
 def check(label, got, want):
     ok = got == want
