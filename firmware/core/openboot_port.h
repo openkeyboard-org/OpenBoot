@@ -3,9 +3,10 @@
  *
  * A port is firmware/ports/<family>/port_<family>.{h,c}. The port header is
  * included via the build system (-include or PORT_HEADER define); it must
- * provide the constants checked below and the hook implementations live in
- * the port .c file. The core includes NO SDK headers — SFR access is
- * confined to ports and transports.
+ * provide the constants checked below. Shared CH5xx hooks live in
+ * ports/port_ch5xx.c and family-specific hooks in the family port .c file.
+ * The core includes NO SDK headers — SFR access is confined to ports and
+ * transports.
  */
 #ifndef OPENBOOT_PORT_H
 #define OPENBOOT_PORT_H
@@ -95,18 +96,15 @@
 #error "slot B must end inside the app region"
 #endif
 
-/* Erased-block bitmap: 1 bit per erase block of the largest app region
- * (CH592: 440 KiB / 4 KiB = 110 blocks). */
-#define OB_BITMAP_BYTES 16
+/* Erased-block bitmap: one bit per block in the one slot this session may
+ * mutate. Deriving it from slot geometry avoids a chip-specific maximum. */
+#define OB_BITMAP_BYTES \
+    ((OB_SLOT_SIZE / OB_FLASH_ERASE_BLOCK + 7u) / 8u)
 #if OB_FLASH_APP_END <= OB_FLASH_APP_START
 #error "application region must be non-empty"
 #endif
-#if (((OB_FLASH_APP_END - OB_FLASH_APP_START + OB_FLASH_ERASE_BLOCK - 1u) / \
-      OB_FLASH_ERASE_BLOCK) > (OB_BITMAP_BYTES * 8u))
-#error "application erase-block count exceeds OB_BITMAP_BYTES capacity"
-#endif
 
-/* ---- hooks a port must implement (port_<family>.c) ------------------- */
+/* ---- hooks supplied by the shared and family port sources ------------ */
 
 /* Clock / pin bring-up. UART builds keep the reset clock. USB builds use
  * the family PLL setting. Called once before transport init. */

@@ -237,7 +237,7 @@ def emit_golden(c: dict) -> str:
     # block of its slot — giving 221184 (0x36000).
     hello_resp = (
         bytes([ok, c["OB_PROTO_MAJOR"], c["OB_PROTO_MINOR"], 9])
-        + u16(0x000A)  # bl_version v0.10
+        + u16(0x000B)  # bl_version v0.11
         + bytes([c["OB_FAMILY_CH592"], c["OB_TRANSPORT_ID_USB"]])
         + u32(c["OB_APP_BASE"])
         + u32(0x00070000)  # app region (CH592)

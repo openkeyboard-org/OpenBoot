@@ -52,7 +52,6 @@ DEPS = CORE_SRC + HOST_SRC + [
     FW / "app" / "openboot_app.c",
     FW / "app" / "openboot_app.h",
     FW / "tests" / "app_host" / "CH572SFR.h",
-    FW / "tests" / "app_host" / "ISP572.h",
     FW / "tests" / "app_host" / "ob_app_host.c",
 ]
 

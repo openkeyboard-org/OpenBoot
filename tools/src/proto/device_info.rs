@@ -294,7 +294,7 @@ mod tests {
 
     fn valid_payload() -> Vec<u8> {
         let mut p = vec![0x00, OB_PROTO_MAJOR, OB_PROTO_MINOR, 9];
-        p.extend_from_slice(&0x000Au16.to_le_bytes());
+        p.extend_from_slice(&0x000Bu16.to_le_bytes());
         p.push(OB_FAMILY_CH592);
         p.push(OB_TRANSPORT_ID_USB);
         p.extend_from_slice(&0x2000u32.to_le_bytes());

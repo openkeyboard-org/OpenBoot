@@ -15,19 +15,11 @@
 #if defined(OPENBOOT_CHIP_CH57X)
 
 #include "CH572SFR.h"
-#include "ISP572.h"
 #define OB_APP_BOOTREQ_ADDR  OB_BOOTREQ_ADDR_CH57X
 
 #elif defined(OPENBOOT_CHIP_CH59X)
 
 #include "CH592SFR.h"
-/* ISP592.h needs RV_STATIC_INLINE (normally from core_riscv.h); its
- * EEPROM_ERASE inline must never be called (hangs CH592A on partial
- * lengths) */
-#ifndef RV_STATIC_INLINE
-#define RV_STATIC_INLINE static inline
-#endif
-#include "ISP592.h"
 #define OB_APP_BOOTREQ_ADDR  OB_BOOTREQ_ADDR_CH59X
 
 #else

@@ -213,7 +213,7 @@ def test_golden_hello(dev):
     assert pl[0] == OK
     assert (pl[1], pl[2]) == (OB_PROTO_MAJOR, OB_PROTO_MINOR)
     assert pl[3] == 9                                     # chip_rev
-    assert int.from_bytes(pl[4:6], "little") == 0x000A    # bl_version v0.10
+    assert int.from_bytes(pl[4:6], "little") == 0x000B    # bl_version v0.11
     assert pl[6] == dev.family_id
     assert pl[7] == 1                                     # transport USB
     assert int.from_bytes(pl[8:12], "little") == APP_START
@@ -1312,6 +1312,20 @@ def test_a_newer_record_with_a_broken_image_falls_back(dev):
     dev.set_record_raw(expected_record(good, 2), SLOT_B)
 
     assert dev.boot_select() == SLOT_A
+    assert dev.highest_generation() == 2
+
+
+def test_commit_outranks_a_newer_record_with_a_broken_image(dev):
+    """Selection may fall back to an older image, but COMMIT must still
+    outrank every valid record generation observed before mutation."""
+    old = bytes(range(1, 65))
+    new = bytes(range(65, 129))
+    place_slot(dev, SLOT_A, old, 4)
+    dev.set_record_raw(expected_record(new, 9), SLOT_B)  # image stays erased
+
+    dev.power_cycle()
+    assert full_update(dev, new) == SLOT_B
+    assert dev.record_raw(SLOT_B) == expected_record(new, generation=10)
 
 
 def test_no_valid_slot_selects_none(dev):
@@ -1358,14 +1372,14 @@ def test_a_corrupt_record_never_validates_its_slot(dev):
         assert dev.boot_select() == SLOT_NONE, f"accepted a record with {name}"
 
 
-def test_next_generation_outranks_every_valid_record(dev):
-    assert dev.next_generation() == 1
+def test_selection_reports_the_highest_valid_record_generation(dev):
+    assert dev.highest_generation() == 0
 
     place_slot(dev, SLOT_A, bytes(range(1, 65)), 7)
-    assert dev.next_generation() == 8
+    assert dev.highest_generation() == 7
 
     place_slot(dev, SLOT_B, bytes(range(1, 65)), 11)
-    assert dev.next_generation() == 12
+    assert dev.highest_generation() == 11
 
 
 # --- the simulator's flash model itself ----------------------------------
@@ -1405,10 +1419,10 @@ def test_the_last_usable_generation_is_the_ceiling_minus_one(dev):
     0xFFFFFFFF is refused before any flash is touched.
 
     Storing the ceiling would be a silent brick of the update path:
-    ob_next_generation() saturates there, so the OTHER slot would forever
-    store the same value and ob_boot_select() would resolve the tie by slot
+    A saturated generation cannot be outranked, so the OTHER slot would
+    otherwise store the same value and ob_boot_select() would resolve the tie by slot
     position — the new image committed, attested, and never booted. The
-    committed_gen floor could also wrap the ceiling to 0, a record
+    cached-generation increment could also wrap the ceiling to 0, a record
     ob_record_load() rejects. Unreachable by wear (~2^32 commits against
     ~10^4..10^5 erase cycles); reachable by a hand-crafted record, which is
     what these plant."""

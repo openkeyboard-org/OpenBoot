@@ -5,7 +5,7 @@
 
 uint32_t ob_slot_base(uint32_t slot)
 {
-    return slot == OB_SLOT_B ? OB_SLOT_B_BASE : OB_SLOT_A_BASE;
+    return OB_SLOT_A_BASE + slot * OB_SLOT_SIZE;
 }
 
 /* Build-time image room in a slot: everything below its final erase block,
@@ -40,12 +40,13 @@ uint32_t ob_slot_capacity(uint32_t slot)
 
 int ob_record_load(uint32_t slot, ob_boot_record_t *rec)
 {
-    uint32_t addr = ob_slot_record_addr(slot);
+    uint32_t addr;
     uint32_t i;
     uint32_t *dst = (uint32_t *)rec;
 
     if (slot >= OB_SLOT_COUNT)
         return 0;
+    addr = ob_slot_record_addr(slot);
     /* Reject a slot the silicon cannot hold BEFORE reading it: its record
      * address is a build constant and on a smaller die lands beyond physical
      * flash, so the read itself would be out of bounds. */
@@ -105,40 +106,41 @@ uint32_t ob_record_store(uint32_t slot, ob_boot_record_t *rec)
     return ob_flash_verify(ob_slot_record_addr(slot), rec, OB_BOOT_RECORD_SIZE);
 }
 
-uint32_t ob_next_generation(void)
+static int boot_image_valid(uint32_t slot, const ob_boot_record_t *rec)
 {
-    ob_boot_record_t rec;
-    uint32_t slot, best = 0;
+    uint32_t base = ob_slot_base(slot);
 
-    for (slot = 0; slot < OB_SLOT_COUNT; slot++) {
-        if (ob_record_load(slot, &rec) && rec.generation > best)
-            best = rec.generation;
-    }
-    /* Saturate rather than wrap: returning 0 would produce a record that
-     * ob_record_load rejects, silently bricking further updates. Reaching
-     * 2^32 updates is not a real scenario; wrapping into an invalid record
-     * would be a real bug. */
-    return best == 0xFFFFFFFFu ? 0xFFFFFFFFu : best + 1u;
+#if OB_BOOT_IMAGE_CRC
+    /* Full image attestation at boot (opt-in: ~0.5 s worst case at 6.4 MHz). */
+    if (ob_xip_crc32(base, rec->img_len) != rec->img_crc32)
+        return 0;
+#else
+    (void)rec;
+#endif
+    return OB_XIP_READ32(base) != OB_ERASED_WORD;
 }
 
-uint32_t ob_boot_select(void)
+uint32_t ob_boot_select(uint32_t *highest_generation)
 {
     ob_boot_record_t rec;
-    uint32_t slot, best_gen = 0, best = OB_SLOT_NONE;
+    uint32_t slot, highest = 0, best_gen = 0, best = OB_SLOT_NONE;
 
-    /* Highest generation among slots that fully validate. A slot whose record
-     * is newer but whose image fails is skipped, not fatal: that is exactly
-     * the interrupted-update case, and the older slot must still boot. */
+    /* Load each record once. Track every valid record for the next COMMIT
+     * generation, while selecting only records whose image also validates. */
     for (slot = 0; slot < OB_SLOT_COUNT; slot++) {
         if (!ob_record_load(slot, &rec))
             continue;
+        if (rec.generation > highest)
+            highest = rec.generation;
         if (best != OB_SLOT_NONE && rec.generation <= best_gen)
             continue;
-        if (!ob_boot_app_valid(slot))
+        if (!boot_image_valid(slot, &rec))
             continue;
         best_gen = rec.generation;
         best = slot;
     }
+    if (highest_generation)
+        *highest_generation = highest;
     return best;
 }
 
@@ -166,17 +168,10 @@ void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
 int ob_boot_app_valid(uint32_t slot)
 {
     ob_boot_record_t rec;
-    uint32_t base;
 
     if (!ob_record_load(slot, &rec))
         return 0;
-    base = ob_slot_base(slot);
-#ifdef OB_BOOT_IMAGE_CRC
-    /* Full image attestation at boot (opt-in: ~0.5 s worst case at 6.4 MHz). */
-    if (ob_xip_crc32(base, rec.img_len) != rec.img_crc32)
-        return 0;
-#endif
-    return OB_XIP_READ32(base) != OB_ERASED_WORD;
+    return boot_image_valid(slot, &rec);
 }
 
 void ob_boot_decide(void)
@@ -205,7 +200,7 @@ void ob_boot_decide(void)
     if (requested)
         return;
 
-    slot = ob_boot_select();
+    slot = ob_boot_select(0);
     if (slot == OB_SLOT_NONE)
         return;
     ob_jump_app(ob_slot_base(slot));

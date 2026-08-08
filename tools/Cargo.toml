@@ -1,9 +1,9 @@
 [package]
 name = "openboot"
-version = "0.1.0"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.87"
-description = "Host tool for the OpenBoot IAP bootloader on WCH CH570/CH572/CH591/CH592 (OBP v0.1 over USB HID or UART)"
+description = "Host tool for the OpenBoot IAP bootloader on WCH CH570/CH572/CH591/CH592 (OBP v0.2 over USB HID or UART)"
 license = "Apache-2.0"
 
 [[bin]]

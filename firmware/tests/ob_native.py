@@ -128,8 +128,8 @@ class OpenBootNative:
         L.ob_slot_record_addr.restype = c_uint32
         L.ob_slot_capacity.argtypes = [c_uint32]
         L.ob_slot_capacity.restype = c_uint32
+        L.ob_boot_select.argtypes = [POINTER(c_uint32)]
         L.ob_boot_select.restype = c_uint32
-        L.ob_next_generation.restype = c_uint32
         L.host_set_fail_after.argtypes = [c_int32]
         L.host_set_fail_after.restype = None
         L.host_violations.restype = c_uint32
@@ -204,10 +204,12 @@ class OpenBootNative:
         return self._lib.ob_slot_capacity(slot)
 
     def boot_select(self) -> int:
-        return self._lib.ob_boot_select()
+        return self._lib.ob_boot_select(None)
 
-    def next_generation(self) -> int:
-        return self._lib.ob_next_generation()
+    def highest_generation(self) -> int:
+        generation = c_uint32()
+        self._lib.ob_boot_select(byref(generation))
+        return generation.value
 
     def write_flash(self, addr: int, data: bytes):
         self._lib.host_write_flash(addr, data, len(data))

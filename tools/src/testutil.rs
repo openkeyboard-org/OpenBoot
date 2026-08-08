@@ -1,11 +1,11 @@
 //! Shared test scaffolding: a scripted in-memory device plus canned
 //! responses, used by both the client and flow test modules. The mock
-//! implements `Transport` through the real `xfer_link` matcher, so
+//! uses the real `Transport::xfer` matcher, so
 //! stale-seq discarding and frame-error acceptance are exercised for
 //! real rather than simulated.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -15,14 +15,14 @@ use crate::proto::consts::{
     OB_SLOT_ID_NONE, OB_TRANSPORT_ID_USB,
 };
 use crate::proto::{self, Frame};
-use crate::transport::{xfer_link, FrameLink, Transport, TransportError};
+use crate::transport::Transport;
 
 /// One scripted device reaction: raw frames fed back for a request
 /// (empty list = timeout).
 pub(crate) type Step = Box<dyn FnMut(&Frame) -> Vec<Vec<u8>>>;
 
 /// Scripted in-memory device. Implements `Transport` through the real
-/// `xfer_link` matcher, so stale-seq discarding and frame-error
+/// default matcher, so stale-seq discarding and frame-error
 /// acceptance are exercised for real.
 pub(crate) struct MockTransport {
     pub(crate) steps: VecDeque<Step>,
@@ -48,7 +48,7 @@ impl MockTransport {
     }
 }
 
-impl FrameLink for MockTransport {
+impl Transport for MockTransport {
     fn send_frame(&mut self, frame: &[u8]) -> Result<()> {
         let f = Frame::decode(frame).expect("host sent an undecodable frame");
         self.log.push(f.clone());
@@ -63,12 +63,6 @@ impl FrameLink for MockTransport {
     fn recv_frame(&mut self, _deadline: Instant) -> Result<Option<Vec<u8>>> {
         // Empty queue = the deadline passed with nothing matching.
         Ok(self.rx.pop_front())
-    }
-}
-
-impl Transport for MockTransport {
-    fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
-        xfer_link(self, req, timeout)
     }
 }
 
@@ -94,7 +88,7 @@ pub(crate) fn info_payload(features: u32, app_end: u32) -> Vec<u8> {
 /// slot the device is willing to write is the thing under test.
 pub(crate) fn info_payload_slots(features: u32, app_end: u32, active: u8, write: u8) -> Vec<u8> {
     let mut p = vec![OB_OK, OB_PROTO_MAJOR, OB_PROTO_MINOR, 9];
-    p.extend_from_slice(&0x000Au16.to_le_bytes());
+    p.extend_from_slice(&0x000Bu16.to_le_bytes());
     p.push(OB_FAMILY_CH592);
     p.push(OB_TRANSPORT_ID_USB);
     p.extend_from_slice(&0x2000u32.to_le_bytes());

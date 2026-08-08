@@ -3,7 +3,7 @@
  * loop used by the CRC command, COMMIT's coherent paths, and the optional
  * boot-time image check. Header-static on purpose: default builds
  * instantiate exactly one copy (the boot_decision use is compiled only
- * under OB_BOOT_IMAGE_CRC). */
+ * when OB_BOOT_IMAGE_CRC is enabled). */
 #ifndef OB_XIP_H
 #define OB_XIP_H
 

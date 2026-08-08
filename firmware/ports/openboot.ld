@@ -2,13 +2,11 @@
  * OpenBoot linker script, all supported families: 8 KiB bootloader at the
  * reset vector. Derived from the proven OpenDongle stage1.ld.
  *
- * The MEMORY block and OB_BOOTREQ_ADDR come from the generated memory.ld
- * in the build directory (found via -L $(BUILD)): the Makefile owns the
- * per-chip RAM size, and the bootreq address is extracted from
- * protocol/openboot_protocol.h so a change there propagates here and
- * trips the ASSERT below rather than silently disagreeing.
+ * The MEMORY block and OB_BOOTREQ_ADDR come from generated memory.ld in the
+ * build directory. Both OB_BOOTREQ_ADDR and _eusrstack are derived directly
+ * from the family RAM geometry.
  *
- * No vector table: startup_openboot.S is vectorless (mtvec -> ob_trap).
+ * No vector table: startup_ch5xx.S is vectorless (mtvec -> ob_trap).
  * Top 16 bytes of RAM are reserved for the app->bootloader request magic
  * and must stay outside the stack.
  */
@@ -103,6 +101,4 @@ SECTIONS
 
     ASSERT(_end + __stack_size <= _eusrstack,
            "OpenBoot: less than 0x800 bytes left for the stack")
-    ASSERT(_eusrstack == OB_BOOTREQ_ADDR,
-           "OpenBoot: _eusrstack must equal the family's OB_BOOTREQ_ADDR from protocol/openboot_protocol.h")
 }

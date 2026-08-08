@@ -6,14 +6,13 @@
 //! on Windows, IOKit on macOS), so no driver installation anywhere.
 
 use std::collections::BTreeSet;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use hidapi::{HidApi, HidDevice};
 
-use super::{xfer_link, FrameLink, Transport, TransportError};
+use super::Transport;
 use crate::proto::consts::OB_MAX_FRAME;
-use crate::proto::Frame;
 
 /// pid.codes test allocation used during development.
 pub const DEFAULT_VID: u16 = 0x1209;
@@ -156,7 +155,7 @@ impl HidTransport {
     }
 }
 
-impl FrameLink for HidTransport {
+impl Transport for HidTransport {
     fn send_frame(&mut self, frame: &[u8]) -> Result<()> {
         // 0x00 report-ID prefix + frame zero-padded to one 64-byte report.
         let mut report = [0u8; 1 + OB_MAX_FRAME];
@@ -179,12 +178,6 @@ impl FrameLink for HidTransport {
             return Ok(None);
         }
         Ok(Some(buf[..n].to_vec()))
-    }
-}
-
-impl Transport for HidTransport {
-    fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
-        xfer_link(self, req, timeout)
     }
 }
 

@@ -100,9 +100,10 @@ the chip before launching the application so instruction fetches are coherent.
 
 ## Startup and memory layout
 
-Each family has a small vectorless startup file that initializes `sp` and
-`gp`, copies `.highcode` and `.data`, clears `.bss`, installs a trap parking
-loop, and calls `main`. Interrupts remain disabled.
+One small vectorless startup file serves both families. Generated constants
+select the family CSR values; the shared code initializes `sp` and `gp`, copies
+`.highcode` and `.data`, clears `.bss`, installs a trap parking loop, and calls
+`main`. Interrupts remain disabled.
 
 One linker script serves all variants. The build generates the family-specific
 RAM geometry and boot-request address. It also:
