@@ -150,4 +150,11 @@ void tr_deinit(void)
     for (i = 0; i < UART_TX_TIMEOUT_POLLS && OB_UART_TFC != 0; i++)
         ob_delay_us(OB_POLL_INTERVAL_US);
     ob_delay_us(100);   /* last byte in the shifter: one char at 115200 is ~87 us */
+
+    /* Handoff quiesce (see ob_jump_app's CONTRACT): drop the TXD pin gate
+     * and give the TX pin back as an input, so an application repurposing
+     * the pin does not fight a driver it never enabled. The register
+     * config (baud, FIFO, remap) stays — documented in app/README.md. */
+    OB_UART_IER = 0;
+    OB_UART_PINS_DEINIT();
 }

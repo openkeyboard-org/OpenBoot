@@ -126,4 +126,10 @@ static inline void sys_safe_access_disable(void)
         R16_PIN_ALTERNATE_H &= (uint16_t)~(RB_UART_TXD | RB_UART_RXD);    \
     } while (0)
 
+/* Handoff quiesce: stop driving TX (back to input, its reset state). The
+ * RX pull-up and the mapping bits are inert to a pin's next owner. */
+#define OB_UART_PINS_DEINIT() do {                                        \
+        R32_PA_DIR    &= ~OB_UART_TX_PIN;                                 \
+    } while (0)
+
 #endif /* OPENBOOT_PORT_CH57X_H */

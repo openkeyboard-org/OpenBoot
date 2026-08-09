@@ -28,10 +28,13 @@ SysTick in its reset state — stopped, count flag cleared, counter zeroed.
 it before enabling the SysTick interrupt, as vendor `SysTick_Config` does.
 `mtvec` still points at the bootloader's trap spin, so install the vector
 base before enabling anything — the same obligation as a cold boot. The
-system clock is whatever the transport build used (USB: PLL; UART: the
-6.4 MHz boot clock); set your own clock early, as on any EVT part. UART
-transports leave the UART block configured and its pins muxed per the
-board's build knobs; USB transports detach and hold the USB SIE in reset.
+system clock is part of the contract: USB builds hand over the family PLL
+clock, UART builds the 6.4 MHz boot clock unless the board's `OB_CPU_HZ`
+knob pinned a different supported frequency — either way, set your own
+clock early, as on any EVT part. UART transports leave the UART block
+configured (baud, FIFO, remap) but quiesce the pins — the TXD driver is
+gated off and the TX pin returned to an input; USB transports detach and
+hold the USB SIE in reset.
 
 Define exactly one chip family, plus the slot this image is linked for:
 

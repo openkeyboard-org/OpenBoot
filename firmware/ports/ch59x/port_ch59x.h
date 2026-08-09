@@ -110,6 +110,12 @@ static inline void sys_safe_access_disable(void)
         R16_PIN_ALTERNATE |= RB_PIN_UART1;                                \
     } while (0)
 
+/* Handoff quiesce: stop driving TX (back to input, its reset state). The
+ * RX pull-up and the remap bit are inert to a pin's next owner. */
+#define OB_UART_PINS_DEINIT() do {                                        \
+        R32_PB_DIR    &= ~OB_UART_TX_PIN;                                 \
+    } while (0)
+
 #else /* default mapping */
 
 #define OB_UART_TX_PIN  (1u << 9)   /* PA9 = bTXD1 */
@@ -125,6 +131,11 @@ static inline void sys_safe_access_disable(void)
         R32_PA_DIR    &= ~OB_UART_RX_PIN;                                 \
         R32_PIN_CONFIG2 &= ~(1u << 8);                                    \
         R16_PIN_ALTERNATE &= (uint16_t)~RB_PIN_UART1;                     \
+    } while (0)
+
+/* Handoff quiesce: stop driving TX (back to input, its reset state). */
+#define OB_UART_PINS_DEINIT() do {                                        \
+        R32_PA_DIR    &= ~OB_UART_TX_PIN;                                 \
     } while (0)
 
 #endif /* OB_UART1_REMAP */

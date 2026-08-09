@@ -163,7 +163,8 @@ uint32_t ob_uptime_ms(void);
  * count flag cleared, counter zeroed — CMP excepted, see port_ch5xx.c);
  * the trap vector still on the bootloader's trap spin until the app
  * installs its own, exactly as on a cold boot; the system clock as the
- * transport build configured it; transport hardware quiesced per
+ * build configured it (USB: the family PLL; UART: the boot clock, or the
+ * board's OB_CPU_HZ override); transport hardware quiesced per
  * tr_deinit(). Anything else the bootloader touches must either be returned
  * to reset state before the jump or documented in app/README.md. */
 void ob_jump_app(uint32_t base) __attribute__((noreturn));
