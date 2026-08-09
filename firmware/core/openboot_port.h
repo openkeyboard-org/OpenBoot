@@ -155,7 +155,18 @@ void ob_delay_us(uint32_t us);
 uint32_t ob_uptime_ms(void);
 
 /* Launch the application at `base` — the base of the slot the boot decision
- * chose, not a fixed address, because either slot may be active. */
+ * chose, not a fixed address, because either slot may be active.
+ *
+ * CONTRACT: machine state the port owes the application at entry —
+ * interrupts globally off (MIE=0) with no interrupt-controller enable or
+ * pending bit armed by the bootloader; SysTick in its reset state (stopped,
+ * count flag cleared, counter zeroed — CMP excepted, see port_ch5xx.c);
+ * the trap vector still on the bootloader's trap spin until the app
+ * installs its own, exactly as on a cold boot; the system clock as the
+ * build configured it (USB: the family PLL; UART: the boot clock, or the
+ * board's OB_CPU_HZ override); transport hardware quiesced per
+ * tr_deinit(). Anything else the bootloader touches must either be returned
+ * to reset state before the jump or documented in app/README.md. */
 void ob_jump_app(uint32_t base) __attribute__((noreturn));
 
 /* Soft-reset the chip. Where the next boot lands is not this function's

@@ -262,6 +262,7 @@ void host_reset(void)
     f26_mode = OB_HOST_F26_DEFAULT;
     sim_silicon_app_end = OB_FLASH_APP_END;   /* matching part by default */
     ob_host_bootreq = 0;
+    jumped_to = 0;               /* cross-test: statics outlive Device objects */
     ob_core_init();
 }
 
@@ -272,6 +273,7 @@ void host_power_cycle(void)
     memset(blk_dirty, 0, sizeof blk_dirty);     /* XIP coherent again */
     fail_after = -1;
     ob_host_bootreq = 0;                        /* RAM lost */
+    jumped_to = 0;
     ob_core_init();
 }
 

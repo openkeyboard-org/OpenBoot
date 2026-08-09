@@ -209,6 +209,8 @@ def power_cycle(cfg, off=0.6, settle=2.0):
 
 
 MARK_A, MARK_B = (0x20002000, 0xAAAA0001), (0x20002100, 0xBBBB0002)
+STK_MARK = 0xC5000000   # witness word at MARK+8: exactly this = SR was 0 at
+                        # entry; 0xC5000001 = some SR bit (CNTIF/SWIE) was set
 
 
 def app_ran(cfg):
@@ -269,6 +271,9 @@ def scenario_lifecycle(name):
     # already consumed the boot-request magic by the time it could be read.
     # The witness words are consumed by nothing and say which image ran.
     check("slot A's image ran", witness(cfg), (True, False))
+    # Exactly STK_MARK means the bootloader handed over a clean SysTick
+    # CNTIF (#18); low bits would carry a stale flag.
+    check("handoff SysTick flag clean (A)", read_word(cfg, MARK_A[0] + 8), STK_MARK)
 
     reboot(cfg)
     act, wr, base, _ = probe(cfg)
@@ -284,6 +289,7 @@ def scenario_lifecycle(name):
           flash(cfg, f"{name}-B.bin", base=cfg["slot_b"]).returncode, 0)
     time.sleep(1.0)
     check("slot B's image ran", witness(cfg), (False, True))
+    check("handoff SysTick flag clean (B)", read_word(cfg, MARK_B[0] + 8), STK_MARK)
 
     reboot(cfg)
     act, wr, base, _ = probe(cfg)

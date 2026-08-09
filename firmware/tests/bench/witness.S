@@ -21,6 +21,20 @@ _start:
     li   a0, WITNESS_ADDR
     li   a1, WITNESS_VALUE
     sw   a1, 0(a0)
+
+    /* Handoff regression witness (#18): the bootloader must hand over
+     * SysTick with SR fully clear (CNTIF, and SWIE which is SR[31] on
+     * CH57x). Normalize the whole register to zero/non-zero and tag it so
+     * SRAM decay cannot counterfeit a clean reading: 0xC5000000 exactly
+     * means "ran, SR was 0"; 0xC5000001 means some SR bit was set. */
+    li   a0, 0xE000F004
+    lw   a1, 0(a0)
+    snez a1, a1
+    li   a2, 0xC5000000
+    or   a1, a1, a2
+    li   a0, WITNESS_ADDR
+    sw   a1, 8(a0)
+
     li   a0, BOOTREQ_ADDR
     li   a1, 0xB007CA11
     sw   a1, 0(a0)

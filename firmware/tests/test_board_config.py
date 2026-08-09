@@ -121,6 +121,30 @@ def test_unusable_app_end_is_refused(bad):
     assert "is not usable on ch570" in result.stderr
 
 
+def test_cpu_hz_override_lands_on_uart_builds():
+    """OB_CPU_HZ pins the bootloader (and handoff) clock; the port's clock
+    init #errors on unsupported values, so here we only prove the knob
+    reaches the config header."""
+    cfg_rel = "build/ch592-uart/openboot_config.h"
+    subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch592", "TRANSPORT=uart", "OB_CPU_HZ=60000000", cfg_rel],
+        check=True, capture_output=True, text=True)
+    assert "#define OB_CPU_HZ 60000000\n" in (FW / cfg_rel).read_text()
+
+
+def test_cpu_hz_override_is_refused_on_usb_builds():
+    """USB requires the family PLL clock; the knob must not be able to
+    silently produce a bootloader whose USB cannot enumerate."""
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch592", "TRANSPORT=usb", "OB_CPU_HZ=6400000",
+         "build/ch592-usb/openboot_config.h"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "only settable on UART builds" in result.stderr
+
+
 @pytest.mark.parametrize("chip,board", [
     ("ch570", "opendongle-ch570"),
     ("ch592", "opendongle-ch592"),

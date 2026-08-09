@@ -177,6 +177,21 @@ $(foreach knob,OB_BOOT_PIN_PORT_B OB_UART1_REMAP OB_BOOT_IMAGE_CRC,\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
+# A board may pin the clock the bootloader runs at — and therefore hands to
+# the application (see ob_jump_app's CONTRACT in core/openboot_port.h).
+# UART builds only: USB needs its family PLL value to function. The port's
+# clock init #errors on any value it has no bring-up sequence for, so a
+# wrong frequency fails the compile, not the bench.
+ifneq ($(strip $(OB_CPU_HZ)),)
+ifneq ($(TRANSPORT),uart)
+$(error OB_CPU_HZ is only settable on UART builds; USB requires the family PLL clock)
+endif
+ifneq ($(words $(OB_CPU_HZ)),1)
+$(error OB_CPU_HZ must be a single frequency in Hz (got '$(OB_CPU_HZ)'))
+endif
+CPU_HZ := $(strip $(OB_CPU_HZ))
+endif
+
 # A board may shrink the app region below what the silicon offers, to fence
 # OBP off from flash it does not own. OpenDongle's CH570 keeps its RF bond at
 # 0x3A000, directly below the boot-record page, so no ERASE/WRITE/COMMIT may

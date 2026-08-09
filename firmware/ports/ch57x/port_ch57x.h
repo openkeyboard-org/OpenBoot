@@ -38,6 +38,7 @@
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH57X
+#define OB_STK_CNT64          0    /* 32-bit SysTick counter; +0x0C reserved */
 #define OB_FEATURES           0u   /* no OB_FEAT_CRC_LIVE: XIP may serve stale
                                     * data after controller writes (F26) */
 
@@ -123,6 +124,12 @@ static inline void sys_safe_access_disable(void)
         R32_PA_PU     |= OB_UART_RX_PIN;                                  \
         R32_PA_DIR    &= ~OB_UART_RX_PIN;                                 \
         R16_PIN_ALTERNATE_H &= (uint16_t)~(RB_UART_TXD | RB_UART_RXD);    \
+    } while (0)
+
+/* Handoff quiesce: stop driving TX (back to input, its reset state). The
+ * RX pull-up and the mapping bits are inert to a pin's next owner. */
+#define OB_UART_PINS_DEINIT() do {                                        \
+        R32_PA_DIR    &= ~OB_UART_TX_PIN;                                 \
     } while (0)
 
 #endif /* OPENBOOT_PORT_CH57X_H */
