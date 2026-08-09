@@ -180,11 +180,22 @@ def bl_version() -> int:
             continue
         if found is not None:
             raise SystemExit(f"{BOOT_CORE_H}: OB_BL_VERSION defined twice")
-        found = parse_numeric(tokens[1]) if len(tokens) > 1 else None
-        if found is None:
+        value = parse_numeric(tokens[1]) if len(tokens) > 1 else None
+        if value is None:
             raise SystemExit(
                 f"{BOOT_CORE_H}: OB_BL_VERSION is not a plain numeric literal"
             )
+        # Same rule as parse_header: anything past the value must be a
+        # comment. Without this, an expression like `0x000B + 1` or `1 << 8`
+        # would silently parse as its first token and the golden vector
+        # would disagree with the value the compiler sees.
+        if len(tokens) > 2 and not tokens[2].startswith(("/*", "//")):
+            raise SystemExit(
+                f"{BOOT_CORE_H}: OB_BL_VERSION = {' '.join(tokens[1:])!r} is "
+                "not a single numeric literal; the generator cannot evaluate "
+                "expressions, so write the computed value"
+            )
+        found = value
     if found is None:
         raise SystemExit(f"{BOOT_CORE_H}: no '#define OB_BL_VERSION <numeric>'")
     return found
