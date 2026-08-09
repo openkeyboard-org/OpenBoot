@@ -20,6 +20,12 @@
 #define OB_STK_CNTH (*(volatile uint32_t *)0xE000F00Cu)
 #define OB_STK_RUN  0x05u               /* STE | STCLK */
 
+/* #if on a missing macro is silently 0 — a future port that forgot the
+ * define would skip the high-word clear on a 64-bit counter part. */
+#ifndef OB_STK_CNT64
+#error "port header must define OB_STK_CNT64 (0: 32-bit SysTick CNT, 1: 64-bit)"
+#endif
+
 static uint32_t up_ms, up_rem, up_last;
 
 /* Stop the counter, then clear the latched flag — in that order, so a tick

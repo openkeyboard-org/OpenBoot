@@ -209,7 +209,8 @@ def power_cycle(cfg, off=0.6, settle=2.0):
 
 
 MARK_A, MARK_B = (0x20002000, 0xAAAA0001), (0x20002100, 0xBBBB0002)
-STK_MARK = 0xC5000000   # witness word at MARK+8: 0xC5000000 | SysTick SR at entry
+STK_MARK = 0xC5000000   # witness word at MARK+8: exactly this = SR was 0 at
+                        # entry; 0xC5000001 = some SR bit (CNTIF/SWIE) was set
 
 
 def app_ran(cfg):
