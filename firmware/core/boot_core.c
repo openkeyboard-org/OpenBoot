@@ -36,7 +36,7 @@ static uint32_t write_slot;    /* the slot ERASE, WRITE and COMMIT address */
 
 static uint32_t other_slot(uint32_t slot)
 {
-    return slot == OB_SLOT_A ? OB_SLOT_B : OB_SLOT_A;
+    return slot ^ 1u;
 }
 
 /* Invalidate a slot's record by erasing the block that holds it. That block
@@ -99,18 +99,10 @@ static uint8_t rec_state;                /* power-cycle-scoped, see above */
 static uint32_t committed_img_len;        /* valid only in OB_REC_FRESH */
 static uint32_t committed_img_crc;        /* exact replay key */
 
-/* Highest generation this power cycle has WRITTEN, or 0. RAM truth, for the
- * same reason boot_record_trusted() prefers it: ob_next_generation() reads
- * the slot records through XIP, and on CH57x (F26) a record written this
- * power cycle can still read as the erased block it replaced. It would then
- * report a generation the previous COMMIT has already used, and a second
- * update in one power cycle would leave BOTH slots claiming it — a tie the
- * boot decision resolves by position, not by recency, so the device could
- * come back up on the image that was just replaced.
- *
- * Only reachable since mutations began alternating slots: with a single
- * write slot the stale value was rewritten over itself and nothing tied. */
-static uint32_t committed_gen;
+/* Highest valid record generation observed at reset or committed since. Keep
+ * it in RAM because CH57x XIP may not reveal a record written this power cycle;
+ * deriving it again could reuse a generation and leave the two slots tied. */
+static uint32_t highest_gen;
 
 /* WRITE classification against the sequential run. */
 #define WR_FOLD   0u   /* next chunk of the run: fold it on success */
@@ -265,15 +257,16 @@ static void stream_fold(uint32_t addr, uint32_t len, const uint8_t *data)
 /* Erased-block bitmap: WRITE may only touch blocks erased this session. */
 static void bitmap_mark(uint32_t addr)
 {
-    uint32_t blk = (addr - OB_FLASH_APP_START) / OB_FLASH_ERASE_BLOCK;
+    uint32_t blk = (addr - ob_slot_base(write_slot)) / OB_FLASH_ERASE_BLOCK;
 
     s.bitmap[blk >> 3] |= (uint8_t)(1u << (blk & 7u));
 }
 
 static int bitmap_covers(uint32_t addr, uint32_t len)
 {
-    uint32_t first = (addr - OB_FLASH_APP_START) / OB_FLASH_ERASE_BLOCK;
-    uint32_t last = (addr + len - 1 - OB_FLASH_APP_START) / OB_FLASH_ERASE_BLOCK;
+    uint32_t base = ob_slot_base(write_slot);
+    uint32_t first = (addr - base) / OB_FLASH_ERASE_BLOCK;
+    uint32_t last = (addr + len - 1 - base) / OB_FLASH_ERASE_BLOCK;
     uint32_t b;
 
     for (b = first; b <= last; b++)
@@ -316,7 +309,7 @@ static void record_note_committed(uint32_t img_len, uint32_t img_crc,
     rec_state = OB_REC_FRESH;
     committed_img_len = img_len;
     committed_img_crc = img_crc;
-    committed_gen = generation;
+    highest_gen = generation;
 
     /* The slot just committed now holds the highest valid generation, so it
      * is what the boot decision will pick — and the next update must target
@@ -326,10 +319,11 @@ static void record_note_committed(uint32_t img_len, uint32_t img_crc,
      * The session's erase bitmap, sequential run and disarm flag all
      * describe the slot we have just left, so re-arm them against the new
      * target: a second update within one session then starts from the same
-     * clean state a fresh HELLO would give it. Each of these is fail-safe if
-     * it were left stale — an old bitmap rejects writes with E_NOT_ERASED,
-     * an old run poisons the stream — but failing somewhere downstream is
-     * not the property to want from the commit point. */
+     * clean state a fresh HELLO would give it. The bitmap clear below is
+     * load-bearing, not hygiene: bitmap indices are relative to write_slot,
+     * so a bit carried across this flip would arm the same-numbered block
+     * of the NEW slot and let WRITE land on flash this session never
+     * erased — exactly what E_NOT_ERASED exists to stop. */
     active_slot = write_slot;
     write_slot = other_slot(active_slot);
 
@@ -371,7 +365,7 @@ static int boot_record_trusted(void)
     if (rec_state == OB_REC_FRESH)
         return 1;                        /* just committed the write slot */
     if (rec_state == OB_REC_FLASH)
-        return ob_boot_select() != OB_SLOT_NONE;   /* all of flash is truth */
+        return ob_boot_select(0) != OB_SLOT_NONE; /* all of flash is truth */
     /* OB_REC_INVALID: ask only the slot this power cycle has not written.
      * ob_boot_select() is not usable here — it would read the write slot's
      * possibly-stale record and could answer with the slot being updated. */
@@ -384,13 +378,12 @@ void ob_core_init(void)
     rec_state = OB_REC_FLASH;
     committed_img_len = 0;
     committed_img_crc = 0;
-    committed_gen = 0;
     /* Derived once, from a flash view nothing has disturbed since reset —
      * see the note on these two at the top of the file. With nothing
      * bootable (a factory-fresh part) slot A is the target: there is no
      * image to preserve, and starting at A keeps the common case aligned
      * with the factory image. */
-    active_slot = ob_boot_select();
+    active_slot = ob_boot_select(&highest_gen);
     write_slot = (active_slot == OB_SLOT_NONE) ? OB_SLOT_A
                                                : other_slot(active_slot);
 }
@@ -557,18 +550,13 @@ static uint32_t do_commit(const uint8_t *pl, uint8_t n, uint8_t seq, uint8_t *re
         return err_resp(resp, OB_CMD_COMMIT, seq, OB_E_VERIFY,
                         OB_DET_VERIFY_MISMATCH);
 
-    /* Floor the generation with what this power cycle has already written,
-     * which flash may not yet admit to — see committed_gen. */
-    rec.generation = ob_next_generation();
-    if (rec.generation <= committed_gen)
-        rec.generation = committed_gen + 1;
-    /* 0xFFFFFFFF is never stored. Storing it would create a generation the
-     * other slot can never outrank — ob_next_generation() saturates there,
-     * so the next commit stores the SAME value and ob_boot_select() resolves
-     * the tie by slot position, silently booting the older image ever after.
-     * The floor above can also wrap 0xFFFFFFFF + 1 to 0, a record
-     * ob_record_load() rejects. Both ends of the counter are therefore
-     * refused here, loudly, before any flash is touched. Unreachable in
+    /* ob_core_init captured the highest valid flash generation before any
+     * mutation; successful commits then advance this RAM truth directly. */
+    rec.generation = highest_gen + 1u;
+    /* 0xFFFFFFFF is never stored: no later generation could outrank it. The
+     * increment can also wrap 0xFFFFFFFF + 1 to 0, which ob_record_load()
+     * rejects. Both ends of the counter are refused before flash is touched.
+     * Unreachable in
      * practice — ~2^32 commits against a flash endurance ~10^4..10^5 erase
      * cycles — so this guard is for a hand-crafted record claiming the
      * ceiling, not for wear. E_FLASH with detail 0: no ROM error code is 0,

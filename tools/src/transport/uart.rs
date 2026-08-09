@@ -14,12 +14,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serialport::{ClearBuffer, DataBits, FlowControl, Parity, SerialPort, StopBits};
 
-use super::{xfer_link, FrameLink, Transport, TransportError};
+use super::Transport;
 use crate::proto::consts::{
     OB_FRAME_CRC_LEN, OB_FRAME_HDR_LEN, OB_MAX_PAYLOAD, OB_UART_BAUD, OB_UART_INTERBYTE_MS,
     OB_UART_SOF1, OB_UART_SOF2,
 };
-use crate::proto::Frame;
 
 /// Bytes per write burst handed to the OS, and see `chunk_drain()` for the
 /// pause after each.
@@ -154,7 +153,7 @@ impl UartTransport {
     }
 }
 
-impl FrameLink for UartTransport {
+impl Transport for UartTransport {
     fn send_frame(&mut self, frame: &[u8]) -> Result<()> {
         // One contiguous buffer so the SOF and the frame are chunked on the
         // same boundaries a single write would have used; splitting them
@@ -242,12 +241,6 @@ impl FrameLink for UartTransport {
             }
             return Ok(Some(frame));
         }
-    }
-}
-
-impl Transport for UartTransport {
-    fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
-        xfer_link(self, req, timeout)
     }
 }
 

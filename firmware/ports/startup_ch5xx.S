@@ -1,11 +1,11 @@
-/*
- * OpenBoot startup, CH570/CH572 (Qingke V3C, rv32imc+xw).
- *
- * Vectorless: mtvec points at ob_trap (direct mode) and MIE stays 0 — the
- * bootloader never enables interrupts, so no vector table exists. This
- * also removes the EVT-IAP bug class where the vector table is linked to
- * RAM but never copied.
- */
+/* Shared vectorless OpenBoot startup for the supported QingKe RV32 cores. */
+
+#ifndef OB_STARTUP_CORECFGR
+#error "build must define OB_STARTUP_CORECFGR"
+#endif
+#ifndef OB_STARTUP_WRITE_BC1
+#error "build must define OB_STARTUP_WRITE_BC1"
+#endif
 
     .section    .init, "ax", @progbits
     .global     _start
@@ -20,11 +20,10 @@ handle_reset:
 .option norelax
     la      gp, __global_pointer$
 .option pop
-    /* _eusrstack = top of RAM - 16: the boot-request magic word above the
-     * stack must survive every push */
+    /* Top 16 bytes of RAM hold the application-to-bootloader request. */
     la      sp, _eusrstack
 
-    /* copy .highcode (libISP + clock init must run from RAM) */
+    /* Copy RAM-resident libISP and family clock setup. */
     la      a0, _highcode_lma
     la      a1, _highcode_vma_start
     la      a2, _highcode_vma_end
@@ -36,7 +35,6 @@ handle_reset:
     addi    a1, a1, 4
     bltu    a1, a2, 1b
 2:
-    /* copy .data */
     la      a0, _data_lma
     la      a1, _data_vma
     la      a2, _edata
@@ -48,7 +46,6 @@ handle_reset:
     addi    a1, a1, 4
     bltu    a1, a2, 1b
 2:
-    /* zero .bss */
     la      a0, _sbss
     la      a1, _ebss
     bgeu    a0, a1, 2f
@@ -57,20 +54,20 @@ handle_reset:
     addi    a0, a0, 4
     bltu    a0, a1, 1b
 2:
-    /* per-family microarchitecture CSRs (EVT startup_CH572.S values):
-     * 0xbc0 corecfgr=0x25 (prefetch), 0x804 intsyscr=0x3, 0xbc1=0x1 */
-    li      t0, 0x25
+    /* per-family microarchitecture CSRs, values injected by the Makefile
+     * from the WCH EVT startup files: 0xbc0 corecfgr (pipeline/prefetch),
+     * 0x804 intsyscr; only ch57x writes 0xbc1=1 */
+    li      t0, OB_STARTUP_CORECFGR
     csrw    0xbc0, t0
     li      t0, 0x3
     csrw    0x804, t0
+#if OB_STARTUP_WRITE_BC1
     li      t0, 0x1
     csrw    0xbc1, t0
+#endif
 
-    /* MPP=machine, MIE=0/MPIE=0 — interrupts never enabled */
     li      t0, 0x1800
     csrw    mstatus, t0
-
-    /* direct mode: bits[1:0]=0, all traps park at ob_trap */
     la      t0, ob_trap
     csrw    mtvec, t0
 

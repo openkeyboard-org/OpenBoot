@@ -26,12 +26,15 @@ uint32_t ob_slot_capacity(uint32_t slot);
 void ob_boot_decide(void);
 
 /* The slot the device should boot: the highest `generation` among slots whose
- * record AND image both validate, or OB_SLOT_NONE. This is the one place that
- * decides, and it has no side effects. */
-uint32_t ob_boot_select(void);
+ * record AND image both validate, or OB_SLOT_NONE. When highest_generation is
+ * non-NULL, it receives the highest generation in any valid record, including
+ * one whose image is not bootable; COMMIT must outrank all such records. */
+uint32_t ob_boot_select(uint32_t *highest_generation);
 
 /* Record + image checks for ONE slot (no strap/bootreq, no side effects).
- * Used by ob_boot_select, the pre-HELLO idle timeout and explicit BOOT. */
+ * Sole caller: boot_record_trusted's OB_REC_INVALID branch (explicit BOOT
+ * after this session invalidated the write slot), which must ask only the
+ * untouched slot and so cannot go through ob_boot_select. */
 int ob_boot_app_valid(uint32_t slot);
 
 /* The canonical record-validity check: read, magic, rec_crc32, reserved-zero,
@@ -44,10 +47,6 @@ int ob_record_load(uint32_t slot, ob_boot_record_t *rec);
  * Returns 0 on success. This is the commit point: until it completes, the
  * other slot's record is still the newest valid one. */
 uint32_t ob_record_store(uint32_t slot, ob_boot_record_t *rec);
-
-/* One past the highest generation currently stored in any valid slot record,
- * i.e. the generation a new commit must claim to win. Starts at 1. */
-uint32_t ob_next_generation(void);
 
 /* Nonzero once timeout_ms has elapsed between two ob_uptime_ms() readings.
  * Lives here rather than in main.c so the host suite can reach it: main.c

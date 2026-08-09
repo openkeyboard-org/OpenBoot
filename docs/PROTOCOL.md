@@ -423,9 +423,9 @@ Attestation path:
 
 On match the device writes the write slot's boot record (section 8) and
 answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-ROM case
-shares that status: a stored generation never reaches `0xFFFFFFFF` (the value
-`ob_next_generation` saturates at, which the other slot could then never
-outrank), so a COMMIT that would need it is refused with `E_FLASH`, detail
+shares that status: a stored generation never reaches `0xFFFFFFFF`, which the
+other slot could then never outrank, so a COMMIT that would need it is refused
+with `E_FLASH`, detail
 `0x00` — distinguishable because no ROM failure carries detail 0. Unreachable
 by wear (~2^32 commits against a flash endurance of ~10^4..10^5 cycles); a
 device can get there only via a hand-crafted record claiming the ceiling. On
@@ -552,11 +552,13 @@ invalid, malicious, or truncated by power loss — can brick the device.**
    same risk as changing. No command a host can send alters a byte of the
    slot the device is currently able to boot, whether by mistake, by a
    stale address, or deliberately.
-3. **Arming: the erased-block bitmap.** A 16-byte RAM bitmap
-   (`OB_BITMAP_BYTES = 16`, one bit per 4 KiB block from `app_start`;
-   CH592's 440 KiB region needs 110 bits) records which blocks this
-   session has successfully erased. WRITE refuses (`E_NOT_ERASED`) any
-   block not armed. The bitmap is cleared at reset and on every HELLO.
+3. **Arming: the erased-block bitmap.** A RAM bitmap with one bit per
+   4 KiB erase block of the writable slot, indexed relative to the slot
+   base and sized from the slot geometry (CH592's 220 KiB slot needs
+   55 bits in 7 bytes), records which blocks this session has
+   successfully erased. WRITE refuses (`E_NOT_ERASED`) any block not
+   armed. The bitmap is cleared at reset, on every HELLO, and at COMMIT
+   when the writable slot flips.
    This structurally removes the vendor USB-IAP bug where a write could
    land — including over the bootloader — before any erase.
 4. **Disarm before mutation.** The first ERASE or WRITE of each session

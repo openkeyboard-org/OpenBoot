@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#define OB_BL_VERSION 0x000A  /* v0.10: major in high byte, minor in low */
+#define OB_BL_VERSION 0x000B  /* v0.11: major in high byte, minor in low */
 
 typedef enum {
     OB_ACT_NONE  = 0,

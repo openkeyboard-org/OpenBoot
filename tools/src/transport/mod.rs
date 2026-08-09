@@ -6,7 +6,8 @@
 //! up, in `client::BootClient`, where each command declares its own
 //! `RetryPolicy` — idempotent commands resend with a fresh `seq`, BOOT is
 //! `Once` and never resent. What does live
-//! here — shared by both transports via `FrameLink` — is response matching:
+//! here — shared by both transports through the trait's default method — is
+//! response matching:
 //! frames with a stale `seq` (answers to a timed-out earlier attempt),
 //! frames for other commands, and undecodable/corrupt frames are all
 //! discarded, and reading continues until the deadline.
@@ -21,8 +22,32 @@ use anyhow::Result;
 use crate::proto::Frame;
 
 /// A bootloader connection: send one request, get the matching response.
+///
+/// `recv_frame` must block until one raw candidate frame is available or
+/// `deadline` passes (then `Ok(None)`), performing no protocol validation
+/// beyond transport framing (HID report boundaries / UART SOF hunt). The
+/// default `xfer` leans on that contract: it treats the first `Ok(None)` as
+/// the deadline having expired, so a non-blocking poll would turn every
+/// quiet moment into a spurious `Timeout`.
 pub trait Transport {
-    fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError>;
+    fn send_frame(&mut self, frame: &[u8]) -> Result<()>;
+    fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>>;
+
+    fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
+        let deadline = Instant::now() + timeout;
+        self.send_frame(&req.encode())?;
+        while let Some(raw) = self.recv_frame(deadline)? {
+            match Frame::decode(&raw) {
+                // The device could not parse a request; its echoed seq cannot
+                // be trusted, so accept the report regardless of seq.
+                Ok(frame) if frame.is_frame_error() => return Ok(frame),
+                Ok(frame) if frame.is_response_to(req) => return Ok(frame),
+                Ok(_stale) => continue, // stale seq or foreign cmd: discard
+                Err(_corrupt) => continue, // undecodable: discard, keep listening
+            }
+        }
+        Err(TransportError::Timeout)
+    }
 }
 
 /// What a transport exchange can fail with. `Timeout` is a distinct variant
@@ -35,34 +60,4 @@ pub enum TransportError {
     /// Anything the underlying HID/serial stack reported.
     #[error(transparent)]
     Io(#[from] anyhow::Error),
-}
-
-/// Byte-level frame link each concrete transport implements. `recv_frame`
-/// blocks until one raw candidate frame is available or `deadline` passes
-/// (`Ok(None)`); it performs no protocol validation beyond transport
-/// framing (HID report boundaries / UART SOF hunt).
-pub(crate) trait FrameLink {
-    fn send_frame(&mut self, frame: &[u8]) -> Result<()>;
-    fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>>;
-}
-
-/// Shared request/response matching over any `FrameLink`.
-pub(crate) fn xfer_link(
-    link: &mut dyn FrameLink,
-    req: &Frame,
-    timeout: Duration,
-) -> Result<Frame, TransportError> {
-    let deadline = Instant::now() + timeout;
-    link.send_frame(&req.encode())?;
-    while let Some(raw) = link.recv_frame(deadline)? {
-        match Frame::decode(&raw) {
-            // The device could not parse a request; its echoed seq cannot be
-            // trusted, so accept the report regardless of seq.
-            Ok(frame) if frame.is_frame_error() => return Ok(frame),
-            Ok(frame) if frame.is_response_to(req) => return Ok(frame),
-            Ok(_stale) => continue,    // stale seq or foreign cmd: discard
-            Err(_corrupt) => continue, // undecodable: discard, keep listening
-        }
-    }
-    Err(TransportError::Timeout)
 }

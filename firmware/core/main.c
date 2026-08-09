@@ -74,7 +74,7 @@ int main(void)
 
         if (!ob_core_session_active() &&
             ob_idle_elapsed(idle_start, now_ms, OB_IDLE_TIMEOUT_MS)) {
-            uint32_t slot = ob_boot_select();
+            uint32_t slot = ob_boot_select(0);
 
             if (slot != OB_SLOT_NONE) {
                 tr_deinit();

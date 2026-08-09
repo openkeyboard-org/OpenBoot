@@ -2,15 +2,13 @@
  * OpenBoot port hooks: CH570/CH572.
  */
 #include "openboot_port.h"
-#include "boot_decision.h"   /* ob_ms_accumulate: shared tick arithmetic */
-
-static void ob_time_init(void);
+#include "../port_ch5xx.h"
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG/R8_FLASH_SCK)
  * while XIP would otherwise be fetching this very code. */
 __attribute__((section(".highcode")))
-void ob_port_init(void)
+void ob_family_clock_init(void)
 {
 #if OB_CPU_HZ == 100000000
     /* CH57x_sys.c SetSysClock PLL branch, 600 MHz PLL / 6 = 100 MHz —
@@ -51,30 +49,10 @@ void ob_port_init(void)
 #else
 #error "OB_CPU_HZ must be 6400000 or 100000000 on ch57x"
 #endif
-    /* Last, so the tick rate matches the clock we just settled on. */
-    ob_time_init();
-}
-
-/* ---- flash ------------------------------------------------------------ */
-/* No range checks here — the core validates against the app region first;
- * the ROM API would happily erase the bootloader. */
-uint32_t ob_flash_erase(uint32_t addr, uint32_t len)
-{
-    return FLASH_ROM_ERASE(addr, len);
-}
-
-uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
-{
-    return FLASH_ROM_WRITE(addr, (void *)(uintptr_t)buf, len);
-}
-
-uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
-{
-    return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
 }
 
 /* ---- boot strap pin (active low) -------------------------------------- */
-#if defined(OB_BOOT_PIN_MASK) && defined(OB_BOOT_PIN_PORT_B) && OB_BOOT_PIN_PORT_B
+#if defined(OB_BOOT_PIN_MASK) && OB_BOOT_PIN_PORT_B
 #error "ch57x has no GPIO port B"
 #endif
 
@@ -116,98 +94,14 @@ uint32_t ob_app_end(void)
     return silicon < OB_FLASH_APP_END ? silicon : OB_FLASH_APP_END;
 }
 
-/* ---- identity ---------------------------------------------------------- */
-uint8_t ob_chip_rev(void)
+/* CH570 returns zero for GET_UNIQUE_ID, so use the ROM MAC fallback there. */
+void ob_family_read_uid(uint32_t buf[4])
 {
-    return R8_CHIP_ID;
-}
-
-void ob_read_uid(uint8_t uid[8])
-{
-    /* 4-aligned RAM buffer; oversized in case the ROM scribbles past 8 */
-    uint32_t buf[4] = {0, 0, 0, 0};
-    const uint8_t *b = (const uint8_t *)buf;
-    uint32_t i;
-
     FLASH_EEPROM_CMD(CMD_GET_UNIQUE_ID, 0, buf, 0);
     if ((buf[0] | buf[1]) == 0) {
         /* CH570 silicon returns all zeros for CMD_GET_UNIQUE_ID (bench,
          * 2026-07-28). Fall back to the ROM MAC + 2-byte checksum — the
          * SDK's own unique-ID source (ISP572.h GetMACAddress). */
         FLASH_EEPROM_CMD(CMD_GET_ROM_INFO, ROM_CFG_MAC_ADDR, buf, 0);
-    }
-    for (i = 0; i < 8; i++) {
-        uid[i] = b[i];
-    }
-}
-
-/* ---- time -------------------------------------------------------------- */
-/* SysTick as a free-running HCLK up-counter — the bootloader's only real
- * clock. Register map and bit semantics from CH572DS1 section 3.4.4; the
- * ch59x port carries the same block, verified against CH592DS1 3.4.4.
- *
- *   CTLR bit0 STE   1 = counter enabled
- *        bit1 STIE  0 = no interrupt (nothing is routed to the PFIC)
- *        bit2 STCLK 1 = HCLK.  0 = HCLK/8, and 0 is the RESET VALUE, so
- *                   enabling with STE alone silently gives an 8x-slow clock
- *        bit3 STRE  0 = keep counting past CMP instead of auto-reloading
- *        bit4 MODE  0 = count up
- *
- * CNT is 32 bits here (64 on ch59x) but its low word is at +0x08 on both, so
- * both ports read 32 bits and rely on wrap-safe unsigned deltas. At 100 MHz
- * it wraps every ~43 s, far more often than the ~49-day millisecond total,
- * which is why the accumulator exists at all. */
-#define OB_STK_CTLR (*(volatile uint32_t *)0xE000F000u)
-#define OB_STK_CNTL (*(volatile uint32_t *)0xE000F008u)
-#define OB_STK_RUN  0x05u               /* STE | STCLK */
-
-static uint32_t up_ms, up_rem, up_last;
-
-static void ob_time_init(void)
-{
-    OB_STK_CTLR = 0;                     /* stop before touching the count */
-    OB_STK_CNTL = 0;
-    up_ms = up_rem = up_last = 0;
-    OB_STK_CTLR = OB_STK_RUN;
-}
-
-uint32_t ob_uptime_ms(void)
-{
-    uint32_t now = OB_STK_CNTL;
-
-    ob_ms_accumulate(&up_ms, &up_rem, now - up_last, OB_CPU_HZ / 1000u);
-    up_last = now;
-    return up_ms;
-}
-
-/* ---- misc -------------------------------------------------------------- */
-void ob_delay_us(uint32_t us)
-{
-    /* 2-insn loop (addi+bnez) assumed ~4 CPU cycles/iteration from XIP;
-     * coarse on purpose — only used for debounce/settle waits */
-    uint32_t n = (us * (OB_CPU_HZ / 100000u)) / 40u;
-
-    if (n == 0) {
-        n = 1;
-    }
-    __asm__ volatile (
-        "1: addi %0, %0, -1\n\t"
-        "bnez %0, 1b"
-        : "+r"(n));
-}
-
-void ob_jump_app(uint32_t base)
-{
-    OB_STK_CTLR = 0;                     /* hand the app a stopped SysTick */
-    ((void (*)(void))(uintptr_t)base)();
-    __builtin_unreachable();
-}
-
-void ob_reset(void)
-{
-    sys_safe_access_enable();
-    R8_RST_WDOG_CTRL |= RB_SOFTWARE_RESET;
-    sys_safe_access_disable();
-    for (;;) {
     }
 }

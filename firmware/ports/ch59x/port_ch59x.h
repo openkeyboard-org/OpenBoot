@@ -91,7 +91,7 @@ static inline void sys_safe_access_disable(void)
 /* TX must idle high before the direction flip or the first start edge is a
  * glitch. OB_UART1_REMAP (board knob) selects the RB_PIN_UART1 alternate
  * mapping RXD1_/TXD1_ on PB12/PB13; default is PA8/PA9. */
-#ifdef OB_UART1_REMAP
+#if OB_UART1_REMAP
 
 #define OB_UART_TX_PIN  (1u << 13)  /* PB13 = TXD1_ */
 #define OB_UART_RX_PIN  (1u << 12)  /* PB12 = RXD1_ */

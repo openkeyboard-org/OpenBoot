@@ -120,10 +120,12 @@ CPU_HZ_uart_ch59x := 6400000
 CPU_HZ := $(CPU_HZ_$(TRANSPORT)_$(PORT))
 
 # RAM geometry for the linker. The Makefile owns the per-family RAM size
-# (it already owns the per-chip flash geometry above); the top-of-RAM
-# bootreq address is NOT duplicated here — it is extracted from the
-# protocol header when memory.ld is generated, so the two can never drift
-# apart silently (the linker ASSERT compares them).
+# (it already owns the per-chip flash geometry above); the linker derives
+# _eusrstack (top of RAM minus the reserved 16 bytes) from it, and
+# openboot.ld ASSERTs that equals the family's hand-written boot-request
+# constant below — the one cross-check keeping RAM_SIZE and the protocol
+# header from drifting apart while the app companion still uses the
+# constant at runtime.
 RAM_SIZE_ch57x := 12K
 RAM_SIZE_ch59x := 26K
 RAM_SIZE := $(RAM_SIZE_$(PORT))
@@ -131,6 +133,15 @@ BOOTREQ_NAME_ch57x := OB_BOOTREQ_ADDR_CH57X
 BOOTREQ_NAME_ch59x := OB_BOOTREQ_ADDR_CH59X
 BOOTREQ_NAME := $(BOOTREQ_NAME_$(PORT))
 PROTOCOL_H := $(abspath ../protocol/openboot_protocol.h)
+# Per-family microarchitecture CSRs injected into startup_ch5xx.S; the
+# values are the WCH EVT startup files' (startup_CH572.S / startup_CH592.S):
+# 0xbc0 corecfgr (pipeline/prefetch) is 0x25 on ch57x, 0x1f on ch59x, and
+# only ch57x also writes 0xbc1=1. intsyscr (0x804) is 0x3 for both families
+# and stays literal in startup_ch5xx.S.
+STARTUP_CORECFGR_ch57x := 0x25
+STARTUP_CORECFGR_ch59x := 0x1f
+STARTUP_WRITE_BC1_ch57x := 1
+STARTUP_WRITE_BC1_ch59x := 0
 REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
@@ -156,6 +167,15 @@ include boards/$(BOARD).mk
 OB_IDLE_TIMEOUT_MS ?= 10000
 # A board that defines only a strap mask selects port A by default.
 OB_BOOT_PIN_PORT_B ?= 0
+OB_UART1_REMAP ?= 0
+OB_BOOT_IMAGE_CRC ?= 0
+
+# Boolean knobs must be exactly the single word 0 or 1. A bare membership
+# $(filter) is not enough: its pattern list is word-split, so a mangled
+# value like '0 1' would pass — the $(words) term closes that hole.
+$(foreach knob,OB_BOOT_PIN_PORT_B OB_UART1_REMAP OB_BOOT_IMAGE_CRC,\
+  $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
+    $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
 # A board may shrink the app region below what the silicon offers, to fence
 # OBP off from flash it does not own. OpenDongle's CH570 keeps its RF bond at
@@ -312,10 +332,10 @@ MAX_IMAGE_BYTES := 8192
 # one transport are compiled per image.
 # ---------------------------------------------------------------------------
 CORE_SRC := core/main.c core/crc32.c core/boot_core.c core/boot_decision.c
-PORT_SRC := ports/$(PORT)/port_$(PORT).c
+PORT_SRC := ports/port_ch5xx.c ports/$(PORT)/port_$(PORT).c
 TRANSPORT_SRC := transports/$(TRANSPORT)_transport.c
 C_SRCS := $(CORE_SRC) $(PORT_SRC) $(TRANSPORT_SRC)
-S_SRCS := ports/$(PORT)/startup_openboot.S
+S_SRCS := ports/startup_ch5xx.S
 
 # Objects are flattened into $(BUILD) by basename and found via VPATH; the
 # guard keeps a future duplicate basename from silently colliding there.
@@ -329,7 +349,7 @@ ifneq ($(words $(SOURCE_BASENAMES)),$(words $(sort $(SOURCE_BASENAMES))))
   $(error duplicate source basename in the flattened object directory)
 endif
 
-VPATH := core:ports/$(PORT):transports
+VPATH := core:ports:ports/$(PORT):transports
 
 # ---------------------------------------------------------------------------
 # Flags.
@@ -365,8 +385,12 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CPU_HZ        per transport (boot clock vs PLL).
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
-# The Boolean board knobs further below are #ifdef-tested, so a knob left
-# unset (or set to a literal 0) must emit NO line at all.
+# The Boolean board knobs (OB_BOOT_PIN_PORT_B, OB_UART1_REMAP,
+# OB_BOOT_IMAGE_CRC) are normalized to a literal 0 or 1 above, always
+# emitted, and consumed with #if — never #ifdef, where defined-but-zero
+# would read as enabled. Knobs that may be legitimately absent
+# (OB_HSE_CAP_LOAD, OB_BOOT_PIN_MASK, the USB identity) still emit no
+# line when unset, and their consumers #ifdef-test them.
 CONFIG_H := $(BUILD)/openboot_config.h
 
 CONFIG_LINES := \
@@ -376,7 +400,12 @@ CONFIG_LINES := \
   '\#define OB_CPU_HZ $(CPU_HZ)' \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
+  '\#define OB_STARTUP_CORECFGR $(STARTUP_CORECFGR_$(PORT))' \
+  '\#define OB_STARTUP_WRITE_BC1 $(STARTUP_WRITE_BC1_$(PORT))' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
+  '\#define OB_BOOT_PIN_PORT_B $(OB_BOOT_PIN_PORT_B)' \
+  '\#define OB_UART1_REMAP $(OB_UART1_REMAP)' \
+  '\#define OB_BOOT_IMAGE_CRC $(OB_BOOT_IMAGE_CRC)' \
   '\#define OB_SLOT_SIZE $(OB_SLOT_SIZE)' \
   '\#define OB_SLOT_A_BASE $(OB_SLOT_A_BASE)' \
   '\#define OB_SLOT_B_BASE $(OB_SLOT_B_BASE)'
@@ -397,17 +426,7 @@ endif
 # A board that wants no strap leaves OB_BOOT_PIN_MASK unset and the port
 # compiles ob_bootpin_asserted() to `return 0`.
 ifneq ($(strip $(OB_BOOT_PIN_MASK)),)
-CONFIG_LINES += '\#define OB_BOOT_PIN_MASK $(OB_BOOT_PIN_MASK)' \
-                '\#define OB_BOOT_PIN_PORT_B $(OB_BOOT_PIN_PORT_B)'
-endif
-# UART1 pin remap (ch59x only): RXD1_/TXD1_ on PB12/PB13 instead of PA8/PA9.
-ifneq ($(filter-out 0,$(strip $(OB_UART1_REMAP))),)
-CONFIG_LINES += '\#define OB_UART1_REMAP 1'
-endif
-# Optional full image-CRC check at every boot (boot_decision.c #ifdef;
-# ~0.5 s at the 6.4 MHz boot clock, see README knob table).
-ifneq ($(filter-out 0,$(strip $(OB_BOOT_IMAGE_CRC))),)
-CONFIG_LINES += '\#define OB_BOOT_IMAGE_CRC 1'
+CONFIG_LINES += '\#define OB_BOOT_PIN_MASK $(OB_BOOT_PIN_MASK)'
 endif
 # USB identity. Absent leaves the pid.codes test allocation compiled into
 # usb_transport.c. A product sets both so its bootloader enumerates under the
@@ -539,10 +558,13 @@ $(CONFIG_H): FORCE | $(BUILD)
 
 # The linker's half of the generated configuration: the MEMORY block plus
 # OB_BOOTREQ_ADDR, extracted from the protocol header (anchored sed, hard
-# failure if the define ever moves or is renamed). FORCE + cmp for the same
-# reason as the config header: the content depends on make VARIABLES
-# (RAM_SIZE, BOOTREQ_NAME) as well as on files, and only regenerating
-# unconditionally then comparing catches a variable override.
+# failure if the define ever moves or is renamed). openboot.ld computes
+# _eusrstack from the MEMORY block and ASSERTs it equals this extracted
+# address — the one cross-check tying RAM_SIZE to the protocol constant the
+# runtime and the app companion use. FORCE + cmp for the same reason as the
+# config header: the content depends on make variables (RAM_SIZE,
+# BOOTREQ_NAME) as well as on files, and only regenerating unconditionally
+# then comparing catches a variable override.
 MEMORY_LD := $(BUILD)/memory.ld
 
 $(MEMORY_LD): FORCE | $(BUILD)
