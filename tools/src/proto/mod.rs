@@ -433,6 +433,8 @@ mod tests {
         assert_eq!(info.proto_major, OB_PROTO_MAJOR);
         assert_eq!(info.proto_minor, OB_PROTO_MINOR);
         assert_eq!(info.chip_rev, 9);
+        // Deliberate literal: the checked-in golden bytes must carry the
+        // OB_BL_VERSION the firmware ships. Bump this with boot_core.h.
         assert_eq!(info.bl_version, 0x000B);
         assert_eq!(info.chip_family, OB_FAMILY_CH592);
         assert_eq!(info.transport, OB_TRANSPORT_ID_USB);
