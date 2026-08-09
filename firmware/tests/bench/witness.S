@@ -21,6 +21,19 @@ _start:
     li   a0, WITNESS_ADDR
     li   a1, WITNESS_VALUE
     sw   a1, 0(a0)
+
+    /* Handoff regression witness (#18): the bootloader must hand over
+     * SysTick with the CNTIF latch clear. Record SR at entry, tagged so
+     * SRAM decay cannot counterfeit a clean reading: 0xC5000000 exactly
+     * means "ran, SR was 0"; low bits carry a stale flag. */
+    li   a0, 0xE000F004
+    lw   a1, 0(a0)
+    andi a1, a1, 0xFF
+    li   a2, 0xC5000000
+    or   a1, a1, a2
+    li   a0, WITNESS_ADDR
+    sw   a1, 8(a0)
+
     li   a0, BOOTREQ_ADDR
     li   a1, 0xB007CA11
     sw   a1, 0(a0)

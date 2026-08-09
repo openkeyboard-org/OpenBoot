@@ -19,6 +19,20 @@ if (openboot_get_record(&record) == 0) {
 openboot_request_update();
 ```
 
+## State at application entry
+
+OpenBoot launches the application with interrupts globally disabled
+(`mstatus.MIE=0`), no PFIC source enabled and no pending bit armed, and
+SysTick in its reset state — stopped, count flag cleared, counter zeroed.
+`CMP` is the one SysTick register left as the previous run set it: program
+it before enabling the SysTick interrupt, as vendor `SysTick_Config` does.
+`mtvec` still points at the bootloader's trap spin, so install the vector
+base before enabling anything — the same obligation as a cold boot. The
+system clock is whatever the transport build used (USB: PLL; UART: the
+6.4 MHz boot clock); set your own clock early, as on any EVT part. UART
+transports leave the UART block configured and its pins muxed per the
+board's build knobs; USB transports detach and hold the USB SIE in reset.
+
 Define exactly one chip family, plus the slot this image is linked for:
 
 - `OPENBOOT_CHIP_CH57X` for CH570/CH572, or `OPENBOOT_CHIP_CH59X` for CH591/CH592

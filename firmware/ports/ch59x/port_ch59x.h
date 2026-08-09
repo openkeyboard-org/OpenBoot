@@ -46,6 +46,7 @@
                                             * WRONG: real erased XIP reads the
                                             * same word as CH57x) */
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH59X
+#define OB_STK_CNT64          1    /* 64-bit SysTick counter; CNT[63:32] at +0x0C */
 #define OB_FEATURES           OB_FEAT_CRC_LIVE
 
 /* ---- safe access ------------------------------------------------------ */

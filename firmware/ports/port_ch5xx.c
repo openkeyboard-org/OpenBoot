@@ -4,18 +4,43 @@
 #include "port_ch5xx.h"
 
 /* SysTick is the same block on both families. Its low count word sits at
- * +0x08 even though the full counter is 32-bit on CH57x and 64-bit on CH59x.
- * Reading the low word gives a wrap-safe tick delta on either RV32 core. */
+ * +0x08 even though the full counter is 32-bit on CH57x and 64-bit on CH59x
+ * (+0x0C is CNT[63:32] on CH59x but reserved on CH57x — the port header's
+ * OB_STK_CNT64 says which). Reading the low word gives a wrap-safe tick
+ * delta on either RV32 core.
+ *
+ * SR bit 0 is CNTIF, the compare-match latch, and it is RW0: writing 0
+ * clears it, writing 1 is ignored, and stopping the counter via CTLR does
+ * NOT clear it (CH572DS1 / CH592DS1 section 3.4.4). The software-interrupt
+ * enable also moved between families — SR[31] on CH57x, CTLR[31] on CH59x —
+ * so ob_systick_stop()'s two zero writes cover both layouts. */
 #define OB_STK_CTLR (*(volatile uint32_t *)0xE000F000u)
+#define OB_STK_SR   (*(volatile uint32_t *)0xE000F004u)
 #define OB_STK_CNTL (*(volatile uint32_t *)0xE000F008u)
+#define OB_STK_CNTH (*(volatile uint32_t *)0xE000F00Cu)
 #define OB_STK_RUN  0x05u               /* STE | STCLK */
 
 static uint32_t up_ms, up_rem, up_last;
 
-static void ob_time_init(void)
+/* Stop the counter, then clear the latched flag — in that order, so a tick
+ * cannot re-latch CNTIF between the two stores — then zero the count so the
+ * block is back in its reset state. CMP is deliberately not written: it is
+ * 64-bit only on CH59x, applications must program it before enabling the
+ * SysTick interrupt anyway (vendor SysTick_Config does), and with CNTIF
+ * clear a stale compare value is inert until they do. */
+static void ob_systick_stop(void)
 {
     OB_STK_CTLR = 0;
+    OB_STK_SR   = 0;
     OB_STK_CNTL = 0;
+#if OB_STK_CNT64
+    OB_STK_CNTH = 0;
+#endif
+}
+
+static void ob_time_init(void)
+{
+    ob_systick_stop();
     up_ms = up_rem = up_last = 0;
     OB_STK_CTLR = OB_STK_RUN;
 }
@@ -82,9 +107,27 @@ void ob_delay_us(uint32_t us)
 
 void ob_jump_app(uint32_t base)
 {
-    OB_STK_CTLR = 0;
+    /* Hand the application a reset-state SysTick: stopped, count flag
+     * clear, counter zeroed. The flag is the load-bearing part: CNTIF
+     * survives CTLR=0 (RW0 — see the register notes above) and is re-armed
+     * on every warm pass through the bootloader once ANY earlier app has
+     * used SysTick, because STK CMP survives a software reset and
+     * ob_time_init's free-running counter reaches the leftover compare
+     * value within microseconds (bench-proven on CH592, #18: an app that
+     * verified SR clear before soft-resetting still reads CNTIF=1 at its
+     * next entry — with the reset-default CMP of 0 the flag never arms).
+     * An application that then enables the SysTick interrupt path (e.g.
+     * the CH59x BLE library's init) takes the stale interrupt the moment
+     * STIE goes high. The PFIC needs no write of its own: its pending
+     * latch stays clear while STIE is 0 (bench-read IPR[12]=0 with
+     * CNTIF=1). */
+    ob_systick_stop();
     ((void (*)(void))(uintptr_t)base)();
-    __builtin_unreachable();
+    /* Containment, not optimization: if a validated-but-wrong entry word
+     * ever returns, park deterministically instead of executing whatever
+     * the linker placed after this function. */
+    for (;;) {
+    }
 }
 
 void ob_reset(void)

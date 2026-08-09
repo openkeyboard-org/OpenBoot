@@ -38,6 +38,7 @@
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u
 #define OB_BOOTREQ_ADDR       OB_BOOTREQ_ADDR_CH57X
+#define OB_STK_CNT64          0    /* 32-bit SysTick counter; +0x0C reserved */
 #define OB_FEATURES           0u   /* no OB_FEAT_CRC_LIVE: XIP may serve stale
                                     * data after controller writes (F26) */
 
