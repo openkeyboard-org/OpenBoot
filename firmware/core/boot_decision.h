@@ -32,7 +32,9 @@ void ob_boot_decide(void);
 uint32_t ob_boot_select(uint32_t *highest_generation);
 
 /* Record + image checks for ONE slot (no strap/bootreq, no side effects).
- * Used by ob_boot_select, the pre-HELLO idle timeout and explicit BOOT. */
+ * Sole caller: boot_record_trusted's OB_REC_INVALID branch (explicit BOOT
+ * after this session invalidated the write slot), which must ask only the
+ * untouched slot and so cannot go through ob_boot_select. */
 int ob_boot_app_valid(uint32_t slot);
 
 /* The canonical record-validity check: read, magic, rec_crc32, reserved-zero,

@@ -319,10 +319,11 @@ static void record_note_committed(uint32_t img_len, uint32_t img_crc,
      * The session's erase bitmap, sequential run and disarm flag all
      * describe the slot we have just left, so re-arm them against the new
      * target: a second update within one session then starts from the same
-     * clean state a fresh HELLO would give it. Each of these is fail-safe if
-     * it were left stale — an old bitmap rejects writes with E_NOT_ERASED,
-     * an old run poisons the stream — but failing somewhere downstream is
-     * not the property to want from the commit point. */
+     * clean state a fresh HELLO would give it. The bitmap clear below is
+     * load-bearing, not hygiene: bitmap indices are relative to write_slot,
+     * so a bit carried across this flip would arm the same-numbered block
+     * of the NEW slot and let WRITE land on flash this session never
+     * erased — exactly what E_NOT_ERASED exists to stop. */
     active_slot = write_slot;
     write_slot = other_slot(active_slot);
 

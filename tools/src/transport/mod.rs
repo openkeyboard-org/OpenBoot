@@ -22,6 +22,13 @@ use anyhow::Result;
 use crate::proto::Frame;
 
 /// A bootloader connection: send one request, get the matching response.
+///
+/// `recv_frame` must block until one raw candidate frame is available or
+/// `deadline` passes (then `Ok(None)`), performing no protocol validation
+/// beyond transport framing (HID report boundaries / UART SOF hunt). The
+/// default `xfer` leans on that contract: it treats the first `Ok(None)` as
+/// the deadline having expired, so a non-blocking poll would turn every
+/// quiet moment into a spurious `Timeout`.
 pub trait Transport {
     fn send_frame(&mut self, frame: &[u8]) -> Result<()>;
     fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>>;

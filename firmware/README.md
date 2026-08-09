@@ -114,8 +114,8 @@ line.
 | `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
 | `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
 | `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it |
-| `OB_BOOT_IMAGE_CRC` | off | Check the complete image CRC on every boot |
-| `OB_UART1_REMAP` | off | CH59x UART1 on PB12/PB13 instead of PA8/PA9 |
+| `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
+| `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
 | `OB_USB_VID` / `OB_USB_PID` | `0x1209` / `0x0001` | USB identity; set both or neither |

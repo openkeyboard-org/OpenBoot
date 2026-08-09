@@ -54,6 +54,9 @@ handle_reset:
     addi    a0, a0, 4
     bltu    a0, a1, 1b
 2:
+    /* per-family microarchitecture CSRs, values injected by the Makefile
+     * from the WCH EVT startup files: 0xbc0 corecfgr (pipeline/prefetch),
+     * 0x804 intsyscr; only ch57x writes 0xbc1=1 */
     li      t0, OB_STARTUP_CORECFGR
     csrw    0xbc0, t0
     li      t0, 0x3
