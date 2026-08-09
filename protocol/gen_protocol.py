@@ -17,6 +17,11 @@ Check without writing (used by `make -C firmware test`):
 Golden vectors are LOGICAL frames (no UART SOF prefix, no USB report
 padding); format is one `name: hexbytes` pair per line, '#' starts a
 comment.
+
+One value comes from outside the protocol header: the golden HELLO vector
+carries the bootloader release version, parsed from boot_core.h's
+OB_BL_VERSION. It is a firmware fact, not a wire-protocol constant, so it
+feeds the vector only and stays out of the emitted constant mirrors.
 """
 import sys
 import zlib
@@ -24,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADER = ROOT / "protocol" / "openboot_protocol.h"
+BOOT_CORE_H = ROOT / "firmware" / "core" / "boot_core.h"
 CONSTS_RS = ROOT / "tools" / "src" / "proto" / "consts.rs"
 OB_CONSTS_PY = ROOT / "firmware" / "tests" / "ob_consts.py"
 GOLDEN = ROOT / "protocol" / "golden_frames.txt"
@@ -157,6 +163,33 @@ def parse_header(path: Path) -> dict:
     return out
 
 
+def bl_version() -> int:
+    """OB_BL_VERSION from the firmware core header.
+
+    The golden HELLO vector must carry the version the firmware actually
+    reports, so parse the same source boot_core.c compiles rather than keep
+    a copy here. Deliberately NOT merged into the emitted constant mirrors:
+    it is a firmware release number, not a wire-protocol constant, and the
+    `generated_consts_match_header` test holds the mirrors to exactly the
+    protocol header's contents.
+    """
+    found = None
+    for line in BOOT_CORE_H.read_text().splitlines():
+        tokens = split_define(line)
+        if tokens is None or tokens[0] != "OB_BL_VERSION":
+            continue
+        if found is not None:
+            raise SystemExit(f"{BOOT_CORE_H}: OB_BL_VERSION defined twice")
+        found = parse_numeric(tokens[1]) if len(tokens) > 1 else None
+        if found is None:
+            raise SystemExit(
+                f"{BOOT_CORE_H}: OB_BL_VERSION is not a plain numeric literal"
+            )
+    if found is None:
+        raise SystemExit(f"{BOOT_CORE_H}: no '#define OB_BL_VERSION <numeric>'")
+    return found
+
+
 BANNER_RS = """\
 //! Protocol constants — GENERATED, DO NOT EDIT.
 //!
@@ -237,7 +270,7 @@ def emit_golden(c: dict) -> str:
     # block of its slot — giving 221184 (0x36000).
     hello_resp = (
         bytes([ok, c["OB_PROTO_MAJOR"], c["OB_PROTO_MINOR"], 9])
-        + u16(0x000B)  # bl_version v0.11
+        + u16(bl_version())  # from boot_core.h's OB_BL_VERSION
         + bytes([c["OB_FAMILY_CH592"], c["OB_TRANSPORT_ID_USB"]])
         + u32(c["OB_APP_BASE"])
         + u32(0x00070000)  # app region (CH592)

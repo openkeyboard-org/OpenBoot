@@ -17,6 +17,12 @@ use crate::proto::consts::{
 use crate::proto::{self, Frame};
 use crate::transport::Transport;
 
+/// bl_version carried by canned HELLO payloads. A fixture value, not the
+/// live firmware version: the host must parse whatever a device reports,
+/// so mock payloads do not track OB_BL_VERSION — only the golden-vector
+/// tests assert the real one.
+pub(crate) const FIXTURE_BL_VERSION: u16 = 0x000B;
+
 /// One scripted device reaction: raw frames fed back for a request
 /// (empty list = timeout).
 pub(crate) type Step = Box<dyn FnMut(&Frame) -> Vec<Vec<u8>>>;
@@ -88,7 +94,7 @@ pub(crate) fn info_payload(features: u32, app_end: u32) -> Vec<u8> {
 /// slot the device is willing to write is the thing under test.
 pub(crate) fn info_payload_slots(features: u32, app_end: u32, active: u8, write: u8) -> Vec<u8> {
     let mut p = vec![OB_OK, OB_PROTO_MAJOR, OB_PROTO_MINOR, 9];
-    p.extend_from_slice(&0x000Bu16.to_le_bytes());
+    p.extend_from_slice(&FIXTURE_BL_VERSION.to_le_bytes());
     p.push(OB_FAMILY_CH592);
     p.push(OB_TRANSPORT_ID_USB);
     p.extend_from_slice(&0x2000u32.to_le_bytes());
