@@ -163,8 +163,39 @@ def test_opencontroller_board_lands_its_knobs():
     cfg = gen_config("ch592", "opencontroller-ch592", transport="uart")
     assert "#define OB_TRANSPORT_ID OB_TRANSPORT_ID_UART\n" in cfg
     assert "#define OB_UART1_REMAP 1\n" in cfg
+    assert "#define OB_UART1_ALT_PINS_HIZ 0\n" in cfg
     assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
     assert "#define OB_IDLE_TIMEOUT_MS 10000\n" in cfg
     # No OB_APP_END clamp: the module's bond lives in DataFlash, so the full
     # app region stays available.
     assert "#define OB_FLASH_APP_END 0x00070000\n" in cfg
+
+
+def test_mk65mx_wireless_board_lands_its_knobs():
+    """The MK65 module uses UART1's default PA8/PA9 mapping.
+
+    PB13 is CHWAKE on this board, so accidentally inheriting the original
+    OpenController PB12/PB13 remap would both lose the host UART and drive the
+    wake net with UART traffic.
+    """
+    cfg = gen_config("ch592", "mk65mx-wireless-ch592", transport="uart")
+    assert "#define OB_TRANSPORT_ID OB_TRANSPORT_ID_UART\n" in cfg
+    assert "#define OB_UART1_REMAP 0\n" in cfg
+    assert "#define OB_UART1_ALT_PINS_HIZ 1\n" in cfg
+    assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
+    assert "#define OB_IDLE_TIMEOUT_MS 10000\n" in cfg
+    assert "#define OB_FLASH_APP_END 0x00070000\n" in cfg
+    assert "OB_BOOT_PIN_MASK" not in cfg
+
+
+@pytest.mark.parametrize("bad", ["2", "yes", "0 1"])
+def test_uart_alt_pins_hiz_must_be_an_exact_boolean(bad):
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch592", "TRANSPORT=uart",
+         f"OB_UART1_ALT_PINS_HIZ={bad}",
+         "build/ch592-uart/openboot_config.h"],
+        capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "OB_UART1_ALT_PINS_HIZ must be 0 or 1" in result.stderr
