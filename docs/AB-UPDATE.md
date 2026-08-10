@@ -98,7 +98,7 @@ is written or erased at any point in an update. That is the whole design.
 "Passes the boot check" is weaker than "CRC-valid" unless the board asks for
 more. By default the bootloader validates the record and that the slot's first
 word is not the erased pattern; with `OB_BOOT_IMAGE_CRC=1` it also recomputes
-the whole image CRC. Both product boards set that knob, and any board relying
+the whole image CRC. Shipped product boards set that knob, and any board relying
 on A/B to survive out-of-band corruption should — the record alone proves the
 image was verified *at commit time*, not that it is still intact.
 

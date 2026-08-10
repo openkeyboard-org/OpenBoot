@@ -116,6 +116,7 @@ line.
 | `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it |
 | `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
 | `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
+| `OB_UART1_ALT_PINS_HIZ` | `0` | With default CH59x UART1 pins, `1` releases PB12/PB13 as floating inputs |
 | `OB_CPU_HZ` | transport default | UART-only: bootloader (and handoff) clock in Hz; must be a frequency the port's clock init supports |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
@@ -124,7 +125,8 @@ line.
 No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
 Shipped product boards: `opendongle-ch570` and `opendongle-ch592` (USB
 transport) and `opencontroller-ch592` (the keyboard wireless module — UART
-transport on the PB12/PB13 remap, no USB).
+transport on the PB12/PB13 remap, no USB), plus
+`mk65mx-wireless-ch592` (UART on PA8/PA9, PB12/PB13 released, no USB).
 
 `OB_APP_END` fences OBP off from flash the board reserves for something else —
 OpenDongle's CH570 keeps its RF bond at `0x3A000`, just below the boot-record
