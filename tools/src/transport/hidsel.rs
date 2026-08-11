@@ -148,10 +148,15 @@ pub fn open_hid(
 mod tests {
     use super::*;
     use crate::transport::hid::{OB_USAGE, OB_USAGE_PAGE};
+    use crate::transport::qmk::{TUNNEL_USAGE, TUNNEL_USAGE_PAGE};
 
     const BOOT: UsageFilter = UsageFilter {
         page: OB_USAGE_PAGE,
         usage: OB_USAGE,
+    };
+    const TUNNEL: UsageFilter = UsageFilter {
+        page: TUNNEL_USAGE_PAGE,
+        usage: TUNNEL_USAGE,
     };
 
     const BOOTLOADER: (u16, u16, &str) = (OB_USAGE_PAGE, OB_USAGE, "bootloader");
@@ -165,6 +170,17 @@ mod tests {
         (0x000C, 0x0001, "consumer"),
         (0xFF60, 0x0061, "app-vendor"),
         (0xFFFF, 0x0001, "app-vendor2"),
+    ];
+
+    /// The MK65MX keyboard's full interface set, tunnel included. VIA's
+    /// 0xFF60/0x61 sits one nibble from the tunnel's page, so this is the
+    /// fixture that keeps the two from ever cross-selecting.
+    const KEYBOARD_IFACES: [(u16, u16, &str); 5] = [
+        (0x0001, 0x0006, "keyboard"),
+        (0x0001, 0x0002, "mouse"),
+        (0x000C, 0x0001, "consumer"),
+        (0xFF60, 0x0061, "via"),
+        (TUNNEL_USAGE_PAGE, TUNNEL_USAGE, "tunnel"),
     ];
 
     #[test]
@@ -212,5 +228,27 @@ mod tests {
             (0xFF01, OB_USAGE, "wrong-page"),
         ];
         assert!(narrow(BOOT, &set).is_empty());
+    }
+
+    /// The filters must partition a real keyboard: the tunnel selector must
+    /// never land on VIA, and the bootloader selector must never land on the
+    /// tunnel.
+    #[test]
+    fn tunnel_and_bootloader_filters_never_cross_select() {
+        assert_eq!(narrow(TUNNEL, &KEYBOARD_IFACES), vec!["tunnel"]);
+        assert!(narrow(BOOT, &KEYBOARD_IFACES).is_empty());
+
+        let mut with_bootloader = KEYBOARD_IFACES.to_vec();
+        with_bootloader.push(BOOTLOADER);
+        assert_eq!(narrow(BOOT, &with_bootloader), vec!["bootloader"]);
+        assert_eq!(narrow(TUNNEL, &with_bootloader), vec!["tunnel"]);
+    }
+
+    /// The tunnel's page is deliberately not VIA's, and deliberately not the
+    /// bootloader's. Pin that, since both neighbours are one edit away.
+    #[test]
+    fn the_tunnel_usage_is_distinct_from_its_neighbours() {
+        assert_ne!((TUNNEL.page, TUNNEL.usage), (BOOT.page, BOOT.usage));
+        assert_ne!((TUNNEL.page, TUNNEL.usage), (0xFF60, 0x0061));
     }
 }

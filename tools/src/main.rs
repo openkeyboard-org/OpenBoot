@@ -26,6 +26,8 @@ use flows::{FlashOpts, VerifyMismatch};
 use image::load_image;
 use proto::consts::OB_UART_BAUD;
 use transport::hid::{HidTransport, DEFAULT_PID, DEFAULT_VID};
+use transport::hidsel::UsageFilter;
+use transport::qmk::{QmkOpts, QmkTransport, TUNNEL_USAGE, TUNNEL_USAGE_PAGE};
 use transport::uart::UartTransport;
 use transport::Transport;
 
@@ -59,6 +61,8 @@ fn parse_u32_auto(s: &str) -> Result<u32, String> {
 enum TransportArg {
     Usb,
     Uart,
+    /// The bootloader's UART reached through a QMK keyboard's HID tunnel.
+    Qmk,
 }
 
 #[derive(Parser)]
@@ -78,10 +82,13 @@ enum TransportArg {
         openboot --port /dev/ttyUSB0 probe    # probe over UART\n  \
         openboot verify app.hex               # compare flash CRC vs file\n  \
         openboot bless app.bin                # write boot record for an SWD-flashed image\n  \
-        openboot boot --stay                  # reset, stay in bootloader"
+        openboot boot --stay                  # reset, stay in bootloader\n  \
+        openboot --transport qmk --vid 0x4D4B --pid 0x0002 flash fw.obb --force\n                                        \
+        # update a module through its keyboard's HID tunnel"
 )]
 struct Cli {
-    /// Transport (default usb; --port implies uart, --serial implies usb)
+    /// Transport (default usb; --port implies uart, --serial implies usb; qmk
+    /// is never implied and must be asked for)
     #[arg(long, global = true, value_enum)]
     transport: Option<TransportArg>,
 
@@ -100,6 +107,14 @@ struct Cli {
     /// USB PID (default 0x0001)
     #[arg(long, global = true, value_parser = parse_u16_auto, value_name = "PID")]
     pid: Option<u16>,
+
+    /// HID usage page of the QMK tunnel interface (--transport qmk only)
+    #[arg(long, global = true, value_parser = parse_u16_auto, value_name = "PAGE")]
+    usage_page: Option<u16>,
+
+    /// HID usage of the QMK tunnel interface (--transport qmk only)
+    #[arg(long, global = true, value_parser = parse_u16_auto, value_name = "USAGE")]
+    usage: Option<u16>,
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -345,6 +360,11 @@ fn resolve_transport_kind(
         (Some(TransportArg::Uart), _, true) => {
             bail!("--serial selects a USB device and conflicts with --transport uart")
         }
+        // --serial IS allowed with qmk: there it picks which keyboard, the same
+        // device-versus-interface split --serial has on the USB transport.
+        (Some(TransportArg::Qmk), true, _) => {
+            bail!("--port selects the UART transport and conflicts with --transport qmk")
+        }
         (Some(kind), _, _) => Ok(kind),
         (None, true, true) => bail!("--port (uart) and --serial (usb) conflict; pick one"),
         (None, true, false) => Ok(TransportArg::Uart),
@@ -354,6 +374,12 @@ fn resolve_transport_kind(
 
 fn open_transport(cli: &Cli) -> Result<Box<dyn Transport>> {
     let kind = resolve_transport_kind(cli.transport, cli.port.is_some(), cli.serial.is_some())?;
+    if kind != TransportArg::Qmk && (cli.usage_page.is_some() || cli.usage.is_some()) {
+        // The bootloader's own usage is normative and must stay fixed: pointing
+        // that selector at another interface is how you write flash frames into
+        // a keyboard.
+        bail!("--usage-page/--usage apply only to --transport qmk");
+    }
     match kind {
         TransportArg::Usb => {
             if cli.port.is_some() {
@@ -379,7 +405,51 @@ fn open_transport(cli: &Cli) -> Result<Box<dyn Transport>> {
             eprintln!("opened serial port {} ({OB_UART_BAUD} 8N1)", t.path);
             Ok(Box::new(t))
         }
+        TransportArg::Qmk => {
+            // No VID/PID default: hid.rs's is the BOOTLOADER's identity, while
+            // the tunnel carries the keyboard's. Guessing one product's here
+            // would bake it into a product-neutral tool.
+            let (Some(vid), Some(pid)) = (cli.vid, cli.pid) else {
+                bail!(
+                    "--transport qmk requires --vid and --pid — the KEYBOARD's \
+                     USB identity, not the bootloader's, so there is no default"
+                );
+            };
+            let filter = UsageFilter {
+                page: cli.usage_page.unwrap_or(TUNNEL_USAGE_PAGE),
+                usage: cli.usage.unwrap_or(TUNNEL_USAGE),
+            };
+            eprintln!(
+                "entering the bootloader through the QMK tunnel — the keyboard \
+                 goes off air until this finishes"
+            );
+            let t =
+                QmkTransport::open(vid, pid, cli.serial.as_deref(), filter, &QmkOpts::default())?;
+            eprintln!(
+                "opened QMK tunnel {} (VID=0x{vid:04X} PID=0x{pid:04X}); the \
+                 bootloader answered {:.1} s after the module reset",
+                t.path,
+                t.settled.as_secs_f64()
+            );
+            Ok(Box::new(t))
+        }
     }
+}
+
+/// Warn where both facts are visible: parking the module in the bootloader is
+/// legitimate, but over the tunnel it means the keyboard stays off air, and the
+/// ten second auto-boot that would normally rescue it has already been disabled
+/// by the HELLO the transport had to send to get here.
+fn warn_if_parking_over_the_tunnel(cli: &Cli) {
+    if cli.transport != Some(TransportArg::Qmk) {
+        return;
+    }
+    eprintln!(
+        "WARNING: this leaves the module in the bootloader. A successful HELLO \
+         has already disabled the ten second idle auto-boot, so the keyboard \
+         stays off air until you run `openboot --transport qmk --vid ... \
+         --pid ... boot` or power-cycle it."
+    );
 }
 
 fn run(mut cli: Cli) -> Result<()> {
@@ -398,6 +468,9 @@ fn run(mut cli: Cli) -> Result<()> {
         } => {
             let src = load_source(&image, base)?;
             println!("loaded {}: {}", image.display(), src.describe());
+            if no_boot {
+                warn_if_parking_over_the_tunnel(&cli);
+            }
             let mut t = open_transport(&cli)?;
             flows::flash(
                 t.as_mut(),
@@ -427,6 +500,9 @@ fn run(mut cli: Cli) -> Result<()> {
             flows::erase(t.as_mut(), all, start, length, force)
         }
         Cmd::Boot { stay } => {
+            if stay {
+                warn_if_parking_over_the_tunnel(&cli);
+            }
             let mut t = open_transport(&cli)?;
             flows::boot(t.as_mut(), stay)
         }
@@ -507,6 +583,16 @@ mod tests {
         assert!(resolve_transport_kind(Some(Usb), true, false).is_err());
         assert!(resolve_transport_kind(Some(Uart), false, true).is_err());
         assert!(resolve_transport_kind(None, true, true).is_err());
+
+        // The tunnel is never implied — nothing selects it but asking for it.
+        assert_eq!(
+            resolve_transport_kind(Some(Qmk), false, false).unwrap(),
+            Qmk
+        );
+        // --serial picks WHICH keyboard, so it composes rather than conflicts.
+        assert_eq!(resolve_transport_kind(Some(Qmk), false, true).unwrap(), Qmk);
+        // A serial port is a different link entirely.
+        assert!(resolve_transport_kind(Some(Qmk), true, false).is_err());
     }
 
     #[test]

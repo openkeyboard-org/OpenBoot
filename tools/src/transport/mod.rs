@@ -15,6 +15,7 @@
 pub mod framing;
 pub mod hid;
 pub mod hidsel;
+pub mod qmk;
 pub mod uart;
 
 use std::time::{Duration, Instant};

@@ -159,6 +159,11 @@ SOF bytes inside a payload are ordinary data. The length, frame CRC,
 strict ping-pong exchange, and inter-byte timeout provide resynchronization;
 there is no escaping.
 
+*Non-normative.* A host MAY reach this UART through an intermediary that
+forwards bytes transparently — for instance a keyboard tunnelling them over a
+vendor HID interface. Nothing in this section changes: the device still parses
+exactly the framing above and still reports `OB_TRANSPORT_ID_UART` in HELLO.
+
 ## 5. Session model
 
 The device has two states. In IDLE, only HELLO is accepted; other commands
@@ -806,6 +811,11 @@ same pair. A host MUST therefore select on VID:PID **plus HID usage page
 A product doing this MUST keep its application off that usage. (OpenDongle
 uses `0xFFFF` and `0xFF60` for its vendor interfaces, so the two never
 collide.)
+
+This rule governs the **bootloader's own** HID interface and says nothing
+about an intermediary's. Something that tunnels the UART transport over HID
+(see section 4.2) MUST use a *different* usage pair: it is not a bootloader,
+and a host selecting on `0xFF00`/`0x01` must never land on it.
 
 Where a platform's HID backend does not report a usage, it yields `0x0000`
 for both fields. A host SHOULD treat that as **"cannot tell", not "matches"**,
