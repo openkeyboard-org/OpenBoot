@@ -12,7 +12,9 @@
 //! frames for other commands, and undecodable/corrupt frames are all
 //! discarded, and reading continues until the deadline.
 
+pub mod framing;
 pub mod hid;
+pub mod hidsel;
 pub mod uart;
 
 use std::time::{Duration, Instant};

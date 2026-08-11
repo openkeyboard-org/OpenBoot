@@ -2,11 +2,9 @@
 //! the SOF bytes `B0 07`; there is no trailer and no escaping (the protocol
 //! is strict ping-pong, so a corrupt lock simply fails the frame CRC).
 //!
-//! RX is a host-side mirror of the firmware's SOF-hunt state machine: hunt
-//! for `B0 07`, read the 4-byte header, validate the declared length, then
-//! read payload + CRC. A mid-frame gap longer than OB_UART_INTERBYTE_MS
-//! resets the parser to hunting (resync only — the encompassing command
-//! deadline still bounds the total wait).
+//! RX is a host-side mirror of the firmware's SOF-hunt state machine, shared
+//! with every other byte-stream transport — see `framing.rs`. This module only
+//! supplies the bytes.
 
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -14,11 +12,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serialport::{ClearBuffer, DataBits, FlowControl, Parity, SerialPort, StopBits};
 
+use super::framing::{self, ByteSource};
 use super::Transport;
-use crate::proto::consts::{
-    OB_FRAME_CRC_LEN, OB_FRAME_HDR_LEN, OB_MAX_PAYLOAD, OB_UART_BAUD, OB_UART_INTERBYTE_MS,
-    OB_UART_SOF1, OB_UART_SOF2,
-};
+use crate::proto::consts::{OB_UART_BAUD, OB_UART_INTERBYTE_MS};
 
 /// Bytes per write burst handed to the OS, and see `chunk_drain()` for the
 /// pause after each.
@@ -139,17 +135,11 @@ impl UartTransport {
             Err(e) => Err(e).context("serial read"),
         }
     }
+}
 
-    /// Read one in-frame byte: bounded by both the inter-byte gap and the
-    /// overall deadline. `Ok(None)` means "gap or deadline" — the caller
-    /// resyncs, and the SOF hunt then notices an expired deadline.
-    fn read_frame_byte(&mut self, deadline: Instant) -> Result<Option<u8>> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        let interbyte = Duration::from_millis(OB_UART_INTERBYTE_MS);
-        self.read_byte(interbyte.min(remaining))
+impl ByteSource for UartTransport {
+    fn next_byte(&mut self, wait: Duration) -> Result<Option<u8>> {
+        self.read_byte(wait)
     }
 }
 
@@ -158,9 +148,7 @@ impl Transport for UartTransport {
         // One contiguous buffer so the SOF and the frame are chunked on the
         // same boundaries a single write would have used; splitting them
         // separately would put a pause after 2 bytes on every frame.
-        let mut out = Vec::with_capacity(2 + frame.len());
-        out.extend_from_slice(&[OB_UART_SOF1, OB_UART_SOF2]);
-        out.extend_from_slice(frame);
+        let out = framing::encode_sof(frame);
 
         // serialport's write() and flush() wait on the SAME timeout field that
         // set_timeout() sets, and read_byte() drives that down to as little as
@@ -188,59 +176,7 @@ impl Transport for UartTransport {
     }
 
     fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>> {
-        'resync: loop {
-            // --- SOF hunt -------------------------------------------------
-            // A repeated 0xB0 keeps us armed: `B0 B0 07` still locks.
-            let mut sof1_seen = false;
-            loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Ok(None);
-                }
-                let wait = if sof1_seen {
-                    Duration::from_millis(OB_UART_INTERBYTE_MS).min(remaining)
-                } else {
-                    remaining
-                };
-                match self.read_byte(wait)? {
-                    Some(OB_UART_SOF1) => sof1_seen = true,
-                    Some(OB_UART_SOF2) if sof1_seen => break,
-                    Some(_) => sof1_seen = false,
-                    // Gap after a lone SOF1: drop the arm and keep hunting;
-                    // gap with no arm means the wait spanned the deadline.
-                    None => {
-                        if !sof1_seen {
-                            return Ok(None);
-                        }
-                        sof1_seen = false;
-                    }
-                }
-            }
-
-            // --- header ---------------------------------------------------
-            let mut frame =
-                Vec::with_capacity(OB_FRAME_HDR_LEN + OB_MAX_PAYLOAD + OB_FRAME_CRC_LEN);
-            for _ in 0..OB_FRAME_HDR_LEN {
-                match self.read_frame_byte(deadline)? {
-                    Some(b) => frame.push(b),
-                    None => continue 'resync,
-                }
-            }
-            let len = usize::from(frame[2]);
-            if len > OB_MAX_PAYLOAD {
-                // Desynchronized lock (SOF bytes inside other data): re-hunt.
-                continue 'resync;
-            }
-
-            // --- payload + CRC --------------------------------------------
-            for _ in 0..len + OB_FRAME_CRC_LEN {
-                match self.read_frame_byte(deadline)? {
-                    Some(b) => frame.push(b),
-                    None => continue 'resync,
-                }
-            }
-            return Ok(Some(frame));
-        }
+        framing::recv_sof_frame(self, deadline)
     }
 }
 
