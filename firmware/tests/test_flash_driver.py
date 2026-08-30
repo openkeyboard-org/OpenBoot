@@ -43,9 +43,9 @@ FAMILY = {
 
 
 class Drv:
-    def __init__(self, fam: str):
+    def __init__(self, fam: str, so: str = None):
         host_build.ensure_built()
-        self.lib = ctypes.CDLL(str(OUT / f"ob_flash_{fam}.so"))
+        self.lib = ctypes.CDLL(str(OUT / f"ob_flash_{so or fam}.so"))
         self.lib.ob_ch5xx_flash_erase.restype = ctypes.c_uint32
         self.lib.ob_ch5xx_flash_write.restype = ctypes.c_uint32
         self.lib.ob_ch5xx_flash_verify.restype = ctypes.c_uint32
@@ -237,6 +237,8 @@ def test_wait_acts_on_the_status_byte_not_the_discard(drv):
 
 
 def test_erase_never_uses_page_or_block_erase(drv):
+    # The DEFAULT builds (both families) are sector-erase only; page erase is
+    # opt-in per family via OB_FLASH_PAGE_ERASE — see the pe_drv tests below.
     assert drv.erase(0x2000, 0x2000) == 0           # two sectors
     ops = [t["op"] for t in transactions(drv.events())]
     assert ops.count(0x20) == 2
@@ -244,6 +246,44 @@ def test_erase_never_uses_page_or_block_erase(drv):
     txs = [t for t in transactions(drv.events()) if t["op"] == 0x20]
     assert txs[0]["out"] == addr_bytes(0x2000)
     assert txs[1]["out"] == addr_bytes(0x3000)
+
+
+# ---- page erase (OB_FLASH_PAGE_ERASE=1, ch59x only) -------------------------
+
+@pytest.fixture
+def pe_drv():
+    """The ch59x driver built with OB_FLASH_PAGE_ERASE=1 — 256 B page erase
+    (0x81). Gate/resume params are the ch59x ones; only the erase op differs."""
+    d = Drv("ch59x", so="ch59x_pageerase")
+    d.reset()
+    return d
+
+
+def test_page_erase_is_wren_then_0x81_then_status_poll(pe_drv):
+    pe_drv.push8(0xA4, 0x00)                         # one poll, as the 0x20 test
+    assert pe_drv.erase(0x2000, 0x100) == 0          # exactly one 256 B page
+    tx = transactions(pe_drv.events())
+    assert [t["op"] for t in tx] == [0xFF, 0x06, 0x81, 0x05]
+    assert 0x20 not in [t["op"] for t in tx]
+    assert tx[2]["out"] == addr_bytes(0x2000)        # big-endian address
+    assert tx[3]["inn"] == [0xA4, 0x00]
+
+
+def test_page_erase_splits_a_4k_span_into_16_pages(pe_drv):
+    assert pe_drv.erase(0x2000, 0x1000) == 0         # 4 KiB = 16 × 256 B
+    ops = [t["op"] for t in transactions(pe_drv.events())]
+    assert ops.count(0x81) == 16
+    assert 0x20 not in ops and 0xD8 not in ops
+    pages = [t for t in transactions(pe_drv.events()) if t["op"] == 0x81]
+    assert pages[0]["out"] == addr_bytes(0x2000)
+    assert pages[1]["out"] == addr_bytes(0x2100)     # +256
+    assert pages[-1]["out"] == addr_bytes(0x2000 + 15 * 256)
+
+
+def test_page_erase_rejects_a_non_256_aligned_length(pe_drv):
+    # 0x800 spans two 256 B pages fine; 0x080 (128 B) is sub-page — rejected.
+    assert pe_drv.erase(0x2000, 0x080) == E_ERASE_PARAM
+    assert pe_drv.erase(0x2040, 0x100) == E_ERASE_PARAM   # addr not 256-aligned
 
 
 def test_erase_timeout_reports_and_still_closes_the_gate(drv):

@@ -49,6 +49,40 @@ def test_product_config_boot_image_crc(chip, board):
     assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
 
 
+def test_page_erase_knob_defaults_off_and_lands_when_set():
+    # Default off, always emitted (consumed with #if).
+    assert "#define OB_FLASH_PAGE_ERASE 0\n" in gen_config("ch592", "generic-ch59x")
+    # Explicit opt-in on a ch59x build lands as 1.
+    cfg = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch592", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
+         "build/ch592-uart/openboot_config.h"],
+        check=True, capture_output=True, text=True)
+    assert "#define OB_FLASH_PAGE_ERASE 1\n" in \
+        (FW / "build/ch592-uart/openboot_config.h").read_text()
+
+
+def test_page_erase_is_ch59x_only():
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch570", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
+         "build/ch570-uart/openboot_config.h"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "OB_FLASH_PAGE_ERASE=1 is ch59x-only" in result.stderr
+
+
+@pytest.mark.parametrize("bad", ["2", "yes", "0 1"])
+def test_page_erase_must_be_an_exact_boolean(bad):
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         "CHIP=ch592", "TRANSPORT=uart", f"OB_FLASH_PAGE_ERASE={bad}",
+         "build/ch592-uart/openboot_config.h"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "OB_FLASH_PAGE_ERASE must be 0 or 1" in result.stderr
+
+
 @pytest.mark.parametrize("chip,board", [
     ("ch570", "opendongle-ch570"),
     ("ch592", "opendongle-ch592"),

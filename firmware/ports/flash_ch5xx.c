@@ -88,6 +88,27 @@
  * live one dead. */
 #define OB_FL_WAIT_ITERS   (OB_CPU_HZ / 40u)
 
+/* Erase opcode and step derive from OB_FLASH_ERASE_BLOCK — the core's single
+ * granularity source, set by the OB_FLASH_PAGE_ERASE knob in the port header —
+ * so the driver's step can never drift from the block size the core erases one
+ * at a time. 4096 -> sector erase 0x20; 256 -> page erase 0x81.
+ *
+ * HAZARD: 0x81 page erase is UNSUPPORTED on CH592A and hard-hangs it beyond SWD
+ * recovery (CH592 datasheet §4.4; bench evidence in docs/AB-UPDATE.md). It IS
+ * functional on CH592F (verified: firmware/tests/silicon/). CHIP=ch592 cannot
+ * tell the A and F dies apart, so OB_FLASH_PAGE_ERASE is a deliberate opt-in by
+ * which the builder asserts their die supports page erase — never a default. */
+#if OB_FLASH_ERASE_BLOCK == 4096u
+#define OB_FL_ERASE_OP 0x20u
+#elif OB_FLASH_ERASE_BLOCK == 256u
+#define OB_FL_ERASE_OP 0x81u
+#if (OB_CHIP_FAMILY == OB_FAMILY_CH570) || (OB_CHIP_FAMILY == OB_FAMILY_CH572)
+#error "256 B page erase (0x81) is ch59x-only; ISP572 has no page-erase command"
+#endif
+#else
+#error "OB_FLASH_ERASE_BLOCK must be 4096 or 256"
+#endif
+
 /* ---- transaction primitives ------------------------------------------- */
 /* R8_FLASH_CTRL bit 7 is transaction-busy; 5 opens a byte transaction (the
  * serial engine clocks one byte per R8_FLASH_DATA access); 0x15 clocks one
@@ -224,23 +245,24 @@ uint32_t ob_ch5xx_flash_erase(uint32_t addr, uint32_t len)
 {
     uint32_t rc = 0;
 
-    if (len == 0 || ((addr | len) & 0xFFFu) != 0 || addr + len < addr) {
+    if (len == 0 || ((addr | len) & (OB_FLASH_ERASE_BLOCK - 1u)) != 0 ||
+        addr + len < addr) {
         return OB_FLERR_ERASE_PARAM;
     }
-    /* 4 KiB sector erase (0x20) only. The archives also know 64 KiB block
-     * (0xD8) and 256 B page (0x81) erase, but the core only ever asks for
-     * single 4 KiB blocks — and 0x81 hard-hangs CH592A silicon beyond SWD
-     * recovery (bench evidence in docs/AB-UPDATE.md), so it must never be
-     * issued on this family. */
+    /* One erase op per OB_FLASH_ERASE_BLOCK: sector erase 0x20 (4 KiB) by
+     * default, or page erase 0x81 (256 B) when OB_FLASH_PAGE_ERASE lowers the
+     * block — see the OB_FL_ERASE_OP hazard note above. The core erases exactly
+     * one block per call; the loop is defensive. The archives also know 64 KiB
+     * block erase (0xD8); the core never asks for it. */
     ob_fl_open(OB_FL_GATE_WRITE);
     while (len != 0) {
-        ob_fl_cmd_addr(0x20, addr);
+        ob_fl_cmd_addr(OB_FL_ERASE_OP, addr);
         if (ob_fl_wait() == 0) {
             rc = OB_FLERR_ERASE_TIMEOUT;
             break;
         }
-        addr += 0x1000u;
-        len -= 0x1000u;
+        addr += OB_FLASH_ERASE_BLOCK;
+        len -= OB_FLASH_ERASE_BLOCK;
     }
     ob_fl_close();
     return rc;

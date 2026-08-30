@@ -31,7 +31,15 @@
 
 /* ---- contract constants ---------------------------------------------- */
 #define OB_FLASH_APP_START    OB_APP_BASE
+/* OB_FLASH_PAGE_ERASE (build knob, default 0) drops the erase granularity to
+ * 256 B, driving 0x81 page erase in flash_ch5xx.c and the 256 B erase block
+ * everywhere the core keys off this macro. Opt-in only: 0x81 hard-hangs
+ * CH592A — see the hazard note at OB_FL_ERASE_OP and docs/AB-UPDATE.md. */
+#if OB_FLASH_PAGE_ERASE
+#define OB_FLASH_ERASE_BLOCK  256u
+#else
 #define OB_FLASH_ERASE_BLOCK  4096u
+#endif
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u  /* bench-verified on CH592A silicon
                                             * (0xF5F9BDA9 from the EVT lore was
