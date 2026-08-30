@@ -37,6 +37,16 @@ void tr_init(void);
  * The buffer stays valid until the next tr_poll/tr_send call. */
 const uint8_t *tr_poll(uint32_t *avail);
 
+/* Nonzero while a frame is mid-flight and the main loop must call tr_poll
+ * again WITHOUT spending time on idle bookkeeping first. UART: the FIFO is
+ * 8 bytes and drains only by polling, while a full loop pass — clock fold,
+ * idle check, the OB_POLL_INTERVAL_US sleep — measured ~410 us on CH570 at
+ * the UART image's 6.4 MHz reset clock (XIP fetch there costs several times
+ * the delay calibration's assumption), against 700 us of FIFO headroom at
+ * 115200: any continuous run much longer than ~2 loop passes lost bytes.
+ * USB: always 0 — the SIE DMA-fills a whole report regardless of loop pace. */
+int tr_rx_busy(void);
+
 /* Blocking send of one complete logical frame (core built it, CRC
  * included). USB: zero-pads to a 64-byte IN report. UART: writes SOF then
  * the frame. */

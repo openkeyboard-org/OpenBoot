@@ -24,10 +24,17 @@
 #define OB_IDLE_TIMEOUT_MS 10000u
 #endif
 
+/* Ceiling on consecutive hot polls while tr_rx_busy(): a legitimate frame
+ * needs well under a hundred (62 wire bytes is ~5.4 ms, one FIFO drain per
+ * pass), so this only ever binds against a host that streams bytes forever —
+ * which must not be able to suppress the idle deadline below. */
+#define OB_BUSY_POLLS_MAX 4096u
+
 int main(void)
 {
     uint8_t resp[OB_MAX_FRAME];
     uint32_t idle_start, now_ms;
+    uint32_t busy_polls = 0;
 
     ob_port_init();
     ob_boot_decide();                    /* may not return */
@@ -63,6 +70,17 @@ int main(void)
          * it can never run on dirty flash — mutation requires a session and
          * an active session suppresses the timeout — so XIP is coherent
          * here by construction. */
+        /* Mid-frame, stay hot: the bookkeeping below plus the sleep is one
+         * loop pass, and on the slowest supported XIP (CH570 at the UART
+         * image's 6.4 MHz) a pass measured ~410 us — more than half the
+         * 8-byte RX FIFO's 700 us of headroom at 115200, which lost bytes
+         * out of any continuous run longer than ~20 wire bytes. Bounded so
+         * a host that streams bytes forever still meets the idle deadline
+         * and the ~43 s clock fold below. */
+        if (tr_rx_busy() && ++busy_polls < OB_BUSY_POLLS_MAX)
+            continue;
+        busy_polls = 0;
+
         /* Read the clock unconditionally, before any short-circuit can skip
          * it: ob_uptime_ms() folds the hardware counter into a millisecond
          * total and that counter wraps every ~43 s, so a caller that stops
