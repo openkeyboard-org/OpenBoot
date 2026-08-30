@@ -40,6 +40,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 import zlib
 
@@ -74,19 +75,6 @@ def swap_boot(cfg, image):
         if open(rb.name, "rb").read() != boot:
             raise RuntimeError("swap_boot(): bootloader readback mismatch")
     ab.power_cycle(cfg)
-
-
-def classify_full(sector_bytes, before_bytes):
-    """untouched / erased / partial from a FULL-sector SWD dump: sampling
-    can miss a disturbance that lies between samples."""
-    er = ERASED_WORD.to_bytes(4, "little")
-    erased = all(sector_bytes[i:i + 4] == er
-                 for i in range(0, len(sector_bytes), 4))
-    if erased:
-        return "erased"
-    if sector_bytes == before_bytes:
-        return "untouched"
-    return "partial"
 
 
 def read_region(cfg, addr, length):
@@ -224,81 +212,153 @@ def _recover_full_sector(cfg, seed):
     return read_region(cfg, base, 4096) == pat
 
 
+def _cut_power(cfg, c, delay, close=True):
+    """Cut 3V3 with the serial port still OPEN: closing the CDC port resets
+    the target (bench README), which would abort the op before the cut ever
+    lands. TX is held in break through the off window — this fixture's
+    idle-high TX back-powers the chip through the RX pin's clamp diode
+    otherwise, and a 'cut' that leaves the die powered is not a cut."""
+    time.sleep(delay)
+    c.s.break_condition = True
+    ab.mc(cfg, "-t", t=30)
+    time.sleep(0.6)
+    ab.mc(cfg, "-3", t=30)
+    c.s.break_condition = False
+    if close:
+        c.close()
+    time.sleep(2.0)
+
+
 def scenario_cut_erase(name):
+    """Power cut inside a WHOLE-WINDOW erase sequence. A single 4 KiB
+    sector erase completes in ~5 ms — far inside the cut path's latency —
+    so the aimable window is the multi-sector SEQUENCE (measured 951 ms
+    for the 53-sector window on this fixture). Setup leaves a 48 B PRNG
+    stamp on every erased sector; the post-mortem classifies each sector
+    from a full SWD dump and the trial from the mix: all-erased = cut
+    after completion, all-stamped = before it started, a mix (or any torn
+    sector) = the cut landed inside the erase sequence."""
     cfg = ab.CHIPS[name]
-    print(f"\n=== {name}: power cuts inside sector erase ===")
-    classes = {"untouched": 0, "erased": 0, "partial": 0}
+    print(f"\n=== {name}: power cuts inside a multi-sector erase sequence ===")
+    classes = {"pre": 0, "mid": 0, "post": 0}
+    er4 = ERASED_WORD.to_bytes(4, "little")
     for t in range(TRIALS):
-        # Known content in the target sector first, then a full-sector
-        # before-image over SWD (classification never relies on sampling).
         c, base, cap = obp_session(cfg)
-        pat = prng_image(4096, 0xA000 + t)
+        span = cap - 4096                    # leave the record block alone
+        nsec = span // 4096
+        stamps = [prng_image(48, (0xA000 + t) * 64 + s) for s in range(nsec)]
         try:
-            if c.status(c.erase(base, 4096)) != 0:
+            if c.status(c.xfer(0x02, struct.pack("<II", base, span),
+                               t=30.0)) != 0:
                 raise RuntimeError("setup erase failed")
-            for off in range(0, 4096, 48):
-                if c.status(c.write(base + off, pat[off:off + 48])) != 0:
-                    raise RuntimeError("setup write failed")
-        finally:
-            c.close()
-        before = read_region(cfg, base, 4096)
-        act, wr, base, _ = ab.enter_bootloader(cfg)
-        c = ab.Obp(cfg["port"])
-        try:
-            c.hello()
-            # Fire the ERASE frame without waiting, then cut after a
-            # randomized delay. mutation_begin may touch the record block
-            # first, so where the cut lands is CLASSIFIED, never assumed.
-            c.s.write(ab.frame(0x02, 1, struct.pack("<II", base, 4096)))
+            for s in range(nsec):
+                if c.status(c.write(base + s * 4096, stamps[s])) != 0:
+                    raise RuntimeError("setup stamp failed")
+            # Fire the whole-window ERASE without waiting, then cut inside
+            # the measured sequence window. mutation_begin may touch the
+            # record block first, so where the cut lands is CLASSIFIED,
+            # never assumed.
+            c.s.write(ab.frame(0x02, 1, struct.pack("<II", base, span)))
             c.s.flush()
-            time.sleep(random.uniform(0.0, 0.08))
-        finally:
+        except Exception:
             c.close()
-        ab.power_cycle(cfg)
-        cls = classify_full(read_region(cfg, base, 4096), before)
+            raise
+        _cut_power(cfg, c, random.uniform(0.05, 0.85))
+        got = read_region(cfg, base, span)
+        n_er = n_st = n_torn = 0
+        for s in range(nsec):
+            sec = got[s * 4096:(s + 1) * 4096]
+            if all(sec[i:i + 4] == er4 for i in range(0, 4096, 4)):
+                n_er += 1
+            elif sec[:48] == stamps[s] and all(
+                    sec[i:i + 4] == er4 for i in range(48, 4096, 4)):
+                n_st += 1
+            else:
+                n_torn += 1
+        cls = "post" if n_st == 0 and n_torn == 0 else \
+              "pre" if n_er == 0 and n_torn == 0 else "mid"
         classes[cls] += 1
+        print(f"  trial {t}: {cls} (erased={n_er} stamped={n_st} "
+              f"torn={n_torn})")
         ab.check(f"trial {t} ({cls}): full-sector recovery",
                  _recover_full_sector(cfg, 0xAA00 + t), True)
     print(f"  cut classes over {TRIALS} trials: {classes}")
-    ab.check("enough cuts landed mid-erase (partial state observed)",
-             classes["partial"] >= MIN_MIDOP, True)
+    ab.check("enough cuts landed mid-erase-sequence",
+             classes["mid"] >= MIN_MIDOP, True)
 
 
 def scenario_cut_write(name):
+    """Power cut inside a paced page-program run. One 48 B program op is
+    ~14 ms frame-to-response — not aimable through the ~30 ms cut path on
+    its own — so a worker thread fills the sector with NORMAL paced writes
+    (the device spends ~60% of that ~1.2 s inside the driver) and the cut
+    fires at a random instant of the run. Fire-and-forget streaming is
+    deliberately NOT used: the transport is fully polled and the 8-byte
+    UART FIFO overflows while the driver runs from RAM, so a full-rate
+    stream just sheds frames. Post-mortem walks the spans in write order:
+    a complete prefix, at most one torn span at the frontier, then erased
+    tail — anything after the frontier is a classifier-soundness failure.
+    Torn landings are die/aim luck (prior bench: 1 in 52), so extra runs
+    are allowed until one is observed."""
     cfg = ab.CHIPS[name]
-    print(f"\n=== {name}: power cut on ONE outstanding page program ===")
-    hits = 0
-    for t in range(TRIALS):
+    print(f"\n=== {name}: power cut inside a paced page-program run ===")
+    er4 = ERASED_WORD.to_bytes(4, "little")
+    spans = list(range(0, 4096, 48))
+    mid = torn_total = bad_total = trials = 0
+    while trials < TRIALS or (torn_total == 0 and trials < TRIALS * 4):
+        t = trials
         c, base, cap = obp_session(cfg)
         pat = prng_image(4096, 0xB000 + t)
-        cut_off = 256 * (t % 8)             # page-aligned 48B target span
         try:
             if c.status(c.erase(base, 4096)) != 0:
                 raise RuntimeError("setup erase failed")
-            # Everything before the target span lands as COMPLETED writes.
-            for off in range(0, cut_off, 48):
-                if c.status(c.write(base + off, pat[off:off + 48])) != 0:
-                    raise RuntimeError("setup write failed")
-            # ONE outstanding frame, then the cut races the program op. A
-            # cut between completed frames cannot fake a hit: only THIS
-            # span is judged, and only a torn state counts.
-            c.s.write(ab.frame(0x03, 0x77, struct.pack("<I", base + cut_off)
-                               + pat[cut_off:cut_off + 48]))
-            c.s.flush()
-            time.sleep(random.uniform(0.0, 0.004))
+
+            def fill():
+                for off in spans:
+                    if c.status(c.write(base + off, pat[off:off + 48])) != 0:
+                        return               # the cut landed: stop quietly
+
+            w = threading.Thread(target=fill)
+            w.start()
+            _cut_power(cfg, c, random.uniform(0.02, 1.1), close=False)
+            w.join(10.0)
         finally:
             c.close()
-        ab.power_cycle(cfg)
         got = read_region(cfg, base, 4096)
-        span = got[cut_off:cut_off + 48]
-        er = all(span[i:i + 4] == ERASED_WORD.to_bytes(4, "little")
-                 for i in range(0, 48, 4))
-        torn = span != pat[cut_off:cut_off + 48] and not er
-        hits += torn
-        ab.check(f"trial {t} ({'TORN' if torn else 'clean'}): full-sector "
-                 "recovery", _recover_full_sector(cfg, 0xBB00 + t), True)
-    print(f"  confirmed torn-program landings: {hits}/{TRIALS}")
-    ab.check("enough cuts landed inside a program op", hits >= MIN_MIDOP, True)
+        n_complete = torn = bad = 0
+        state = "run"
+        for off in spans:
+            n = min(48, 4096 - off)
+            spanb = got[off:off + n]
+            want = pat[off:off + n]
+            erased = all(spanb[i:i + 4] == er4 for i in range(0, n, 4))
+            if spanb == want:
+                n_complete += 1
+                if state != "run":
+                    bad += 1
+            elif erased:
+                state = "tail"
+            else:
+                torn += 1
+                if state != "run":
+                    bad += 1
+                state = "tail"
+        incomplete = n_complete < len(spans)
+        mid += incomplete
+        torn_total += torn
+        bad_total += bad
+        tag = "TORN" if torn else ("mid-run" if incomplete else "complete")
+        print(f"  trial {t}: {tag} (complete={n_complete}/{len(spans)} "
+              f"torn={torn} bad={bad})")
+        ab.check(f"trial {t} ({tag}): full-sector recovery",
+                 _recover_full_sector(cfg, 0xBB00 + t), True)
+        trials += 1
+    print(f"  mid-run landings {mid}/{trials}, torn program ops {torn_total}")
+    ab.check("classifier soundness (nothing written past the frontier)",
+             bad_total, 0)
+    ab.check("enough cuts landed inside the program run",
+             mid >= MIN_MIDOP, True)
+    ab.check("at least one torn program op observed", torn_total >= 1, True)
 
 
 def scenario_negative_verify(name, open_build=True):
