@@ -78,13 +78,27 @@
 #if (OB_SLOT_SIZE % OB_FLASH_ERASE_BLOCK) != 0
 #error "slot size must be a multiple of the erase block"
 #endif
-/* Strictly greater, not merely non-zero: the top block of every slot belongs
- * to its record, so a one-block slot has no room for an image at all. That
- * configuration builds, and every ERASE and WRITE then fails the range check
- * on a capacity of zero — a bootloader that cannot be flashed. It is
- * reachable from a board setting OB_APP_END barely above the app base. */
-#if OB_SLOT_SIZE <= OB_FLASH_ERASE_BLOCK
-#error "slot size must exceed one erase block: the record owns the top block"
+/* The A/B record reserves the top OB_RECORD_BLOCK of every slot. It is a FIXED
+ * 4 KiB, deliberately independent of the flash erase granularity
+ * (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B): the record
+ * address is what the application's linker and the factory-bless path agree
+ * with, so it must not move with a build knob — a page-erase and a
+ * sector-erase build share one slot/record map. Must be a whole number of
+ * erase blocks so a record rewrite erases on a block boundary. See
+ * boot_decision.c, which owns OB_SLOT_IMAGE_MAX / ob_slot_record_addr. */
+#define OB_RECORD_BLOCK 4096u
+#if (OB_RECORD_BLOCK % OB_FLASH_ERASE_BLOCK) != 0
+#error "OB_RECORD_BLOCK must be a whole number of erase blocks"
+#endif
+/* Strictly greater, not merely non-zero: the top OB_RECORD_BLOCK of every slot
+ * belongs to its record, so a slot no larger than that has no room for an
+ * image at all. That configuration builds, and every ERASE and WRITE then
+ * fails the range check on a capacity of zero — a bootloader that cannot be
+ * flashed. It is reachable from a board setting OB_APP_END barely above the
+ * app base. Checked against the fixed record reserve, NOT the erase block, so
+ * a page-erase build rejects the same degenerate geometry a sector build does. */
+#if OB_SLOT_SIZE <= OB_RECORD_BLOCK
+#error "slot size must exceed the record block: the record owns the top 4 KiB"
 #endif
 #if OB_SLOT_A_BASE != OB_FLASH_APP_START
 #error "slot A must start at the app base"

@@ -35,6 +35,14 @@
 #ifndef OPENBOOT_SLOT_SIZE
 #error "define OPENBOOT_SLOT_SIZE to the slot size OpenBoot was built with"
 #endif
+/* The RECORD RESERVE: the top block of the slot that OpenBoot reserves for the
+ * A/B record, and the offset this companion reads the record at
+ * (slot_end - OPENBOOT_ERASE_BLOCK). It is a FIXED 4 KiB and must stay 4096 to
+ * match the bootloader's OB_RECORD_BLOCK. Do NOT lower it to 256 to "match" a
+ * bootloader built with OB_FLASH_PAGE_ERASE: page erase changes only the flash
+ * erase granularity, NOT the record reserve, which the bootloader keeps at
+ * 4 KiB precisely so the record address never moves with a build knob.
+ * Overriding this to any other value reads the wrong record address. */
 #ifndef OPENBOOT_ERASE_BLOCK
 #define OPENBOOT_ERASE_BLOCK 4096u
 #endif

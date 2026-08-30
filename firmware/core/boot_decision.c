@@ -16,20 +16,16 @@ uint32_t ob_slot_base(uint32_t slot)
  * record its own block costs 4 KiB per slot (1.8% on ch592, 3.6% on ch570) and
  * makes every record rewrite safe.
  *
- * This is a FIXED 4 KiB, deliberately independent of the flash erase
- * granularity (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B):
- * the record address is what the application's linker agrees with and what the
+ * OB_RECORD_BLOCK (defined in openboot_port.h with the slot-geometry asserts)
+ * is a FIXED 4 KiB, deliberately independent of the flash erase granularity
+ * (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B): the record
+ * address is what the application's linker agrees with and what the
  * factory-bless path computes, so it must NOT move with a build knob. A
  * page-erase and a sector-erase build of the same firmware therefore share an
  * identical slot/record map — images and factory blessings stay compatible
  * across the knob, and switching it does not strand an installed device's
  * records. The 4 KiB reserve is erased one OB_FLASH_ERASE_BLOCK at a time (the
- * record lives in the reserve's bottom block, which is all a rewrite clears);
- * 4096 is a whole multiple of every supported erase block. */
-#define OB_RECORD_BLOCK 4096u
-#if (OB_RECORD_BLOCK % OB_FLASH_ERASE_BLOCK) != 0
-#error "OB_RECORD_BLOCK must be a whole number of erase blocks"
-#endif
+ * record lives in the reserve's bottom block, which is all a rewrite clears). */
 #define OB_SLOT_IMAGE_MAX (OB_SLOT_SIZE - OB_RECORD_BLOCK)
 
 uint32_t ob_slot_record_addr(uint32_t slot)
