@@ -107,9 +107,10 @@ def transactions(evs):
                 and evs[i + 1] == (CTRL_WR, 5)):
             j = i + 2
             nops = 0
-            while evs[j][0] == NOP:
+            while j < len(evs) and evs[j][0] == NOP:
                 nops += 1
                 j += 1
+            assert j < len(evs), "log ends inside a transaction preamble"
             assert evs[j][0] == DATA8_WR, "transaction without an opcode"
             tx = dict(op=evs[j][1], nops=nops, out=[], inn=[],
                       w32=[], r32=[], pulses=0, ctrl_rds=0)
