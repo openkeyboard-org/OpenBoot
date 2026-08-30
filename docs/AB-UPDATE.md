@@ -22,7 +22,7 @@ Verified against the vendor SDK headers and the datasheets vendored in
 
 | | CH570 / CH572 | CH591 / CH592 |
 |---|---|---|
-| Minimum erase | 4096 B (code flash) | 4096 B (code flash) |
+| Minimum erase | 4096 B (code flash) | 4096 B default; 256 B on a CH592F build with `OB_FLASH_PAGE_ERASE=1` |
 | Minimum write | 4 B | 4 B (code flash) |
 | DataFlash | none | 32 KiB, 256 B page erase **documented but unusable** |
 | Record lives in | code flash, inside its slot | code flash, inside its slot |
@@ -44,7 +44,7 @@ Three facts do most of the work here:
   `CHIP=ch592` cannot tell the A and F dies apart, page erase ships behind the
   `OB_FLASH_PAGE_ERASE` build knob (default off): setting it lowers the erase
   granularity to 256 B and is the builder's assertion that their die supports
-  it. The default build treats 4096 as the minimum erase on both families.
+  it. By default OpenBoot treats 4096 as the minimum erase on both families.
 - **No flash remap.** The only address-related bit, `RB_ROM_CODE_OFS`, is a
   fixed boot-entry selector, not a translation.
 - **The application cannot be relocated.** The vendor blobs are

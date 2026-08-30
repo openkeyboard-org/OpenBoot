@@ -60,13 +60,15 @@ implementation-specific (most plausibly the erase being driven such that an
 instruction fetch hit dead XIP mid-operation), **not** the CH592F's
 page-erase command.
 
-**This does not change OpenBoot.** The result is one die; the datasheet
-disallows page erase on the CH592A variant, and the memory notes record that
-both die populations circulate. Sector erase (0x20) is universal and is what
-OpenBoot must keep using — it is guaranteed on every die, whereas page erase
-is proven only here. The finding narrows the *cause* of the old hang (ours,
-not the silicon) and retires the implication that CH592F page erase is
-inherently unusable.
+**What OpenBoot does with this.** Sector erase (0x20) stays the default and
+universally supported mode — it is guaranteed on every die, whereas page erase
+is proven only here on one CH592F, the datasheet disallows it on the CH592A
+variant, and both die populations circulate. So page erase (0x81) ships as an
+opt-in, default-off, ch59x-only build option (`OB_FLASH_PAGE_ERASE`) that the
+builder enables only on a die verified to support it — this probe is that
+verification. The finding narrows the *cause* of the old hang (ours, not the
+silicon) and retires the implication that CH592F page erase is inherently
+unusable.
 
 ## Note on WCH OpenOCD (`wch-ch59x.cfg`)
 
