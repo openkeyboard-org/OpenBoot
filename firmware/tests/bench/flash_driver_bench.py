@@ -212,6 +212,11 @@ def _recover_full_sector(cfg, seed):
     return read_region(cfg, base, 4096) == pat
 
 
+# minichlink -t spawn-to-exit, measured on this bench: the fixed part of the
+# cut path that a scenario must subtract when it aims inside a short window.
+MC_CUT_LATENCY = 0.028
+
+
 def _cut_power(cfg, c, delay, close=True):
     """Cut 3V3 with the serial port still OPEN: closing the CDC port resets
     the target (bench README), which would abort the op before the cut ever
@@ -248,22 +253,30 @@ def scenario_cut_erase(name):
         nsec = span // 4096
         stamps = [prng_image(48, (0xA000 + t) * 64 + s) for s in range(nsec)]
         try:
+            # The setup erase doubles as the aim calibration: the sequence
+            # duration is family- and die-dependent (bench: ~950 ms for 53
+            # sectors on a CH592 at 6.4 MHz, ~74 ms for 27 on a CH570 —
+            # 7x faster per sector), so a hardcoded window overshoots one
+            # chip or the other.
+            t0 = time.time()
             if c.status(c.xfer(0x02, struct.pack("<II", base, span),
                                t=30.0)) != 0:
                 raise RuntimeError("setup erase failed")
+            t_seq = time.time() - t0
             for s in range(nsec):
                 if c.status(c.write(base + s * 4096, stamps[s])) != 0:
                     raise RuntimeError("setup stamp failed")
             # Fire the whole-window ERASE without waiting, then cut inside
-            # the measured sequence window. mutation_begin may touch the
-            # record block first, so where the cut lands is CLASSIFIED,
+            # the just-measured sequence window. mutation_begin may touch
+            # the record block first, so where the cut lands is CLASSIFIED,
             # never assumed.
             c.s.write(ab.frame(0x02, 1, struct.pack("<II", base, span)))
             c.s.flush()
         except Exception:
             c.close()
             raise
-        _cut_power(cfg, c, random.uniform(0.05, 0.85))
+        _cut_power(cfg, c, max(0.0, random.uniform(0.0, 0.95 * t_seq)
+                               - MC_CUT_LATENCY))
         got = read_region(cfg, base, span)
         n_er = n_st = n_torn = 0
         for s in range(nsec):
