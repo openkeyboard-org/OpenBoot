@@ -9,7 +9,9 @@ chosen instant rather than to complete.
 import os, re, subprocess, sys, time, zlib
 
 ROOT = os.environ.get("OPENBOOT_ROOT", os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")))
-MC = os.path.expanduser("~/Development/Personal/WCH/ch32fun/minichlink/minichlink")
+MC = os.environ.get(
+    "MINICHLINK",
+    os.path.expanduser("~/Development/WCH/ch32fun/minichlink/minichlink"))
 OB = f"{ROOT}/tools/target/release/openboot"
 HERE = os.path.dirname(os.path.abspath(__file__))
 

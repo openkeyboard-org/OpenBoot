@@ -22,9 +22,10 @@ HARNESS = BENCH / "ab_bench.py"
 
 
 def test_harness_parses():
-    """Syntax only: importing it would require pyserial, which a checkout has
-    no reason to have installed."""
-    ast.parse(HARNESS.read_text(), str(HARNESS))
+    """Syntax only: importing them would require pyserial/hidapi, which a
+    checkout has no reason to have installed."""
+    for py in sorted(BENCH.glob("*.py")):
+        ast.parse(py.read_text(), str(py))
 
 
 def test_builder_is_valid_shell():
