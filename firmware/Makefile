@@ -184,13 +184,17 @@ $(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
-# Page erase is a ch59x-only capability (ISP572/ch57x has no page-erase
-# command). Key on CHIP (the primary build input) rather than the derived
-# PORT so a stray PORT= override cannot slip a ch57x build past this; the
-# driver's #if OB_FL_ERASE_OP == 0x81 family guard is the C-side backstop.
+# Page erase is restricted to CHIP=ch592, the only silicon it is PROVEN on
+# (CH592F, firmware/tests/silicon/). ch57x (ISP572) has no page-erase command
+# at all; ch591 shares the ch59x controller but is build-validated only and
+# was never bench-tested for 0x81 — so it stays out until proven. Key on CHIP
+# (the primary build input) so a stray PORT= override cannot slip another chip
+# past this; the driver's #if OB_FL_ERASE_OP == 0x81 family guard is the
+# C-side backstop.
 ifeq ($(OB_FLASH_PAGE_ERASE),1)
-  ifeq ($(filter $(CHIP),ch591 ch592),)
-    $(error OB_FLASH_PAGE_ERASE=1 is ch59x-only (got CHIP=$(CHIP)))
+  ifneq ($(CHIP),ch592)
+    $(error OB_FLASH_PAGE_ERASE=1 is CH592-only, and only on a die proven to \
+            support page erase e.g. CH592F (got CHIP=$(CHIP)))
   endif
 endif
 

@@ -35,7 +35,7 @@ shared record used have been **reclaimed**: ch57x's app region grows to
 
 Three facts do most of the work here:
 
-- **Page erase is opt-in, ch59x only.** ch57x (ISP572) exposes no page-erase
+- **Page erase is opt-in, CH592 only.** ch57x (ISP572) exposes no page-erase
   command at all; 4096 is the floor there. On ch59x, 256 B page erase (`0x81`)
   is real: the CH592 datasheet §4.4 says *"CH592A does not support page erase"*
   and a CH592A hangs beyond SWD recovery, but a later register-level probe

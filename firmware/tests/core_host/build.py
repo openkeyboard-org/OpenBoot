@@ -34,6 +34,10 @@ FAMILIES = {
     "ch57x": "-DOB_HOST_CH57X",
     "ch59x": "-DOB_HOST_CH59X",
     "ch57x_imagecrc": "-DOB_HOST_CH57X -DOB_BOOT_IMAGE_CRC=1",
+    # The full core at 256 B page-erase granularity: exercises the bitmap
+    # sizing/indexing, ERASE alignment, HELLO erase_block, and — the crux —
+    # that the slot/record geometry stays invariant (test_page_erase_core.py).
+    "ch59x_pageerase": "-DOB_HOST_CH59X -DOB_FLASH_PAGE_ERASE=1",
 }
 
 FLASH_HOST = HERE.parent / "flash_host"
