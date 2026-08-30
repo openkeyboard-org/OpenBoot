@@ -82,11 +82,17 @@ def build(cc=None):
     # (test_flash_driver.py). The mock port header replaces every hardware
     # seam, so this exercises opcode order, page splitting, cleanup and
     # timeout inversion without silicon.
-    for fam, fdef in (("ch57x", "-DOB_HOST_CH57X"), ("ch59x", "-DOB_HOST_CH59X")):
+    # ch59x_pageerase: the same ch59x driver with OB_FLASH_PAGE_ERASE=1, which
+    # lowers the erase block to 256 and selects the 0x81 page-erase opcode —
+    # so the mock verifies the page-erase sequencing without silicon.
+    for fam, fdef in (("ch57x", "-DOB_HOST_CH57X"),
+                      ("ch59x", "-DOB_HOST_CH59X"),
+                      ("ch59x_pageerase",
+                       "-DOB_HOST_CH59X -DOB_FLASH_PAGE_ERASE=1")):
         _run([cc, "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
               f"-I{FW / 'core'}", f"-I{FW / 'ports'}", f"-I{FLASH_HOST}",
               '-DOB_PORT_HEADER="ob_flash_host_port.h"',
-              "-DOB_TRANSPORT_ID=OB_TRANSPORT_ID_USB", fdef,
+              "-DOB_TRANSPORT_ID=OB_TRANSPORT_ID_USB", *fdef.split(),
               "-fPIC", "-shared", *FLASH_SRC, "-o", OUT / f"ob_flash_{fam}.so"])
     # Application companion as a host library: this repo ships it but
     # nothing here compiled it until the review that added this - a rename
@@ -117,7 +123,8 @@ def ensure_built(cc=None):
     # skip build() on a checkout where those exist from before the companion
     # library did, and the companion tests then load a missing artifact.
     sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"] + \
-          [OUT / f"ob_flash_{fam}.so" for fam in ("ch57x", "ch59x")]
+          [OUT / f"ob_flash_{fam}.so"
+           for fam in ("ch57x", "ch59x", "ch59x_pageerase")]
     if all(so.exists() for so in sos):
         newest_src = max(p.stat().st_mtime for p in DEPS)
         if min(so.stat().st_mtime for so in sos) > newest_src:

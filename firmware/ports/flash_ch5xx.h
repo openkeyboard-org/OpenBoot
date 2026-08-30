@@ -4,9 +4,11 @@
  *
  * Behavioral reference is the disassembly of those archives (ISP572.o,
  * ISP583.o), cross-checked against ch32fun's independently reverse-engineered
- * ch5xx_flash.h (MIT). The controller is a byte-serial front end to an
- * internal SPI-NOR die; the registers and RB_ROM_* gate bits are the vendor's
- * own names from CH572SFR.h / CH592SFR.h.
+ * ch5xx_flash.h (MIT) — a cross-check only, not adopted: its specific
+ * divergences and why we keep this port are documented in ports/CH32FUN.md.
+ * The controller is a byte-serial front end to an internal SPI-NOR die; the
+ * registers and RB_ROM_* gate bits are the vendor's own names from
+ * CH572SFR.h / CH592SFR.h.
  */
 #ifndef OPENBOOT_FLASH_CH5XX_H
 #define OPENBOOT_FLASH_CH5XX_H
@@ -27,7 +29,8 @@
 
 /* Code-flash primitives. Return 0 on success, an OB_FLERR_* code otherwise.
  * buf must be in RAM and 4-byte aligned; len a multiple of 4 (erase: of
- * 4096). No range checks: the core validates against the app region first. */
+ * OB_FLASH_ERASE_BLOCK — 4096, or 256 under OB_FLASH_PAGE_ERASE). No range
+ * checks: the core validates against the app region first. */
 uint32_t ob_ch5xx_flash_erase(uint32_t addr, uint32_t len);
 uint32_t ob_ch5xx_flash_write(uint32_t addr, const void *buf, uint32_t len);
 uint32_t ob_ch5xx_flash_verify(uint32_t addr, const void *buf, uint32_t len);

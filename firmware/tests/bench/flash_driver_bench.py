@@ -122,7 +122,7 @@ def scenario_soak(name):
     print(f"\n=== {name}: open-driver soak, SWD readback ===")
     ab.factory(cfg)
     c, base, cap = obp_session(cfg)
-    img = prng_image(cap - 4096, 0x5EED)     # leave the record block alone
+    img = prng_image(cap, 0x5EED)            # cap already excludes the record
     want = zlib.crc32(img) & 0xFFFFFFFF
     try:
         obp_fill(c, base, img, "PRNG image through the open driver:")
@@ -202,7 +202,7 @@ def scenario_cut_erase(name):
     er4 = ERASED_WORD.to_bytes(4, "little")
     for t in range(TRIALS):
         c, base, cap = obp_session(cfg)
-        span = cap - 4096                    # leave the record block alone
+        span = cap                           # cap already excludes the record
         nsec = span // 4096
         stamps = [prng_image(48, (0xA000 + t) * 64 + s) for s in range(nsec)]
         try:

@@ -207,7 +207,15 @@ class Obp:
         return r[4:]
 
     def erase(self, addr, length):
-        return self.xfer(0x02, addr.to_bytes(4, "little") + length.to_bytes(4, "little"))
+        # The device erases one OB_FLASH_ERASE_BLOCK at a time and responds
+        # once the whole span is done. On a 256 B page-erase build that is one
+        # ~18 ms page erase per 256 B (bench-measured CH592), so a large region
+        # takes seconds — scale the response deadline to the page count.
+        # Harmless on 4 KiB-block builds (a 4 KiB erase is 16 pages -> ~2 s).
+        pages = (length + 255) // 256
+        return self.xfer(0x02,
+                         addr.to_bytes(4, "little") + length.to_bytes(4, "little"),
+                         t=max(2.0, 0.5 + pages * 0.03))
 
     def write(self, addr, data):
         return self.xfer(0x03, addr.to_bytes(4, "little") + data)

@@ -94,8 +94,11 @@ override APP_END := $(APP_END_$(CHIP))
 # headers #error on an empty or overlapping region) — this is only here to
 # say so in Make's voice, before a confusing compile error.
 APP_BASE_BYTES := 8192
-# Flash erase granularity, and therefore the alignment every region boundary
-# must respect. Mirrors OB_FLASH_ERASE_BLOCK in the port headers.
+# Slot/app REGION alignment granularity — the boundary every slot and the app
+# region must respect. This stays 4 KiB even under OB_FLASH_PAGE_ERASE (a
+# 4 KiB-aligned region is a valid subset of 256 B-aligned), so it is NOT the
+# same thing as the flash ERASE granularity (OB_FLASH_ERASE_BLOCK in the port
+# headers, which the page-erase knob may lower to 256).
 ERASE_BLOCK_BYTES := 4096
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
@@ -167,15 +170,29 @@ OB_BOOT_PIN_PORT_B ?= 0
 OB_UART1_REMAP ?= 0
 OB_UART1_ALT_PINS_HIZ ?= 0
 OB_BOOT_IMAGE_CRC ?= 0
+# 256 B page erase (0x81) instead of 4 KiB sector erase. Opt-in, ch59x only,
+# and only on a die that supports it: 0x81 hard-hangs CH592A (datasheet §4.4),
+# and CHIP=ch592 cannot distinguish the A and F dies — the builder asserts it.
+OB_FLASH_PAGE_ERASE ?= 0
 
 # Boolean knobs must be exactly the single word 0 or 1. A bare membership
 # $(filter) is not enough: its pattern list is word-split, so a mangled
 # value like '0 1' would pass — the $(words) term closes that hole.
 BOOLEAN_KNOBS := OB_BOOT_PIN_PORT_B OB_UART1_REMAP \
-                 OB_UART1_ALT_PINS_HIZ OB_BOOT_IMAGE_CRC
+                 OB_UART1_ALT_PINS_HIZ OB_BOOT_IMAGE_CRC OB_FLASH_PAGE_ERASE
 $(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
+
+# Page erase is a ch59x-only capability (ISP572/ch57x has no page-erase
+# command). Key on CHIP (the primary build input) rather than the derived
+# PORT so a stray PORT= override cannot slip a ch57x build past this; the
+# driver's #if OB_FL_ERASE_OP == 0x81 family guard is the C-side backstop.
+ifeq ($(OB_FLASH_PAGE_ERASE),1)
+  ifeq ($(filter $(CHIP),ch591 ch592),)
+    $(error OB_FLASH_PAGE_ERASE=1 is ch59x-only (got CHIP=$(CHIP)))
+  endif
+endif
 
 # A board may pin the clock the bootloader runs at — and therefore hands to
 # the application (see ob_jump_app's CONTRACT in core/openboot_port.h).
@@ -405,8 +422,9 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
 # The Boolean board knobs (OB_BOOT_PIN_PORT_B, OB_UART1_REMAP,
-# OB_UART1_ALT_PINS_HIZ, OB_BOOT_IMAGE_CRC) are normalized to a literal 0 or
-# 1 above, always emitted, and consumed with #if — never #ifdef, where
+# OB_UART1_ALT_PINS_HIZ, OB_BOOT_IMAGE_CRC, OB_FLASH_PAGE_ERASE) are normalized
+# to a literal 0 or 1 above, always emitted, and consumed with #if — never
+# #ifdef, where
 # defined-but-zero would read as enabled. Knobs that may be legitimately absent
 # (OB_HSE_CAP_LOAD, OB_BOOT_PIN_MASK, the USB identity) still emit no
 # line when unset, and their consumers #ifdef-test them.
@@ -426,6 +444,7 @@ CONFIG_LINES := \
   '\#define OB_UART1_REMAP $(OB_UART1_REMAP)' \
   '\#define OB_UART1_ALT_PINS_HIZ $(OB_UART1_ALT_PINS_HIZ)' \
   '\#define OB_BOOT_IMAGE_CRC $(OB_BOOT_IMAGE_CRC)' \
+  '\#define OB_FLASH_PAGE_ERASE $(OB_FLASH_PAGE_ERASE)' \
   '\#define OB_SLOT_SIZE $(OB_SLOT_SIZE)' \
   '\#define OB_SLOT_A_BASE $(OB_SLOT_A_BASE)' \
   '\#define OB_SLOT_B_BASE $(OB_SLOT_B_BASE)'

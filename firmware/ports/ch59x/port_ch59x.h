@@ -31,7 +31,22 @@
 
 /* ---- contract constants ---------------------------------------------- */
 #define OB_FLASH_APP_START    OB_APP_BASE
+/* OB_FLASH_PAGE_ERASE (build knob, default 0) drops the erase granularity to
+ * 256 B, driving 0x81 page erase in flash_ch5xx.c and the 256 B erase block
+ * everywhere the core keys off this macro. It does NOT move the A/B record
+ * block (fixed 4 KiB — see OB_RECORD_BLOCK in boot_decision.c). Opt-in only:
+ * 0x81 hard-hangs CH592A — see OB_FL_ERASE_OP and docs/AB-UPDATE.md.
+ * The Makefile normalizes the knob to 0/1; this exact-value backstop catches a
+ * value slipped past that gate (e.g. an overridden BOOLEAN_KNOBS), which the
+ * plain #if below would otherwise read as enabled. */
+#if OB_FLASH_PAGE_ERASE != 0 && OB_FLASH_PAGE_ERASE != 1
+#error "OB_FLASH_PAGE_ERASE must be 0 or 1"
+#endif
+#if OB_FLASH_PAGE_ERASE
+#define OB_FLASH_ERASE_BLOCK  256u
+#else
 #define OB_FLASH_ERASE_BLOCK  4096u
+#endif
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u  /* bench-verified on CH592A silicon
                                             * (0xF5F9BDA9 from the EVT lore was

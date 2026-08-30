@@ -229,7 +229,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
 | 12 | 4 | u32 | app_end | exclusive end of the app region |
-| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096) |
+| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a ch59x build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
 | 20 | 2 | u16 | write_page | flash write page in bytes (256, informational) |
 | 22 | 1 | u8 | write_align | WRITE address/data alignment (4) |
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |

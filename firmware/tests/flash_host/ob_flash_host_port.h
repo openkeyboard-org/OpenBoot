@@ -36,7 +36,14 @@
 
 #define OB_ERASED_WORD       0xF3F9BDA9u
 #define OB_FLASH_APP_START   OB_APP_BASE
+/* Mirror the real ch59x port: OB_FLASH_PAGE_ERASE (passed as -D by the
+ * ch59x_pageerase .so build) lowers the erase block to 256 so the driver's
+ * OB_FL_ERASE_OP derivation and the mock's sequencing match firmware. */
+#if defined(OB_FLASH_PAGE_ERASE) && OB_FLASH_PAGE_ERASE
+#define OB_FLASH_ERASE_BLOCK 256u
+#else
 #define OB_FLASH_ERASE_BLOCK 4096u
+#endif
 #define OB_FLASH_WRITE_PAGE  256u
 #define OB_CPU_HZ            4000u   /* OB_FL_WAIT_ITERS = 100 */
 #define OB_STK_CNT64         0

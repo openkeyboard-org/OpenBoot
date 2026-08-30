@@ -22,7 +22,7 @@ Verified against the vendor SDK headers and the datasheets vendored in
 
 | | CH570 / CH572 | CH591 / CH592 |
 |---|---|---|
-| Minimum erase | 4096 B (code flash) | 4096 B (code flash) |
+| Minimum erase | 4096 B (code flash) | 4096 B default; 256 B on a CH592F build with `OB_FLASH_PAGE_ERASE=1` |
 | Minimum write | 4 B | 4 B (code flash) |
 | DataFlash | none | 32 KiB, 256 B page erase **documented but unusable** |
 | Record lives in | code flash, inside its slot | code flash, inside its slot |
@@ -35,11 +35,16 @@ shared record used have been **reclaimed**: ch57x's app region grows to
 
 Three facts do most of the work here:
 
-- **No page erase.** `ISP572.h` exposes no page-erase command at all; 4096 is
-  the floor. `ISP592.h` documents a 256 B DataFlash page erase, but the CH592
-  datasheet §4.4 says *"CH592A does not support page erase"* — confirmed on the
-  bench, where issuing one hung the part hard enough that SWD never recovered.
-  Treat 4096 as the minimum erase on both families.
+- **Page erase is opt-in, ch59x only.** ch57x (ISP572) exposes no page-erase
+  command at all; 4096 is the floor there. On ch59x, 256 B page erase (`0x81`)
+  is real: the CH592 datasheet §4.4 says *"CH592A does not support page erase"*
+  and a CH592A hangs beyond SWD recovery, but a later register-level probe
+  proved it works and is selective on **CH592F** (`firmware/tests/silicon/`) —
+  the earlier bench hang was an implementation issue, not the die. Because
+  `CHIP=ch592` cannot tell the A and F dies apart, page erase ships behind the
+  `OB_FLASH_PAGE_ERASE` build knob (default off): setting it lowers the erase
+  granularity to 256 B and is the builder's assertion that their die supports
+  it. By default OpenBoot treats 4096 as the minimum erase on both families.
 - **No flash remap.** The only address-related bit, `RB_ROM_CODE_OFS`, is a
   fixed boot-entry selector, not a translation.
 - **The application cannot be relocated.** The vendor blobs are

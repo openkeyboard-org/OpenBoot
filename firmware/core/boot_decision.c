@@ -8,18 +8,25 @@ uint32_t ob_slot_base(uint32_t slot)
     return OB_SLOT_A_BASE + slot * OB_SLOT_SIZE;
 }
 
-/* Build-time image room in a slot: everything below its final erase block,
- * which the record owns outright.
+/* The record owns the top OB_RECORD_BLOCK (4 KiB) of every slot outright.
  *
  * The record needs a whole block, not just its 32 bytes, because rewriting it
- * means erasing it first - flash only clears bits - and erase granularity is
- * one 4096-byte block. If the image could reach into that block, re-committing
- * a slot would destroy image bytes. Giving the record its own block costs
- * 4 KiB per slot (1.8% on ch592, 3.6% on ch570) and makes every record
- * rewrite safe.
+ * means erasing it first - flash only clears bits. If the image could reach
+ * into that block, re-committing a slot would destroy image bytes. Giving the
+ * record its own block costs 4 KiB per slot (1.8% on ch592, 3.6% on ch570) and
+ * makes every record rewrite safe.
  *
- * Fixed by the build, because the application's linker has to agree with it. */
-#define OB_SLOT_IMAGE_MAX (OB_SLOT_SIZE - OB_FLASH_ERASE_BLOCK)
+ * OB_RECORD_BLOCK (defined in openboot_port.h with the slot-geometry asserts)
+ * is a FIXED 4 KiB, deliberately independent of the flash erase granularity
+ * (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B): the record
+ * address is what the application's linker agrees with and what the
+ * factory-bless path computes, so it must NOT move with a build knob. A
+ * page-erase and a sector-erase build of the same firmware therefore share an
+ * identical slot/record map — images and factory blessings stay compatible
+ * across the knob, and switching it does not strand an installed device's
+ * records. The 4 KiB reserve is erased one OB_FLASH_ERASE_BLOCK at a time (the
+ * record lives in the reserve's bottom block, which is all a rewrite clears). */
+#define OB_SLOT_IMAGE_MAX (OB_SLOT_SIZE - OB_RECORD_BLOCK)
 
 uint32_t ob_slot_record_addr(uint32_t slot)
 {
