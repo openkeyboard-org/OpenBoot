@@ -104,7 +104,9 @@ uint32_t ob_uptime_ms(void)
  * CH570's flash fetch at the 6.4 MHz reset clock costs several times that,
  * and an inflated poll interval is what starved the UART RX FIFO (see
  * tr_rx_busy). RAM execution makes the constant honest on every chip. */
-__attribute__((section(".highcode")))
+/* noinline: LTO must never absorb this into a flash-resident
+ * caller — check_highcode --ram-symbol pins it. */
+__attribute__((section(".highcode"), noinline))
 void ob_delay_us(uint32_t us)
 {
     /* Two-instruction loop (addi+bnez), approximately four CPU cycles. */

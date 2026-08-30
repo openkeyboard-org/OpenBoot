@@ -379,11 +379,14 @@ ARCH_ch59x := -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
               -msmall-data-limit=8 -msave-restore
 ARCH := $(ARCH_$(PORT))
 
-# NO -flto yet: nothing closed blocks it any more, but LTO can clone or
-# inline .highcode code into flash-resident sections, so turning it on is
-# its own change — check_highcode.py must pass on the LTO ELFs and a bench
-# re-run is mandatory, not polish.
-CFLAGS := $(ARCH) -Os -g -std=gnu99
+# LTO on everything EXCEPT the flash driver (its per-file -fno-lto is with
+# its other flags below): the RAM-resident driver keeps the exact codegen
+# that was hardware-validated, the object-level self-containment check stays
+# meaningful (an LTO object holds only .gnu.lto_* bytecode), and LTO can
+# never inline driver code into flash-resident callers. The remaining
+# .highcode functions (ob_delay_us, ob_family_clock_init) are noinline and
+# check_highcode.py --ram-symbol pins their RAM residency on the linked ELF.
+CFLAGS := $(ARCH) -Os -g -std=gnu99 -flto
 CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
 
@@ -467,7 +470,9 @@ endif
 # after CONFIG_H is defined.
 CFLAGS += -include $(CONFIG_H)
 
-LDFLAGS := $(ARCH) -T ports/openboot.ld -nostartfiles
+# -flto -Os at link: link-time codegen takes its optimization level from the
+# LINK command line, not the per-object flags.
+LDFLAGS := $(ARCH) -flto -Os -T ports/openboot.ld -nostartfiles
 LDFLAGS += --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 LDFLAGS += -Wl,-Map=$(BUILD)/$(TARGET).map
@@ -609,8 +614,9 @@ $(OBJS): Makefile $(CONFIG_H)
 # The open flash driver must be RAM-self-contained: -msave-restore would emit
 # calls into libgcc millicode in flash .text and a switch could emit a
 # .rodata jump table, either of which is dead XIP mid-operation.
-# check_highcode.py asserts the result on the linked ELF.
-$(BUILD)/flash_ch5xx.o: CFLAGS += -mno-save-restore -fno-jump-tables
+# check_highcode.py asserts the result on the linked ELF. -fno-lto keeps the
+# driver out of link-time codegen entirely (rationale at the CFLAGS -flto).
+$(BUILD)/flash_ch5xx.o: CFLAGS += -mno-save-restore -fno-jump-tables -fno-lto
 
 $(BUILD)/%.o: %.c | $(BUILD)
 	"$(CC)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
@@ -622,7 +628,8 @@ $(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD)
 	"$(LD)" $(LDFLAGS) $(OBJS) $(LDLIBS) -o "$@"
 	"$(SIZE)" "$@"
 	$(HOST_PYTHON) check_highcode.py --objdump "$(OBJDUMP)" --nm "$(NM)" \
-	    --object "$(BUILD)/flash_ch5xx.o" --elf "$@"
+	    --object "$(BUILD)/flash_ch5xx.o" --elf "$@" \
+	    --ram-symbol ob_delay_us --ram-symbol ob_family_clock_init
 
 # objcopy, then the HARD size gate. The linker MEMORY region already bounds
 # the image, but a linker-script regression must not be the only line of
