@@ -36,7 +36,12 @@ FAMILIES = {
     "ch57x_imagecrc": "-DOB_HOST_CH57X -DOB_BOOT_IMAGE_CRC=1",
 }
 
-DEPS = CORE_SRC + HOST_SRC + [
+FLASH_HOST = HERE.parent / "flash_host"
+FLASH_SRC = [FW / "ports" / "flash_ch5xx.c", FLASH_HOST / "ob_flash_mock.c"]
+
+DEPS = CORE_SRC + HOST_SRC + FLASH_SRC + [
+    FLASH_HOST / "ob_flash_host_port.h",
+    FW / "ports" / "flash_ch5xx.h",
     HERE / "ob_host_port.h",
     HERE / "ob_host.h",
     FW / "core" / "crc32.h",
@@ -71,6 +76,18 @@ def build(cc=None):
         so = OUT / f"ob_{fam}.so"
         _run([cc, *CFLAGS, *dflags.split(), "-fPIC", "-shared",
               *CORE_SRC, *HOST_SRC, "-o", so])
+    # The open flash driver against the recording register mock: the REAL
+    # ports/flash_ch5xx.c sequencing logic, one library per family because
+    # the gate bits, resume send and info-window addressing diverge
+    # (test_flash_driver.py). The mock port header replaces every hardware
+    # seam, so this exercises opcode order, page splitting, cleanup and
+    # timeout inversion without silicon.
+    for fam, fdef in (("ch57x", "-DOB_HOST_CH57X"), ("ch59x", "-DOB_HOST_CH59X")):
+        _run([cc, "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+              f"-I{FW / 'core'}", f"-I{FW / 'ports'}", f"-I{FLASH_HOST}",
+              '-DOB_PORT_HEADER="ob_flash_host_port.h"',
+              "-DOB_TRANSPORT_ID=OB_TRANSPORT_ID_USB", fdef,
+              "-fPIC", "-shared", *FLASH_SRC, "-o", OUT / f"ob_flash_{fam}.so"])
     # Application companion as a host library: this repo ships it but
     # nothing here compiled it until the review that added this - a rename
     # or an API drift was invisible. The record validator is then testable
@@ -99,7 +116,8 @@ def ensure_built(cc=None):
     # ob_app.so included: freshness gated only on the family libraries would
     # skip build() on a checkout where those exist from before the companion
     # library did, and the companion tests then load a missing artifact.
-    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"]
+    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"] + \
+          [OUT / f"ob_flash_{fam}.so" for fam in ("ch57x", "ch59x")]
     if all(so.exists() for so in sos):
         newest_src = max(p.stat().st_mtime for p in DEPS)
         if min(so.stat().st_mtime for so in sos) > newest_src:
