@@ -67,7 +67,7 @@ def test_readme_examples_match_the_builder_arity():
         assert got == want, f"README example passes {got} args, builder wants {want}: {line}"
 
 
-@pytest.mark.parametrize("chip", ["ch572", "ch592"])
+@pytest.mark.parametrize("chip", ["ch570", "ch572", "ch592"])
 def test_chip_config_carries_what_the_scenarios_read(chip):
     """The scenarios index the per-chip config by key; a missing one fails
     only once a bench run reaches that line, minutes in."""
