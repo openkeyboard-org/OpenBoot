@@ -294,9 +294,10 @@ slot nor the write slot's own record block — see section 9.1.
 
 Behavior: if this is the session's first mutation, the boot record is
 invalidated first (section 8). The device then erases block by block in one
-4096-byte ROM call per block, marking each block in the erased-block bitmap
-as it succeeds. A ROM failure aborts the loop with `E_FLASH` (detail: low
-byte of the ROM return code); blocks erased before the failure remain
+4096-byte driver call per block, marking each block in the erased-block
+bitmap as it succeeds. A driver failure aborts the loop with `E_FLASH`
+(detail: low byte of the driver return code); blocks erased before the
+failure remain
 marked. ERASE is idempotent — the host recovers from `E_FLASH` or a lost
 response by simply re-issuing the same command.
 
@@ -334,11 +335,10 @@ Checks, in order:
    explicitly performed first, and the bootloader region can never be in
    the bitmap because ERASE refuses it.
 
-The device programs the data (`FLASH_ROM_WRITE`) and immediately verifies
-it through the flash controller (`FLASH_ROM_VERIFY` — a controller
-read-back, deliberately not an XIP read; see `FEAT_CRC_LIVE`). Either ROM
-call failing yields `E_FLASH` with the low byte of the ROM return code as
-detail.
+The device programs the data and immediately verifies it through the flash
+controller (a controller read-back, deliberately not an XIP read; see
+`FEAT_CRC_LIVE`). Either driver call failing yields `E_FLASH` with the low
+byte of the driver return code as detail (a diagnostic, not a stable API).
 
 Success response: 1 byte, `[OB_OK]`.
 
@@ -422,11 +422,12 @@ Attestation path:
   out-of-band (e.g. via SWD) without rewriting it.
 
 On match the device writes the write slot's boot record (section 8) and
-answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-ROM case
+answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-driver case
 shares that status: a stored generation never reaches `0xFFFFFFFF`, which the
 other slot could then never outrank, so a COMMIT that would need it is refused
 with `E_FLASH`, detail
-`0x00` — distinguishable because no ROM failure carries detail 0. Unreachable
+`0x00` — distinguishable because no driver failure carries detail 0 (driver
+return values keep a nonzero low byte by contract). Unreachable
 by wear (~2^32 commits against a flash endurance of ~10^4..10^5 cycles); a
 device can get there only via a hand-crafted record claiming the ceiling. On
 mismatch **no record is written** — the device never converts an unverified image into a
@@ -530,7 +531,7 @@ run for WRITE).
 | `OB_E_ARG` | `0x05` | bad magic, bad BOOT mode, or nonzero flags | `0x00` |
 | `OB_E_ADDR` | `0x06` | address/range violation | `OB_DET_ADDR_RANGE = 0x01` (outside the app region), `OB_DET_ADDR_ALIGN = 0x02` (misaligned) |
 | `OB_E_NOT_ERASED` | `0x07` | WRITE into a block not erased this session | `0x00` |
-| `OB_E_FLASH` | `0x08` | flash ROM API failure | low byte of the ROM return code |
+| `OB_E_FLASH` | `0x08` | flash driver failure | low byte of the driver return code — a diagnostic, not a stable API; the values changed when the vendor ROM archive was replaced by the open driver |
 | `OB_E_VERIFY` | `0x09` | attestation/record failure | `OB_DET_VERIFY_MISMATCH = 0x01`, `OB_DET_VERIFY_NONSEQ = 0x02`, `OB_DET_VERIFY_NORECORD = 0x03` |
 | `OB_E_PROTO` | `0x0A` | unsupported protocol major in HELLO | `0x00` |
 

@@ -2,6 +2,7 @@
 #include "openboot_port.h"
 #include "boot_decision.h"
 #include "port_ch5xx.h"
+#include "flash_ch5xx.h"
 
 /* SysTick is the same block on both families. Its low count word sits at
  * +0x08 even though the full counter is 32-bit on CH57x and 64-bit on CH59x
@@ -57,20 +58,20 @@ void ob_port_init(void)
     ob_time_init();
 }
 
-/* No range checks here: the core validates before calling the ROM API. */
+/* No range checks here: the core validates before calling the flash API. */
 uint32_t ob_flash_erase(uint32_t addr, uint32_t len)
 {
-    return FLASH_ROM_ERASE(addr, len);
+    return ob_ch5xx_flash_erase(addr, len);
 }
 
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
 {
-    return FLASH_ROM_WRITE(addr, (void *)(uintptr_t)buf, len);
+    return ob_ch5xx_flash_write(addr, buf, len);
 }
 
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
 {
-    return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
+    return ob_ch5xx_flash_verify(addr, buf, len);
 }
 
 uint8_t ob_chip_rev(void)
@@ -98,9 +99,15 @@ uint32_t ob_uptime_ms(void)
     return up_ms;
 }
 
+/* Runs from RAM: the calibration below assumes ~4 cycles per spin, which
+ * only holds when the two-instruction loop is not refetched through XIP —
+ * CH570's flash fetch at the 6.4 MHz reset clock costs several times that,
+ * and an inflated poll interval is what starved the UART RX FIFO (see
+ * tr_rx_busy). RAM execution makes the constant honest on every chip. */
+__attribute__((section(".highcode")))
 void ob_delay_us(uint32_t us)
 {
-    /* Two-instruction loop (addi+bnez), approximately four XIP CPU cycles. */
+    /* Two-instruction loop (addi+bnez), approximately four CPU cycles. */
     uint32_t n = (us * (OB_CPU_HZ / 100000u)) / 40u;
 
     if (n == 0)

@@ -3,6 +3,7 @@
  */
 #include "openboot_port.h"
 #include "../port_ch5xx.h"
+#include "../flash_ch5xx.h"
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG/R8_FLASH_SCK)
@@ -22,9 +23,9 @@ void ob_family_clock_init(void)
      * multiplies the 32 MHz crystal, and USB's 48 MHz is derived from the
      * same PLL, so crystal pulling lands directly on a bus whose full-speed
      * tolerance is +/-0.25%. Every CH570 EVT example that brings up the PLL
-     * calls HSECFG_Capacitance(HSECap_18p) first; we cannot call it (the
-     * StdPeriphDriver is not linked, only libISP), so OB_HSE_CAP_INIT()
-     * reproduces it register-for-register. */
+     * calls HSECFG_Capacitance(HSECap_18p) first; we cannot call it (no
+     * SDK code is linked), so OB_HSE_CAP_INIT() reproduces it
+     * register-for-register. */
     OB_HSE_CAP_INIT();
 
     sys_safe_access_enable();
@@ -94,14 +95,17 @@ uint32_t ob_app_end(void)
     return silicon < OB_FLASH_APP_END ? silicon : OB_FLASH_APP_END;
 }
 
-/* CH570 returns zero for GET_UNIQUE_ID, so use the ROM MAC fallback there. */
+/* CH570 returns zero for the 0x4B unique id, so use the MAC fallback there. */
+/* The MAC window in the info flash (the vendor SDK's ROM_CFG_MAC_ADDR). */
+#define OB_ROM_CFG_MAC_ADDR 0x3F018u
+
 void ob_family_read_uid(uint32_t buf[4])
 {
-    FLASH_EEPROM_CMD(CMD_GET_UNIQUE_ID, 0, buf, 0);
+    ob_ch5xx_flash_uid_read(buf);
     if ((buf[0] | buf[1]) == 0) {
-        /* CH570 silicon returns all zeros for CMD_GET_UNIQUE_ID (bench,
+        /* CH570 silicon returns all zeros for the 0x4B unique id (bench,
          * 2026-07-28). Fall back to the ROM MAC + 2-byte checksum — the
-         * SDK's own unique-ID source (ISP572.h GetMACAddress). */
-        FLASH_EEPROM_CMD(CMD_GET_ROM_INFO, ROM_CFG_MAC_ADDR, buf, 0);
+         * vendor SDK's own unique-ID source for this part. */
+        ob_ch5xx_flash_rom_info_read(OB_ROM_CFG_MAC_ADDR, buf);
     }
 }

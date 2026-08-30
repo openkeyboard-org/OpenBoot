@@ -110,10 +110,10 @@
  * the family PLL setting. Called once before transport init. */
 void ob_port_init(void);
 
-/* Thin wrappers over FLASH_EEPROM_CMD. Return 0 on success (ROM
- * convention). buf must be in RAM, 4-byte aligned; len multiple of 4.
+/* Thin wrappers over the open flash driver (ports/flash_ch5xx.c). Return 0
+ * on success. buf must be in RAM, 4-byte aligned; len multiple of 4.
  * These do NOT range-check — the core validates against the app region
- * before calling (the ROM API would happily write anywhere). */
+ * before calling (the flash driver would happily write anywhere). */
 uint32_t ob_flash_erase(uint32_t addr, uint32_t len);
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len);
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);

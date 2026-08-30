@@ -74,7 +74,7 @@
 #define OB_E_ARG              0x05  /* bad magic / mode / flags             */
 #define OB_E_ADDR             0x06  /* detail: OB_DET_ADDR_*                */
 #define OB_E_NOT_ERASED       0x07  /* WRITE into a block not erased this session */
-#define OB_E_FLASH            0x08  /* detail: low byte of ROM API return   */
+#define OB_E_FLASH            0x08  /* detail: low byte of driver return    */
 #define OB_E_VERIFY           0x09  /* detail: OB_DET_VERIFY_*              */
 #define OB_E_PROTO            0x0A  /* unsupported protocol major in HELLO  */
 

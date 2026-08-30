@@ -9,16 +9,21 @@ chosen instant rather than to complete.
 import os, re, subprocess, sys, time, zlib
 
 ROOT = os.environ.get("OPENBOOT_ROOT", os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")))
-MC = os.path.expanduser("~/Development/Personal/WCH/ch32fun/minichlink/minichlink")
+MC = os.environ.get(
+    "MINICHLINK",
+    os.path.expanduser("~/Development/WCH/ch32fun/minichlink/minichlink"))
 OB = f"{ROOT}/tools/target/release/openboot"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CHIPS = {
+    "ch570": dict(serial="CF148F065446", port="/dev/cu.usbmodemCF148F0654462",
+                  boot=f"{ROOT}/firmware/build/ch570-uart/openboot-ch570-uart.bin",
+                  slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
                   boot=f"{ROOT}/firmware/build/ch572-uart/openboot-ch572-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
-    "ch592": dict(serial="CEBD8F0653EF", port="/dev/ttyACM0",
-                  boot=f"{ROOT}/firmware/build/ch592-uart+bench-ch592/openboot-ch592-uart.bin",
+    "ch592": dict(serial="CEBD8F0653EF", port="/dev/cu.usbmodemCEBD8F0653EF2",
+                  boot=f"{ROOT}/firmware/build/ch592-uart/openboot-ch592-uart.bin",
                   slot_b=0x39000, cap=0x36000, bootreq=0x200067F0),
 }
 fails = []
@@ -162,13 +167,15 @@ class Obp:
         self.s = serial.Serial(port, 115200, timeout=1.5)
         self.seq = 0
 
-    def xfer(self, cmd, payload=b""):
+    def xfer(self, cmd, payload=b"", t=2.0):
         """Responses carry the 0xB0 0x07 SOF too (uart_transport.c tr_send),
-        so hunt for it rather than assuming the frame starts at byte 0."""
+        so hunt for it rather than assuming the frame starts at byte 0.
+        t: response deadline — a CRC over the whole window at the UART
+        build's 6.4 MHz takes longer than any single flash op."""
         self.seq = (self.seq + 1) & 0xFF
         self.s.reset_input_buffer()
         self.s.write(frame(cmd, self.seq, payload))
-        deadline, win = time.time() + 2.0, b""
+        deadline, win = time.time() + t, b""
         while time.time() < deadline:
             b = self.s.read(1)
             if not b:
@@ -178,7 +185,16 @@ class Obp:
                 hdr = self.s.read(4)
                 if len(hdr) < 4:
                     return None
-                return bytes(hdr) + bytes(self.s.read(hdr[2] + 4))
+                body = bytes(hdr) + bytes(self.s.read(hdr[2] + 4))
+                # Only a VALIDATED response counts: correct command echo,
+                # this sequence number, full length, good CRC. Anything
+                # else is line noise or a stale frame - keep hunting.
+                if (len(body) == 4 + hdr[2] + 4
+                        and body[0] == (cmd | 0x80) and body[1] == self.seq
+                        and zlib.crc32(body[:4 + hdr[2]]).to_bytes(4, "little")
+                            == body[4 + hdr[2]:]):
+                    return body
+                win = b""
         return None
 
     def status(self, r):
@@ -275,8 +291,7 @@ def scenario_lifecycle(name):
     # CNTIF (#18); low bits would carry a stale flag.
     check("handoff SysTick flag clean (A)", read_word(cfg, MARK_A[0] + 8), STK_MARK)
 
-    reboot(cfg)
-    act, wr, base, _ = probe(cfg)
+    act, wr, base, _ = enter_bootloader(cfg)
     check("committing A makes B the target", (act, wr), ("A", "B"))
     check("write base moved to slot B", hex(base), hex(cfg["slot_b"]))
 
@@ -291,8 +306,7 @@ def scenario_lifecycle(name):
     check("slot B's image ran", witness(cfg), (False, True))
     check("handoff SysTick flag clean (B)", read_word(cfg, MARK_B[0] + 8), STK_MARK)
 
-    reboot(cfg)
-    act, wr, base, _ = probe(cfg)
+    act, wr, base, _ = enter_bootloader(cfg)
     check("committing B makes A the target again", (act, wr), ("B", "A"))
     check("write base back at slot A", hex(base), "0x2000")
     ra, rb = slot_records(cfg)
@@ -301,11 +315,21 @@ def scenario_lifecycle(name):
 
 
 def enter_bootloader(cfg, tries=4):
-    """Power-cycle until the BOOTLOADER answers. Resets alternate: the app
-    re-arms the boot request every run and the boot decision consumes it, so
-    one cycle is not always enough. Also clears any lingering debug halt."""
+    """Power-cycle, let the app arm the boot request, then soft-reset into
+    the bootloader and probe.
+
+    The old shape - power_cycle then probe - relied on the Linux cdc-acm
+    behavior where OPENING the port resets the target (DTR toggle) with SRAM
+    intact, consuming the request the app just armed. On macOS the open does
+    not reset, the part stays in the app, and every probe times out. The
+    portable-enough dance for this desk: halt first (-b only resets reliably
+    from a halted chip), then -b soft-resets with SRAM intact, the boot
+    decision finds the armed request and the bootloader keeps control."""
     for _ in range(tries):
-        power_cycle(cfg)
+        power_cycle(cfg)              # app runs and re-arms the request
+        mc(cfg, "-A", t=30)
+        mc(cfg, "-b", t=30)
+        time.sleep(1.2)
         r = probe(cfg)
         if r[0]:
             return r

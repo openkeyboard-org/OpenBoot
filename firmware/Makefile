@@ -43,7 +43,7 @@ SHELL := /bin/sh
 # CHIP selects the flash geometry (app end address) and the HELLO family id.
 # TRANSPORT selects the one transport .c linked into the image and the CPU
 # clock: UART images run entirely at the 6.4 MHz boot clock (115200 baud fits
-# with DL=7, -0.79% error, and libISP flash ops are proven to work there), so
+# with DL=7, -0.79% error, and the flash driver is bench-proven there), so
 # they need no clock init at all. USB images use the PLL: 100 MHz on ch57x
 # and 60 MHz on ch59x.
 #
@@ -145,16 +145,13 @@ STARTUP_WRITE_BC1_ch59x := 0
 REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
-# Only headers and libISP come from here -- no SDK driver .c is compiled.
+# Only register headers come from here -- no SDK driver .c is compiled and
+# no SDK binary is linked. Flash access is ports/flash_ch5xx.c, an open
+# reimplementation validated side-by-side against the vendor libISP
+# archives on CH592 and CH570 silicon before those were dropped.
 SDK_ch57x := $(abspath ../third_party/openwch/ch570/EVT/EXAM)
 SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
-
-# The ROM flash API archive. This is the ONLY code linked from the SDK.
-ISPLIB_ch57x := ISP572
-ISPLIB_ch59x := ISP592
-ISPLIB := $(ISPLIB_$(PORT))
-ISPLIB_A := $(SDK)/SRC/StdPeriphDriver/lib$(ISPLIB).a
 
 # ---------------------------------------------------------------------------
 # Board configuration. A board .mk provides the boot-strap pin and the idle
@@ -321,6 +318,7 @@ LD := $(CC)
 OBJCOPY := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objcopy
 SIZE := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)size
 NM := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)nm
+OBJDUMP := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objdump
 
 MINICHLINK ?= minichlink
 WCHLINK_SERIAL ?=
@@ -350,7 +348,7 @@ MAX_IMAGE_BYTES := 8192
 # one transport are compiled per image.
 # ---------------------------------------------------------------------------
 CORE_SRC := core/main.c core/crc32.c core/boot_core.c core/boot_decision.c
-PORT_SRC := ports/port_ch5xx.c ports/$(PORT)/port_$(PORT).c
+PORT_SRC := ports/port_ch5xx.c ports/flash_ch5xx.c ports/$(PORT)/port_$(PORT).c
 TRANSPORT_SRC := transports/$(TRANSPORT)_transport.c
 C_SRCS := $(CORE_SRC) $(PORT_SRC) $(TRANSPORT_SRC)
 S_SRCS := ports/startup_ch5xx.S
@@ -381,16 +379,16 @@ ARCH_ch59x := -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
               -msmall-data-limit=8 -msave-restore
 ARCH := $(ARCH_$(PORT))
 
-# NO -flto, deliberately: the image links against the binary-only libISP
-# archives from the EVT tree, which were not built for LTO. Mixing LTO
-# objects with opaque archives risks symbol and section surprises in the
-# .highcode flash primitives that must run from RAM.
+# NO -flto yet: nothing closed blocks it any more, but LTO can clone or
+# inline .highcode code into flash-resident sections, so turning it on is
+# its own change — check_highcode.py must pass on the LTO ELFs and a bench
+# re-run is mandatory, not polish.
 CFLAGS := $(ARCH) -Os -g -std=gnu99
 CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
 
 INCLUDES := -I core -I ports/$(PORT)
-# SFR + ISP headers only; no SDK driver sources are ever compiled.
+# SFR register headers only; no SDK driver sources are ever compiled.
 INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 
 # The configuration contract (see core/openboot_port.h, which #errors when
@@ -474,8 +472,9 @@ LDFLAGS += --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 LDFLAGS += -Wl,-Map=$(BUILD)/$(TARGET).map
 LDFLAGS += -L $(BUILD)          # INCLUDE memory.ld
-LDFLAGS += -L $(SDK)/SRC/StdPeriphDriver
-LDLIBS := -l$(ISPLIB)
+# No -L into the SDK and no vendor archive: the link touching nothing closed
+# is the proof the image depends on nothing closed.
+LDLIBS :=
 
 # ---------------------------------------------------------------------------
 # Targets.
@@ -607,15 +606,23 @@ $(MEMORY_LD): FORCE | $(BUILD)
 
 $(OBJS): Makefile $(CONFIG_H)
 
+# The open flash driver must be RAM-self-contained: -msave-restore would emit
+# calls into libgcc millicode in flash .text and a switch could emit a
+# .rodata jump table, either of which is dead XIP mid-operation.
+# check_highcode.py asserts the result on the linked ELF.
+$(BUILD)/flash_ch5xx.o: CFLAGS += -mno-save-restore -fno-jump-tables
+
 $(BUILD)/%.o: %.c | $(BUILD)
 	"$(CC)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
 $(BUILD)/%.o: %.S | $(BUILD)
 	"$(AS)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
-$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD) $(ISPLIB_A)
+$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD)
 	"$(LD)" $(LDFLAGS) $(OBJS) $(LDLIBS) -o "$@"
 	"$(SIZE)" "$@"
+	$(HOST_PYTHON) check_highcode.py --objdump "$(OBJDUMP)" --nm "$(NM)" \
+	    --object "$(BUILD)/flash_ch5xx.o" --elf "$@"
 
 # objcopy, then the HARD size gate. The linker MEMORY region already bounds
 # the image, but a linker-script regression must not be the only line of

@@ -22,9 +22,12 @@ HARNESS = BENCH / "ab_bench.py"
 
 
 def test_harness_parses():
-    """Syntax only: importing it would require pyserial, which a checkout has
-    no reason to have installed."""
-    ast.parse(HARNESS.read_text(), str(HARNESS))
+    """Syntax only: importing them would require pyserial/hidapi, which a
+    checkout has no reason to have installed."""
+    sources = sorted(BENCH.glob("*.py"))
+    assert sources, f"no bench sources under {BENCH}; this check went blind"
+    for py in sources:
+        ast.parse(py.read_text(), str(py))
 
 
 def test_builder_is_valid_shell():
@@ -66,7 +69,7 @@ def test_readme_examples_match_the_builder_arity():
         assert got == want, f"README example passes {got} args, builder wants {want}: {line}"
 
 
-@pytest.mark.parametrize("chip", ["ch572", "ch592"])
+@pytest.mark.parametrize("chip", ["ch570", "ch572", "ch592"])
 def test_chip_config_carries_what_the_scenarios_read(chip):
     """The scenarios index the per-chip config by key; a missing one fails
     only once a bench run reaches that line, minutes in."""

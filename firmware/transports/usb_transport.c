@@ -305,6 +305,13 @@ void tr_init(void)
     OB_USB_PHY_ATTACH();
 }
 
+int tr_rx_busy(void)
+{
+    /* The SIE DMA-fills a whole 64-byte report without CPU help; frame
+     * arrival never depends on the main loop's pace. */
+    return 0;
+}
+
 const uint8_t *tr_poll(uint32_t *avail)
 {
     if (rx_state == 2) {

@@ -108,6 +108,16 @@ const uint8_t *tr_poll(uint32_t *avail)
     return 0;
 }
 
+int tr_rx_busy(void)
+{
+    /* Mid-frame (or bytes already pending): the 8-byte RX FIFO gives the
+     * main loop 700 us per visit at 115200, and a full bookkeeping pass
+     * does not fit inside that on the slowest supported XIP (CH570 at
+     * 6.4 MHz — see the header). ST_HUNT2 counts as mid-frame; the
+     * inter-byte timeout still returns the parser to ST_HUNT1. */
+    return rx_state != ST_HUNT1 || OB_UART_RFC != 0;
+}
+
 /* Bounded like the USB send path: a bootloader must not contain a loop that
  * can spin forever on a hardware register. The FIFO drains at the line rate
  * with no external dependency, so ~87 us per byte at 115200 is the honest
