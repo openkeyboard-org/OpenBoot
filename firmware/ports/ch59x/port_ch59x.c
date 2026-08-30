@@ -3,6 +3,7 @@
  */
 #include "openboot_port.h"
 #include "../port_ch5xx.h"
+#include "../flash_ch5xx.h"
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG) while XIP would
@@ -87,5 +88,9 @@ uint32_t ob_app_end(void)
 
 void ob_family_read_uid(uint32_t buf[4])
 {
+#if OB_FLASH_DRIVER_ISP
     FLASH_EEPROM_CMD(CMD_GET_UNIQUE_ID, 0, buf, 0);
+#else
+    ob_ch5xx_flash_uid_read(buf);
+#endif
 }

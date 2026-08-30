@@ -150,11 +150,33 @@ SDK_ch57x := $(abspath ../third_party/openwch/ch570/EVT/EXAM)
 SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
 
-# The ROM flash API archive. This is the ONLY code linked from the SDK.
+# The ROM flash API archive — the only binary linked from the SDK, and only
+# when FLASH_DRIVER=isp selects it (below).
 ISPLIB_ch57x := ISP572
 ISPLIB_ch59x := ISP592
 ISPLIB := $(ISPLIB_$(PORT))
 ISPLIB_A := $(SDK)/SRC/StdPeriphDriver/lib$(ISPLIB).a
+
+# ---------------------------------------------------------------------------
+# Flash driver. `open` (default) is ports/flash_ch5xx.c, the open
+# reimplementation; `isp` links the closed vendor archive instead. The knob
+# exists only for side-by-side hardware validation of the open driver and is
+# deleted — along with the whole isp path — once that evidence lands.
+# ---------------------------------------------------------------------------
+FLASH_DRIVER ?= open
+# Exact single-word match: $(filter) with the user value as the pattern would
+# accept 'open isp' (and then split the variant selection below).
+ifneq ($(words $(FLASH_DRIVER)),1)
+  $(error FLASH_DRIVER must be 'open' or 'isp' (got '$(FLASH_DRIVER)'))
+endif
+ifeq ($(filter open isp,$(FLASH_DRIVER)),)
+  $(error FLASH_DRIVER must be 'open' or 'isp' (got '$(FLASH_DRIVER)'))
+endif
+ifeq ($(FLASH_DRIVER),isp)
+  OB_FLASH_DRIVER_ISP := 1
+else
+  OB_FLASH_DRIVER_ISP := 0
+endif
 
 # ---------------------------------------------------------------------------
 # Board configuration. A board .mk provides the boot-strap pin and the idle
@@ -318,6 +340,7 @@ LD := $(CC)
 OBJCOPY := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objcopy
 SIZE := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)size
 NM := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)nm
+OBJDUMP := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objdump
 
 MINICHLINK ?= minichlink
 WCHLINK_SERIAL ?=
@@ -339,7 +362,10 @@ HOST_PYTHON ?= python3
 build_dir = build/$(1)-$(2)$(if $(filter-out generic-$(PORT_$(1)),$(3)),+$(3))
 
 TARGET := openboot-$(CHIP)-$(TRANSPORT)
-BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))
+# Only the non-default isp variant gets a keyed directory: the canonical
+# paths stay stable for their consumers (tests/test_board_config.py,
+# check_board_policy.py) while both variants can coexist for A/B validation.
+BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))$(if $(filter isp,$(FLASH_DRIVER)),@isp)
 MAX_IMAGE_BYTES := 8192
 
 # ---------------------------------------------------------------------------
@@ -347,7 +373,7 @@ MAX_IMAGE_BYTES := 8192
 # one transport are compiled per image.
 # ---------------------------------------------------------------------------
 CORE_SRC := core/main.c core/crc32.c core/boot_core.c core/boot_decision.c
-PORT_SRC := ports/port_ch5xx.c ports/$(PORT)/port_$(PORT).c
+PORT_SRC := ports/port_ch5xx.c ports/flash_ch5xx.c ports/$(PORT)/port_$(PORT).c
 TRANSPORT_SRC := transports/$(TRANSPORT)_transport.c
 C_SRCS := $(CORE_SRC) $(PORT_SRC) $(TRANSPORT_SRC)
 S_SRCS := ports/startup_ch5xx.S
@@ -415,6 +441,7 @@ CONFIG_LINES := \
   '\#define OB_CPU_HZ $(CPU_HZ)' \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
+  '\#define OB_FLASH_DRIVER_ISP $(OB_FLASH_DRIVER_ISP)' \
   '\#define OB_STARTUP_CORECFGR $(STARTUP_CORECFGR_$(PORT))' \
   '\#define OB_STARTUP_WRITE_BC1 $(STARTUP_WRITE_BC1_$(PORT))' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
@@ -470,8 +497,16 @@ LDFLAGS += --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 LDFLAGS += -Wl,-Map=$(BUILD)/$(TARGET).map
 LDFLAGS += -L $(BUILD)          # INCLUDE memory.ld
+# Only isp builds may reference the vendor archive: the open link carrying no
+# -L into the SDK and no -lISP is the proof it depends on nothing closed.
+ifeq ($(FLASH_DRIVER),isp)
 LDFLAGS += -L $(SDK)/SRC/StdPeriphDriver
 LDLIBS := -l$(ISPLIB)
+ISPLIB_PREREQ := $(ISPLIB_A)
+else
+LDLIBS :=
+ISPLIB_PREREQ :=
+endif
 
 # ---------------------------------------------------------------------------
 # Targets.
@@ -520,7 +555,7 @@ $(MATRIX):
 # images it did not just build.
 matrix_board = $(if $(filter command line,$(origin BOARD)),$(BOARD),generic-$(PORT_$(1)))
 MATRIX_BINS := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),\
-  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))/openboot-$(c)-$(t).bin))
+  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))$(if $(filter isp,$(FLASH_DRIVER)),@isp)/openboot-$(c)-$(t).bin))
 
 # No family ships a stay-in-bootloader strap — the mask-ROM ISP entry pin is
 # the recovery mechanism (PA1, also USB D+, on ch57x; PB22 on ch59x). Getting
@@ -603,15 +638,23 @@ $(MEMORY_LD): FORCE | $(BUILD)
 
 $(OBJS): Makefile $(CONFIG_H)
 
+# The open flash driver must be RAM-self-contained: -msave-restore would emit
+# calls into libgcc millicode in flash .text and a switch could emit a
+# .rodata jump table, either of which is dead XIP mid-operation.
+# check_highcode.py asserts the result on the linked ELF.
+$(BUILD)/flash_ch5xx.o: CFLAGS += -mno-save-restore -fno-jump-tables
+
 $(BUILD)/%.o: %.c | $(BUILD)
 	"$(CC)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
 $(BUILD)/%.o: %.S | $(BUILD)
 	"$(AS)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
-$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD) $(ISPLIB_A)
+$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD) $(ISPLIB_PREREQ)
 	"$(LD)" $(LDFLAGS) $(OBJS) $(LDLIBS) -o "$@"
 	"$(SIZE)" "$@"
+	$(HOST_PYTHON) check_highcode.py --objdump "$(OBJDUMP)" --nm "$(NM)" \
+	    --object "$(BUILD)/flash_ch5xx.o" --elf "$@"
 
 # objcopy, then the HARD size gate. The linker MEMORY region already bounds
 # the image, but a linker-script regression must not be the only line of

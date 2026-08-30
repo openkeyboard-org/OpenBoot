@@ -1,8 +1,9 @@
 /*
  * OpenBoot port: CH591/CH592 ("ch59x").
  *
- * Raw registers + libISP only: this port includes CH592SFR.h and ISP592.h
- * and nothing else from the SDK (no CH59x_common.h, no driver .c files).
+ * Raw registers only: this port includes CH592SFR.h and nothing else from
+ * the SDK (no CH59x_common.h, no driver .c files). ISP592.h joins only when
+ * FLASH_DRIVER=isp links the vendor flash archive.
  */
 #ifndef OPENBOOT_PORT_CH59X_H
 #define OPENBOOT_PORT_CH59X_H
@@ -12,6 +13,10 @@
 
 #include "CH592SFR.h"
 
+#ifndef OB_FLASH_DRIVER_ISP
+#error "build must inject OB_FLASH_DRIVER_ISP (FLASH_DRIVER=open|isp)"
+#endif
+#if OB_FLASH_DRIVER_ISP
 /* ISP592.h needs RV_STATIC_INLINE (normally from core_riscv.h, which we do
  * not include); its EEPROM_ERASE inline must NEVER be called — it spins
  * forever on CH592A when Length % 4096 != 0 */
@@ -19,6 +24,7 @@
 #define RV_STATIC_INLINE static inline
 #endif
 #include "ISP592.h"
+#endif
 
 /* injected per variant by the build; family values below depend on them */
 #ifndef OB_FLASH_APP_END
