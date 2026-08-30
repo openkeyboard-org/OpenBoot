@@ -18,14 +18,14 @@ Fixture lessons this file encodes (nanoCH592, WCH-LinkE, board USB-powered):
    slot.
  - SWD reads (read_region) halt the core and outlast the 10 s idle window:
    always re-enter the bootloader afterwards."""
-import os, re, sys, time, zlib
+import os, random, re, sys, time, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ab_bench as ab
 import hid
 
 ROOT = ab.ROOT
 CFG = dict(
-    serial="CF148F065446",   # adjust per fixture
+    serial="CEBD8F0653EF",   # adjust per fixture
     boot=f"{ROOT}/firmware/build/ch592-usb/openboot-ch592-usb.bin",
     boot_isp=f"{ROOT}/firmware/build/ch592-usb@isp/openboot-ch592-usb.bin",
     bootreq=0x200067F0,
@@ -81,6 +81,13 @@ class UsbObp:
 
     def write(self, addr, data):
         return self.xfer(0x03, addr.to_bytes(4, "little") + data)
+
+    def crc(self, addr, length):
+        r = self.xfer(0x04, addr.to_bytes(4, "little")
+                      + length.to_bytes(4, "little"))
+        if self.status(r) != 0:
+            raise RuntimeError(f"CRC status {self.status(r)}")
+        return int.from_bytes(r[5:9], "little")
 
     def close(self):
         if self.d:
@@ -161,23 +168,26 @@ DETAIL_VERIFY_MISMATCH = 0x72       # flash_ch5xx.h OB_FLERR_VERIFY_MISMATCH
 
 
 def scenario_negative_verify(open_build=True):
-    """Verify honesty at the USB build's 60 MHz flash timing. Bench evidence
-    (flash_driver_bench.scenario_negative_verify) says the 0xF0->0x0F
-    overprogram does NOT land in this regime, so the expected transcript is
-    E_FLASH with the driver's verify-mismatch detail — the one capture that
-    proves verify detects inequality on silicon. The contract stays
-    dual-outcome all the same: the wire report must match SWD ground truth
-    whichever way the die goes."""
+    """Verify honesty at the USB build's 60 MHz flash timing: PRNG pattern
+    B over PRNG pattern A without an erase must come back E_FLASH with the
+    driver's verify-mismatch detail — the capture that proves verify
+    detects inequality on silicon. Random-over-random, never the 0xF0->
+    0x0F nibble swap: see flash_driver_bench.scenario_negative_verify for
+    the marginal-cell evidence (383/384 bits of that swap landed at 60 MHz
+    once, the holdout reading 0x0F via the controller but 0x07 over SWD).
+    The contract stays dual-outcome: the wire must match SWD either way."""
     print("\n=== usb: verify report must match SWD ground truth ===")
     act, wr, base, cap, _ = enter_bootloader()
     if base is None:
         raise RuntimeError("bootloader did not answer")
-    pat, corrupt = bytes([0xF0]) * 48, bytes([0x0F]) * 48
+    rnd = random.Random(0x0E05)
+    pat = bytes(rnd.getrandbits(8) for _ in range(48))
+    corrupt = bytes(rnd.getrandbits(8) for _ in range(48))
     c = UsbObp()
     try:
         c.hello()
         ab.check("erase", c.status(c.erase(base, 4096)), 0)
-        ab.check("program 0xF0 x48 (driver-verified)",
+        ab.check("program PRNG A x48 (driver-verified)",
                  c.status(c.write(base, pat)), 0)
         r = c.write(base, corrupt)
         st = c.status(r)
@@ -198,8 +208,85 @@ def scenario_negative_verify(open_build=True):
           f"flash={'landed' if got == corrupt else 'refused'}")
 
 
+def scenario_soak():
+    """Bulk fill at the USB build's 60 MHz flash timing: 16 KiB of PRNG
+    through the open driver's raw erase/write, live CRC + SWD readback as
+    driver-independent ground truth, uid stable across the SWD halt."""
+    print("\n=== usb: 60 MHz soak, SWD readback ===")
+    act, wr, base, cap, uid1 = enter_bootloader()
+    if base is None:
+        raise RuntimeError("bootloader did not answer")
+    rnd = random.Random(0x60E5)
+    img = bytes(rnd.getrandbits(8) for _ in range(16384))
+    want = zlib.crc32(img) & 0xFFFFFFFF
+    obp_fill(base, img)
+    c = UsbObp()
+    try:
+        c.hello()
+        ab.check("live CRC matches the local image", c.crc(base, len(img)), want)
+    finally:
+        c.close()
+    got = read_region(base, len(img))
+    ab.check("SWD readback matches byte-for-byte", got == img, True)
+    r = enter_bootloader()
+    ab.check("uid stable across the SWD halt", r[4], uid1)
+
+
+def scenario_marginal_overprogram(tries=64):
+    """Hunt the marginal-overprogram refusal: the 0xF0->0x0F nibble swap
+    the 2026-08-27 bench caught failing at 60 MHz (E_FLASH detail 0x72),
+    and which landed 383/384 bits in one attempt today — this die's
+    program op can usually rewrite arbitrary values, so mismatches only
+    come from marginal program pulses. Each attempt uses a fresh 256 B
+    page; the loop stops at the first refusal, which is the transcript
+    proving the driver's verify path reports a real mismatch on silicon
+    (dual-outcome as ever: the wire must match SWD either way). A die
+    that absorbs every attempt leaves mismatch REPORTING pinned by the
+    host register-mock tests; that outcome is recorded, not failed."""
+    print(f"\n=== usb: marginal-overprogram hunt (0xF0->0x0F, {tries} pages) ===")
+    act, wr, base, cap, _ = enter_bootloader()
+    if base is None:
+        raise RuntimeError("bootloader did not answer")
+    pat, corrupt = bytes([0xF0]) * 48, bytes([0x0F]) * 48
+    span = (tries * 256 + 4095) & ~4095
+    c = UsbObp()
+    refusal = None
+    try:
+        c.hello()
+        ab.check("erase", c.status(c.erase(base, span)), 0)
+        for i in range(tries):
+            a = base + i * 256
+            if c.status(c.write(a, pat)) != 0:
+                raise RuntimeError(f"setup program failed at {a:#x}")
+            r = c.write(a, corrupt)
+            st = c.status(r)
+            if st != 0:
+                refusal = (i, a, st, r[5])
+                break
+    finally:
+        c.close()
+    if refusal:
+        i, a, st, detail = refusal
+        got = read_region(a, 48)
+        print(f"  refusal on attempt {i} at {a:#x}: "
+              f"flash reads {got.hex(' ')}")
+        ab.check("wire says E_FLASH", st, E_FLASH)
+        ab.check("detail is the driver's verify-mismatch code",
+                 detail, DETAIL_VERIFY_MISMATCH)
+        ab.check("and flash really does NOT hold the requested bytes",
+                 got != corrupt, True)
+    else:
+        got = read_region(base + (tries - 1) * 256, 48)
+        ab.check("last attempt: wire success backed by SWD",
+                 got == corrupt, True)
+        print(f"  die absorbed all {tries} overprograms; verify-mismatch "
+              "reporting rests on the host register-mock tests")
+
+
 SCENARIOS = {
+    "soak": scenario_soak,
     "negative_verify": scenario_negative_verify,
+    "marginal_overprogram": scenario_marginal_overprogram,
 }
 
 

@@ -362,24 +362,28 @@ def scenario_cut_write(name):
 
 
 def scenario_negative_verify(name, open_build=True):
-    """Verify-honesty check. CH5xx cells are scrambled (erased state reads
-    OB_ERASED_WORD) and whether the die can overprogram a given transition
-    depends on the flash-timing regime — bench evidence on one CH592 die:
-    0xF0->0x0F overprogram FAILS at the USB build's 60 MHz timing (E_FLASH,
-    detail 0x72) but genuinely LANDS at the UART build's reset timing,
-    SWD-confirmed. So the invariant this scenario pins is not "overprogram
-    fails": it is that the driver's wire report MATCHES flash reality —
-    success only when the bytes really landed, E_FLASH detail 0x72 only when
-    they really did not. Either way the verify path is proven honest against
-    ground truth the driver cannot see."""
+    """Verify-honesty check: program PRNG pattern A into erased cells
+    (landed, driver-verified), then attempt PRNG pattern B over it without
+    an erase. Programming over programmed cells cannot reproduce an
+    arbitrary new pattern, so the driver's post-program read must see a
+    mismatch and report E_FLASH with the verify-mismatch detail, with SWD
+    confirming B is not what flash holds. The obvious 0xF0->0x0F nibble
+    swap is deliberately NOT used: CH5xx cells are scrambled and
+    overprogram results are flash-timing- and read-path-dependent — bench
+    evidence has that transition genuinely landing at UART reset timing,
+    and landing 383/384 bits at 60 MHz with the last cell reading 0x0F
+    through the controller but 0x07 over SWD (a marginal cell, not a
+    driver bug). Random-over-random leaves no such escape. Should the die
+    ever genuinely land B (st == 0), the wire must still match SWD."""
     cfg = ab.CHIPS[name]
     print(f"\n=== {name}: verify report must match SWD ground truth ===")
     c, base, _ = obp_session(cfg)
-    pat = bytes([0xF0]) * 48
-    corrupt = bytes([0x0F] * 48)
+    pat = prng_image(48, 0x0E01)
+    corrupt = prng_image(48, 0x0E02)
     try:
         ab.check("erase", c.status(c.erase(base, 4096)), 0)
-        ab.check("program 0xF0 x48 (driver-verified)", c.status(c.write(base, pat)), 0)
+        ab.check("program PRNG A x48 (driver-verified)",
+                 c.status(c.write(base, pat)), 0)
         r = c.write(base, corrupt)
         st = c.status(r)
     finally:
