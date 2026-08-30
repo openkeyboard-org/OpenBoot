@@ -279,8 +279,7 @@ def scenario_lifecycle(name):
     # CNTIF (#18); low bits would carry a stale flag.
     check("handoff SysTick flag clean (A)", read_word(cfg, MARK_A[0] + 8), STK_MARK)
 
-    reboot(cfg)
-    act, wr, base, _ = probe(cfg)
+    act, wr, base, _ = enter_bootloader(cfg)
     check("committing A makes B the target", (act, wr), ("A", "B"))
     check("write base moved to slot B", hex(base), hex(cfg["slot_b"]))
 
@@ -295,8 +294,7 @@ def scenario_lifecycle(name):
     check("slot B's image ran", witness(cfg), (False, True))
     check("handoff SysTick flag clean (B)", read_word(cfg, MARK_B[0] + 8), STK_MARK)
 
-    reboot(cfg)
-    act, wr, base, _ = probe(cfg)
+    act, wr, base, _ = enter_bootloader(cfg)
     check("committing B makes A the target again", (act, wr), ("B", "A"))
     check("write base back at slot A", hex(base), "0x2000")
     ra, rb = slot_records(cfg)
@@ -305,11 +303,21 @@ def scenario_lifecycle(name):
 
 
 def enter_bootloader(cfg, tries=4):
-    """Power-cycle until the BOOTLOADER answers. Resets alternate: the app
-    re-arms the boot request every run and the boot decision consumes it, so
-    one cycle is not always enough. Also clears any lingering debug halt."""
+    """Power-cycle, let the app arm the boot request, then soft-reset into
+    the bootloader and probe.
+
+    The old shape - power_cycle then probe - relied on the Linux cdc-acm
+    behavior where OPENING the port resets the target (DTR toggle) with SRAM
+    intact, consuming the request the app just armed. On macOS the open does
+    not reset, the part stays in the app, and every probe times out. The
+    portable-enough dance for this desk: halt first (-b only resets reliably
+    from a halted chip), then -b soft-resets with SRAM intact, the boot
+    decision finds the armed request and the bootloader keeps control."""
     for _ in range(tries):
-        power_cycle(cfg)
+        power_cycle(cfg)              # app runs and re-arms the request
+        mc(cfg, "-A", t=30)
+        mc(cfg, "-b", t=30)
+        time.sleep(1.2)
         r = probe(cfg)
         if r[0]:
             return r
