@@ -113,6 +113,19 @@ static inline void sys_safe_access_disable(void)
 #define OB_UART_TX_PIN  (1u << 9)   /* PA9 = bTXD1 */
 #define OB_UART_RX_PIN  (1u << 8)   /* PA8 = bRXD1 */
 
+/* A default-mapping board may reuse the alternate pins. Undo any application
+ * configuration before clearing the remap so PB12/PB13 cannot keep driving. */
+#if OB_UART1_ALT_PINS_HIZ
+#define OB_UART_ALT_PINS_RELEASE() do {                                   \
+        const uint32_t ob_alt_pins = (1u << 12) | (1u << 13);             \
+        R32_PB_PD_DRV &= ~ob_alt_pins;                                    \
+        R32_PB_PU     &= ~ob_alt_pins;                                    \
+        R32_PB_DIR    &= ~ob_alt_pins;                                    \
+    } while (0)
+#else
+#define OB_UART_ALT_PINS_RELEASE() do { } while (0)
+#endif
+
 /* Clear PA8's digital-input-disable bit in R32_PIN_CONFIG2 (PA4..15 =
  * bits 4..15), matching the vendor GPIOA_PinCfg(pin, ENABLE) behavior. */
 #define OB_UART_PINS_INIT() do {                                          \
@@ -122,6 +135,7 @@ static inline void sys_safe_access_disable(void)
         R32_PA_PU     |= OB_UART_RX_PIN;                                  \
         R32_PA_DIR    &= ~OB_UART_RX_PIN;                                 \
         R32_PIN_CONFIG2 &= ~(1u << 8);                                    \
+        OB_UART_ALT_PINS_RELEASE();                                       \
         R16_PIN_ALTERNATE &= (uint16_t)~RB_PIN_UART1;                     \
     } while (0)
 

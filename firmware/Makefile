@@ -165,12 +165,15 @@ OB_IDLE_TIMEOUT_MS ?= 10000
 # A board that defines only a strap mask selects port A by default.
 OB_BOOT_PIN_PORT_B ?= 0
 OB_UART1_REMAP ?= 0
+OB_UART1_ALT_PINS_HIZ ?= 0
 OB_BOOT_IMAGE_CRC ?= 0
 
 # Boolean knobs must be exactly the single word 0 or 1. A bare membership
 # $(filter) is not enough: its pattern list is word-split, so a mangled
 # value like '0 1' would pass — the $(words) term closes that hole.
-$(foreach knob,OB_BOOT_PIN_PORT_B OB_UART1_REMAP OB_BOOT_IMAGE_CRC,\
+BOOLEAN_KNOBS := OB_BOOT_PIN_PORT_B OB_UART1_REMAP \
+                 OB_UART1_ALT_PINS_HIZ OB_BOOT_IMAGE_CRC
+$(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
@@ -399,9 +402,9 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
 # The Boolean board knobs (OB_BOOT_PIN_PORT_B, OB_UART1_REMAP,
-# OB_BOOT_IMAGE_CRC) are normalized to a literal 0 or 1 above, always
-# emitted, and consumed with #if — never #ifdef, where defined-but-zero
-# would read as enabled. Knobs that may be legitimately absent
+# OB_UART1_ALT_PINS_HIZ, OB_BOOT_IMAGE_CRC) are normalized to a literal 0 or
+# 1 above, always emitted, and consumed with #if — never #ifdef, where
+# defined-but-zero would read as enabled. Knobs that may be legitimately absent
 # (OB_HSE_CAP_LOAD, OB_BOOT_PIN_MASK, the USB identity) still emit no
 # line when unset, and their consumers #ifdef-test them.
 CONFIG_H := $(BUILD)/openboot_config.h
@@ -418,6 +421,7 @@ CONFIG_LINES := \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
   '\#define OB_BOOT_PIN_PORT_B $(OB_BOOT_PIN_PORT_B)' \
   '\#define OB_UART1_REMAP $(OB_UART1_REMAP)' \
+  '\#define OB_UART1_ALT_PINS_HIZ $(OB_UART1_ALT_PINS_HIZ)' \
   '\#define OB_BOOT_IMAGE_CRC $(OB_BOOT_IMAGE_CRC)' \
   '\#define OB_SLOT_SIZE $(OB_SLOT_SIZE)' \
   '\#define OB_SLOT_A_BASE $(OB_SLOT_A_BASE)' \
