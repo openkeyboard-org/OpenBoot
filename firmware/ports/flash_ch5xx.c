@@ -102,8 +102,13 @@
 #define OB_FL_ERASE_OP 0x20u
 #elif OB_FLASH_ERASE_BLOCK == 256u
 #define OB_FL_ERASE_OP 0x81u
-#if (OB_CHIP_FAMILY == OB_FAMILY_CH570) || (OB_CHIP_FAMILY == OB_FAMILY_CH572)
-#error "256 B page erase (0x81) is ch59x-only; ISP572 has no page-erase command"
+/* Page erase is CH592-only — the family the capability is proven on. This is
+ * the hard C backstop for the Makefile CHIP=ch592 gate: it rejects ch57x
+ * (ISP572 has no page-erase command) AND ch591 (build-validated only, never
+ * bench-tested for 0x81), so even a mangled Make value (e.g. a trailing space
+ * slipping past the CHIP guard) cannot compile a non-CH592 page-erase image. */
+#if OB_CHIP_FAMILY != OB_FAMILY_CH592
+#error "256 B page erase (0x81) is CH592-only"
 #endif
 #else
 #error "OB_FLASH_ERASE_BLOCK must be 4096 or 256"

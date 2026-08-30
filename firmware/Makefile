@@ -170,8 +170,8 @@ OB_BOOT_PIN_PORT_B ?= 0
 OB_UART1_REMAP ?= 0
 OB_UART1_ALT_PINS_HIZ ?= 0
 OB_BOOT_IMAGE_CRC ?= 0
-# 256 B page erase (0x81) instead of 4 KiB sector erase. Opt-in, ch59x only,
-# and only on a die that supports it: 0x81 hard-hangs CH592A (datasheet §4.4),
+# 256 B page erase (0x81) instead of 4 KiB sector erase. Opt-in, CHIP=ch592
+# only, and only on a die that supports it: 0x81 hard-hangs CH592A (§4.4),
 # and CHIP=ch592 cannot distinguish the A and F dies — the builder asserts it.
 OB_FLASH_PAGE_ERASE ?= 0
 
@@ -184,13 +184,19 @@ $(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
-# Page erase is a ch59x-only capability (ISP572/ch57x has no page-erase
-# command). Key on CHIP (the primary build input) rather than the derived
-# PORT so a stray PORT= override cannot slip a ch57x build past this; the
-# driver's #if OB_FL_ERASE_OP == 0x81 family guard is the C-side backstop.
-ifeq ($(OB_FLASH_PAGE_ERASE),1)
-  ifeq ($(filter $(CHIP),ch591 ch592),)
-    $(error OB_FLASH_PAGE_ERASE=1 is ch59x-only (got CHIP=$(CHIP)))
+# Page erase is restricted to CHIP=ch592, the only silicon it is PROVEN on
+# (CH592F, firmware/tests/silicon/). ch57x (ISP572) has no page-erase command
+# at all; ch591 shares the ch59x controller but is build-validated only and
+# was never bench-tested for 0x81 — so it stays out until proven. Key on CHIP
+# (the primary build input) so a stray PORT= override cannot slip another chip
+# past this. $(strip) both sides: a trailing space (e.g. 'OB_FLASH_PAGE_ERASE=1 '
+# or a board assignment before a comment) otherwise makes the ifeq compare
+# unequal and silently skip the guard. The driver's #if OB_CHIP_FAMILY !=
+# OB_FAMILY_CH592 family guard is the hard C-side backstop regardless.
+ifeq ($(strip $(OB_FLASH_PAGE_ERASE)),1)
+  ifneq ($(strip $(CHIP)),ch592)
+    $(error OB_FLASH_PAGE_ERASE=1 is CH592-only, and only on a die proven to \
+            support page erase e.g. CH592F (got CHIP=$(CHIP)))
   endif
 endif
 

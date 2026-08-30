@@ -62,14 +62,38 @@ def test_page_erase_knob_defaults_off_and_lands_when_set():
         (FW / "build/ch592-uart/openboot_config.h").read_text()
 
 
-def test_page_erase_is_ch59x_only():
+@pytest.mark.parametrize("chip", ["ch570", "ch572", "ch591"])
+def test_page_erase_is_ch592_only(chip):
+    # Proven only on CH592F; ch57x has no page-erase command, and ch591 is
+    # build-validated only (never bench-tested for 0x81) — all rejected.
     result = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
-         "CHIP=ch570", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
-         "build/ch570-uart/openboot_config.h"],
+         f"CHIP={chip}", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
+         f"build/{chip}-uart/openboot_config.h"],
         capture_output=True, text=True)
     assert result.returncode != 0
-    assert "OB_FLASH_PAGE_ERASE=1 is ch59x-only" in result.stderr
+    assert "OB_FLASH_PAGE_ERASE=1 is CH592-only" in result.stderr
+
+
+def test_page_erase_leaves_injected_slot_geometry_unchanged():
+    # The record-block decoupling in the REAL build: OB_FLASH_PAGE_ERASE must
+    # change only the erase granularity, never the Make-injected slot geometry
+    # (OB_SLOT_SIZE / bases / app end) — that invariance is what keeps images
+    # and factory blessings compatible across the knob.
+    cfg_rel = "build/ch592-uart/openboot_config.h"
+    keys = ("OB_SLOT_SIZE", "OB_SLOT_A_BASE", "OB_SLOT_B_BASE",
+            "OB_FLASH_APP_END")
+
+    def geometry(page_erase):
+        subprocess.run(
+            ["make", "--no-print-directory", "-C", str(FW), "CHIP=ch592",
+             "TRANSPORT=uart", f"OB_FLASH_PAGE_ERASE={page_erase}", cfg_rel],
+            check=True, capture_output=True, text=True)
+        lines = (FW / cfg_rel).read_text().splitlines()
+        return {k: next(l for l in lines if f"#define {k} " in l) for k in keys}
+
+    off, on = geometry(0), geometry(1)
+    assert off == on, f"slot geometry moved with the knob: {off} vs {on}"
 
 
 @pytest.mark.parametrize("bad", ["2", "yes", "0 1"])

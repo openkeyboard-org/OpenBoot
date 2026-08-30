@@ -46,8 +46,10 @@ The boundaries are deliberately narrow:
   parser; USB maps one frame to one 64-byte HID report.
 - Ports own all special-function-register access, flash operations, boot-record
   storage, chip identity, delays, jumps, and resets.
-- The firmware is polled. It enables no interrupts, timers, or DMA; the main
-  loop uses `OB_POLL_INTERVAL_US` as its time base.
+- The firmware is polled. It enables no interrupt handlers, timer interrupts,
+  or DMA; the main loop paces itself with `OB_POLL_INTERVAL_US` (also the
+  transports' poll-count timeout base), while the idle auto-boot deadline reads
+  a free-running SysTick counter (started at bring-up, no interrupt).
 
 There are no vtables or dynamic allocation. Selecting a port and transport at
 link time keeps the interfaces direct and the image small.
@@ -63,8 +65,12 @@ link time keeps the interfaces direct and the image small.
 | USB clock | 100 MHz | 60 MHz | 60 MHz |
 | Live XIP CRC | No (`OB_FEAT_CRC_LIVE` clear) | Yes | Yes |
 
-All builds use 4 KiB erase blocks, 256-byte write pages, 4-byte write
-alignment, and an application base of `0x2000`. UART builds stay at the
+Builds use 4 KiB erase blocks by default (256 B on page-erase-capable CH592F
+hardware built with `OB_FLASH_PAGE_ERASE=1` — the opcode hard-hangs a CH592A,
+so it is an opt-in the builder makes for a die verified to support it, see
+`docs/AB-UPDATE.md`; the value is advertised as HELLO `erase_block`),
+256-byte write pages, 4-byte write alignment, and an application base of
+`0x2000`. UART builds stay at the
 6.4 MHz reset clock. CH59x can remap UART1 to PB12/PB13 through a board
 setting.
 
@@ -91,9 +97,11 @@ The core enforces four update invariants:
 3. The boot record is invalidated before the first mutation.
 4. COMMIT writes a new record only after the image CRC is verified.
 
-Consequently, an interrupted update returns to the bootloader rather than
-starting a partial image. OBP intentionally has no bootloader self-update
-command; bootloader recovery uses SWD or mask-ROM ISP.
+Consequently, an interrupted update leaves the *previous* application
+bootable (the update writes only the inactive slot, and its record is
+invalidated first, so the boot decision falls back to the still-valid active
+slot) rather than starting a partial image. OBP intentionally has no
+bootloader self-update command; bootloader recovery uses SWD or mask-ROM ISP.
 
 CH57x has an additional constraint: XIP reads may return stale data after a
 flash-controller write in the same power cycle. WRITE uses controller verify,

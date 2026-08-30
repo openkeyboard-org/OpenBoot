@@ -1,9 +1,9 @@
 /*
  * OpenBoot application companion: boot-record access + IAP entry request.
  *
- * Raw registers + libISP headers only (no CH5xx_common.h, no SDK driver
- * .c files). Select the chip family with -DOPENBOOT_CHIP_CH57X or
- * -DOPENBOOT_CHIP_CH59X.
+ * Raw SFR register headers only (CH572SFR.h / CH592SFR.h; no CH5xx_common.h,
+ * no SDK driver .c files, no vendor archive). Select the chip family with
+ * -DOPENBOOT_CHIP_CH57X or -DOPENBOOT_CHIP_CH59X.
  */
 #include <stdint.h>
 #include "openboot_app.h"
@@ -51,8 +51,8 @@
  * bootloader derives its geometry at its own build time - so a mismatch
  * still reads the wrong address; these only reject values no bootloader
  * could have produced. */
-#if OPENBOOT_ERASE_BLOCK == 0
-#error "OPENBOOT_ERASE_BLOCK must be nonzero"
+#if OPENBOOT_ERASE_BLOCK != 4096u
+#error "OPENBOOT_ERASE_BLOCK is the fixed 4 KiB record reserve and must be 4096 — do NOT lower it to match a page-erase (OB_FLASH_PAGE_ERASE) bootloader; the reserve is build-invariant, and any other value reads the wrong record address"
 #elif OPENBOOT_SLOT_SIZE <= OPENBOOT_ERASE_BLOCK
 #error "OPENBOOT_SLOT_SIZE must exceed one erase block: the record owns the top block"
 #elif (OPENBOOT_SLOT_SIZE % OPENBOOT_ERASE_BLOCK) != 0

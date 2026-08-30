@@ -60,6 +60,10 @@ PARAMS = {
                   family=OB_FAMILY_CH570, features=0),
     "ch59x": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),
+    # Same core as ch59x but built with OB_FLASH_PAGE_ERASE=1 (256 B erase
+    # block); test_page_erase_core.py checks the geometry stays invariant.
+    "ch59x_pageerase": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
+                            family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),
     # Same core as ch57x with OB_BOOT_IMAGE_CRC=1, so the boot decision also
     # checks the image against the record it committed.
     "ch57x_imagecrc": dict(app_end=0x3C000, erased_word=0xF3F9BDA9,

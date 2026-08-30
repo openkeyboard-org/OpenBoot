@@ -117,7 +117,7 @@ line.
 | `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
 | `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
 | `OB_UART1_ALT_PINS_HIZ` | `0` | With default CH59x UART1 pins, `1` releases PB12/PB13 as floating inputs |
-| `OB_FLASH_PAGE_ERASE` | `0` | ch59x-only: `1` uses 256 B page erase (`0x81`) instead of 4 KiB sector erase (advertised as `erase_block` in HELLO). The A/B slot/record layout is unchanged. **Opt-in — hangs a CH592A; only enable on a die verified to support it (e.g. CH592F).** See `docs/AB-UPDATE.md` and `ports/CH32FUN.md` |
+| `OB_FLASH_PAGE_ERASE` | `0` | `CHIP=ch592` only: `1` uses 256 B page erase (`0x81`) instead of 4 KiB sector erase (advertised as `erase_block` in HELLO). The A/B slot/record layout is unchanged. **Opt-in — hangs a CH592A; only enable on a die verified to support it (proven on CH592F, `firmware/tests/silicon/`).** See `docs/AB-UPDATE.md` and `ports/CH32FUN.md` |
 | `OB_CPU_HZ` | transport default | UART-only: bootloader (and handoff) clock in Hz; must be a frequency the port's clock init supports |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |

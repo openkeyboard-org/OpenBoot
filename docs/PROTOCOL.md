@@ -229,7 +229,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
 | 12 | 4 | u32 | app_end | exclusive end of the app region |
-| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a ch59x build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
+| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a `CHIP=ch592` build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
 | 20 | 2 | u16 | write_page | flash write page in bytes (256, informational) |
 | 22 | 1 | u8 | write_align | WRITE address/data alignment (4) |
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |
@@ -283,7 +283,7 @@ Request payload (8 bytes):
 
 | Offset | Size | Type | Field | Constraint |
 |---|---|---|---|---|
-| 0 | 4 | u32 | addr | multiple of `erase_block` (4096) |
+| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 on a `CHIP=ch592` page-erase build) |
 | 4 | 4 | u32 | len | multiple of `erase_block`, nonzero |
 
 `[addr, addr + len)` MUST lie entirely within
@@ -294,8 +294,8 @@ slot nor the write slot's own record block — see section 9.1.
 
 Behavior: if this is the session's first mutation, the boot record is
 invalidated first (section 8). The device then erases block by block in one
-4096-byte driver call per block, marking each block in the erased-block
-bitmap as it succeeds. A driver failure aborts the loop with `E_FLASH`
+`erase_block`-sized driver call per block, marking each block in the
+erased-block bitmap as it succeeds. A driver failure aborts the loop with `E_FLASH`
 (detail: low byte of the driver return code); blocks erased before the
 failure remain
 marked. ERASE is idempotent — the host recovers from `E_FLASH` or a lost
@@ -309,8 +309,9 @@ first WRITE of the run.
 
 Success response: 1 byte, `[OB_OK]`.
 
-Host guidance: chunk large erases into requests of ≤ 32 KiB (8 blocks) for
-progress reporting and sane per-request timeouts.
+Host guidance: chunk large erases into requests of ≤ 32 KiB for progress
+reporting and sane per-request timeouts (that is 8 blocks at a 4096 B
+`erase_block`, 128 blocks in 256 B page mode).
 
 ### 6.3 WRITE (`0x03`)
 
@@ -328,7 +329,7 @@ Checks, in order:
 2. `[addr, addr + data_len)` within
    `[write_base, write_base + write_capacity)` and `addr` 4-aligned, else
    `E_ADDR`.
-3. **Every 4096-byte block the write touches MUST be marked in the
+3. **Every `erase_block`-sized block the write touches MUST be marked in the
    erased-block bitmap** (i.e. erased earlier in this same session), else
    `E_NOT_ERASED`. This is the structural fix for the vendor
    write-before-erase bug: no write can land anywhere an erase was not
@@ -554,9 +555,11 @@ invalid, malicious, or truncated by power loss — can brick the device.**
    slot the device is currently able to boot, whether by mistake, by a
    stale address, or deliberately.
 3. **Arming: the erased-block bitmap.** A RAM bitmap with one bit per
-   4 KiB erase block of the writable slot, indexed relative to the slot
-   base and sized from the slot geometry (CH592's 220 KiB slot needs
-   55 bits in 7 bytes), records which blocks this session has
+   `erase_block` of the whole slot, indexed relative to the slot base and
+   sized from `slot_size` (CH592's 220 KiB slot needs 55 bits in 7 bytes at a
+   4096 B block; 880 bits in 110 bytes in 256 B page mode — the top block(s)
+   covering the fixed 4 KiB record reserve are simply never armed, since the
+   write window stops one reserve short), records which blocks this session has
    successfully erased. WRITE refuses (`E_NOT_ERASED`) any block not
    armed. The bitmap is cleared at reset, on every HELLO, and at COMMIT
    when the writable slot flips.
@@ -620,12 +623,14 @@ A record is valid iff the magic matches, `rec_crc32` matches, the reserved
 bytes are zero, and `img_len` is a nonzero multiple of 4 that fits the
 slot's capacity.
 
-**Storage.** Each record lives in the final 4096-byte erase block of the
-slot it describes, at `slot_base + slot_size - 4096`. It owns that block
-outright, because rewriting a record means erasing it first — flash only
-clears bits — and erase granularity is one block; an image that could reach
-into it would be destroyed by its own re-commit. Usable image size is
-therefore `slot_size - 4096`.
+**Storage.** Each record lives in a **fixed 4 KiB record reserve** at the top of
+the slot it describes, at `slot_base + slot_size - 4096`. The reserve is a fixed
+4 KiB *regardless of the flash erase granularity* (which `OB_FLASH_PAGE_ERASE`
+may lower to 256 B) so the record address never moves with a build knob and
+images stay compatible across it. The record owns the reserve so that rewriting
+it — which means erasing first, since flash only clears bits — cannot reach an
+image byte; a rewrite erases just the record's own `erase_block` within the
+reserve. Usable image size is therefore `slot_size - 4096`.
 
 Nothing outside the slot being updated is written or erased at any point in
 an update, which is what lets an interrupted update leave the other slot
@@ -773,7 +778,7 @@ Host retry/timeout guidance (matches the reference `openboot` tool):
 |---|---|
 | HELLO | 500 ms |
 | WRITE | 1 s |
-| ERASE | 200 ms + 30 ms per 4 KiB block |
+| ERASE | 200 ms + 30 ms per `erase_block` (the device-reported granularity, NOT per 4 KiB — a 256 B page-mode block still gets its own 30 ms budget) |
 | CRC / COMMIT | 3 s |
 
 At most 3 attempts per request, each with a fresh `seq`; responses with a
