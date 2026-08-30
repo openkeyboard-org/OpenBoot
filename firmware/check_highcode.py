@@ -164,6 +164,11 @@ def main() -> int:
                     help="driver object(s) for the exact relocation check")
     ap.add_argument("--elf", action="append", default=[],
                     help="linked image(s) for the disassembly-range check")
+    ap.add_argument("--ram-symbol", action="append", default=[],
+                    help="symbol that must exist in every --elf and resolve "
+                         "at or above RAM_BASE — pins the RAM residency of "
+                         "noinline .highcode functions under LTO, where "
+                         "section placement alone is not checked by anything")
     args = ap.parse_args()
 
     if args.elf and not args.nm:
@@ -178,6 +183,14 @@ def main() -> int:
         bad += check_object(args.objdump, obj)
     for elf in args.elf:
         bad += check_elf(args.objdump, args.nm, elf)
+        for name in args.ram_symbol:
+            addr = symbol_addr(args.nm, elf, name)
+            if addr is None:
+                bad.append(f"{elf}: required RAM symbol '{name}' not found "
+                           "(inlined away? it must be noinline)")
+            elif addr < RAM_BASE:
+                bad.append(f"{elf}: '{name}' resolves to {addr:#x}, below "
+                           f"RAM ({RAM_BASE:#x}) — it left .highcode")
 
     if bad:
         print("highcode self-containment VIOLATED:", file=sys.stderr)

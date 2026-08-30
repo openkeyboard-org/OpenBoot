@@ -8,7 +8,9 @@
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG) while XIP would
  * otherwise be fetching this very code. */
-__attribute__((section(".highcode")))
+/* noinline: LTO must never absorb this into a flash-resident
+ * caller — check_highcode --ram-symbol pins it. */
+__attribute__((section(".highcode"), noinline))
 void ob_family_clock_init(void)
 {
 #if OB_CPU_HZ == 60000000
@@ -38,6 +40,9 @@ void ob_family_clock_init(void)
 }
 
 /* ---- boot strap pin (active low) -------------------------------------- */
+/* used+noinline: check_board_policy.py proves strap policy by this SYMBOL's
+ * presence and size in the linked ELF; LTO must not inline it away. */
+__attribute__((used, noinline))
 int ob_bootpin_asserted(void)
 {
 #ifndef OB_BOOT_PIN_MASK
