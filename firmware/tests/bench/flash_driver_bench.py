@@ -364,7 +364,11 @@ def scenario_negative_verify(name, open_build=True):
     finally:
         c.close()
     got = read_region(cfg, base, 48)
-    if st == 0:
+    if st is None:
+        # A lost response is a transport/bench failure, not a driver
+        # refusal — report it as such rather than crash indexing r.
+        ab.check("a response arrived for the overprogram attempt", None, 0)
+    elif st == 0:
         ab.check("wire says success and flash really holds the new bytes",
                  got == corrupt, True)
     else:

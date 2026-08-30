@@ -19,7 +19,7 @@ firmware interfaces are defined by
 | `firmware/app/` | Application companion API |
 | `firmware/tests/` | Host-native tests of the real core sources |
 | `tools/` | Rust host CLI |
-| `third_party/openwch/` | Pinned WCH headers and `libISP` archives |
+| `third_party/openwch/` | Pinned WCH register headers |
 
 `protocol/openboot_protocol.h` is the only hand-written source of protocol
 numbers. `protocol/gen_protocol.py` generates the Rust and Python mirrors and

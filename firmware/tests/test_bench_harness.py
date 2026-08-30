@@ -24,7 +24,9 @@ HARNESS = BENCH / "ab_bench.py"
 def test_harness_parses():
     """Syntax only: importing them would require pyserial/hidapi, which a
     checkout has no reason to have installed."""
-    for py in sorted(BENCH.glob("*.py")):
+    sources = sorted(BENCH.glob("*.py"))
+    assert sources, f"no bench sources under {BENCH}; this check went blind"
+    for py in sources:
         ast.parse(py.read_text(), str(py))
 
 

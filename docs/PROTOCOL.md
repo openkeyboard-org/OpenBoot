@@ -294,9 +294,10 @@ slot nor the write slot's own record block — see section 9.1.
 
 Behavior: if this is the session's first mutation, the boot record is
 invalidated first (section 8). The device then erases block by block in one
-4096-byte ROM call per block, marking each block in the erased-block bitmap
-as it succeeds. A ROM failure aborts the loop with `E_FLASH` (detail: low
-byte of the ROM return code); blocks erased before the failure remain
+4096-byte driver call per block, marking each block in the erased-block
+bitmap as it succeeds. A driver failure aborts the loop with `E_FLASH`
+(detail: low byte of the driver return code); blocks erased before the
+failure remain
 marked. ERASE is idempotent — the host recovers from `E_FLASH` or a lost
 response by simply re-issuing the same command.
 
@@ -421,11 +422,12 @@ Attestation path:
   out-of-band (e.g. via SWD) without rewriting it.
 
 On match the device writes the write slot's boot record (section 8) and
-answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-ROM case
+answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-driver case
 shares that status: a stored generation never reaches `0xFFFFFFFF`, which the
 other slot could then never outrank, so a COMMIT that would need it is refused
 with `E_FLASH`, detail
-`0x00` — distinguishable because no ROM failure carries detail 0. Unreachable
+`0x00` — distinguishable because no driver failure carries detail 0 (driver
+return values keep a nonzero low byte by contract). Unreachable
 by wear (~2^32 commits against a flash endurance of ~10^4..10^5 cycles); a
 device can get there only via a hand-crafted record claiming the ceiling. On
 mismatch **no record is written** — the device never converts an unverified image into a
