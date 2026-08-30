@@ -385,7 +385,7 @@ CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
 
 INCLUDES := -I core -I ports/$(PORT)
-# SFR + ISP headers only; no SDK driver sources are ever compiled.
+# SFR register headers only; no SDK driver sources are ever compiled.
 INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 
 # The configuration contract (see core/openboot_port.h, which #errors when

@@ -57,13 +57,24 @@ class UsbObp:
         self.d.write(bytes([0]) + f + bytes(64 - len(f)))
 
     def xfer(self, cmd, payload=b""):
+        """Only a VALIDATED response satisfies the exchange: correct
+        command echo, this sequence number, a sane length and a good CRC.
+        Anything else (a stale queued report, line corruption) is dropped
+        and the read continues — a leftover E_FLASH from an earlier
+        exchange must never be creditable to the current one."""
         self.send_raw(cmd, payload)
         deadline = time.time() + 2.0
         while time.time() < deadline:
             r = bytes(self.d.read(64, timeout_ms=200))
-            if not r:
+            if len(r) < 8:
                 continue
-            return r[:4 + r[2] + 4]      # frame starts at report byte 0
+            n = r[2]
+            if r[0] != (cmd | 0x80) or r[1] != self.seq or 4 + n + 4 > len(r):
+                continue
+            body, crc = r[:4 + n], r[4 + n:4 + n + 4]
+            if zlib.crc32(body).to_bytes(4, "little") != crc:
+                continue
+            return body + crc
         return None
 
     def status(self, r):

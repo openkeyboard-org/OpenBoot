@@ -141,26 +141,28 @@ def scenario_soak(name):
         c.close()
 
 
-def _recover_full_sector(cfg, seed):
+def _recover_full_sector(cfg, victim, seed):
     """Recovery after a cut is only proven by reprogramming the WHOLE
-    affected sector, SWD-comparing it, power-cycling, and comparing again —
-    a 16-byte token would miss weak bits anywhere else in the sector."""
+    interrupted sector (`victim`, absolute address), SWD-comparing it,
+    power-cycling, and comparing again — recovering some other healthy
+    sector proves nothing, and a 16-byte token would miss weak bits
+    anywhere else in the sector."""
     act, wr, base, _ = ab.enter_bootloader(cfg)
     pat = prng_image(4096, seed)
     c = ab.Obp(cfg["port"])
     try:
         c.hello()
-        if c.status(c.erase(base, 4096)) != 0:
+        if c.status(c.erase(victim, 4096)) != 0:
             return False
         for off in range(0, 4096, 48):
-            if c.status(c.write(base + off, pat[off:off + 48])) != 0:
+            if c.status(c.write(victim + off, pat[off:off + 48])) != 0:
                 return False
     finally:
         c.close()
-    if read_region(cfg, base, 4096) != pat:
+    if read_region(cfg, victim, 4096) != pat:
         return False
     ab.power_cycle(cfg)
-    return read_region(cfg, base, 4096) == pat
+    return read_region(cfg, victim, 4096) == pat
 
 
 # minichlink -t spawn-to-exit, measured on this bench: the fixed part of the
@@ -230,22 +232,31 @@ def scenario_cut_erase(name):
                                - MC_CUT_LATENCY))
         got = read_region(cfg, base, span)
         n_er = n_st = n_torn = 0
+        first_torn = last_erased = None
         for s in range(nsec):
             sec = got[s * 4096:(s + 1) * 4096]
             if all(sec[i:i + 4] == er4 for i in range(0, 4096, 4)):
                 n_er += 1
+                last_erased = s
             elif sec[:48] == stamps[s] and all(
                     sec[i:i + 4] == er4 for i in range(48, 4096, 4)):
                 n_st += 1
             else:
                 n_torn += 1
+                if first_torn is None:
+                    first_torn = s
         cls = "post" if n_st == 0 and n_torn == 0 else \
               "pre" if n_er == 0 and n_torn == 0 else "mid"
         classes[cls] += 1
+        # Recovery must target the INTERRUPTED sector: the first torn one,
+        # else the newest sector the sequence touched — recovering some
+        # other healthy sector would prove nothing.
+        v = first_torn if first_torn is not None else \
+            (last_erased if last_erased is not None else 0)
         print(f"  trial {t}: {cls} (erased={n_er} stamped={n_st} "
-              f"torn={n_torn})")
+              f"torn={n_torn}, recovering sector {v})")
         ab.check(f"trial {t} ({cls}): full-sector recovery",
-                 _recover_full_sector(cfg, 0xAA00 + t), True)
+                 _recover_full_sector(cfg, base + v * 4096, 0xAA00 + t), True)
     print(f"  cut classes over {TRIALS} trials: {classes}")
     ab.check("enough cuts landed mid-erase-sequence",
              classes["mid"] >= MIN_MIDOP, True)
@@ -315,7 +326,7 @@ def scenario_cut_write(name):
         print(f"  trial {t}: {tag} (complete={n_complete}/{len(spans)} "
               f"torn={torn} bad={bad})")
         ab.check(f"trial {t} ({tag}): full-sector recovery",
-                 _recover_full_sector(cfg, 0xBB00 + t), True)
+                 _recover_full_sector(cfg, base, 0xBB00 + t), True)
         trials += 1
     print(f"  mid-run landings {mid}/{trials}, torn program ops {torn_total}")
     ab.check("classifier soundness (nothing written past the frontier)",

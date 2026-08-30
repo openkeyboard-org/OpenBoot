@@ -334,11 +334,10 @@ Checks, in order:
    explicitly performed first, and the bootloader region can never be in
    the bitmap because ERASE refuses it.
 
-The device programs the data (`FLASH_ROM_WRITE`) and immediately verifies
-it through the flash controller (`FLASH_ROM_VERIFY` — a controller
-read-back, deliberately not an XIP read; see `FEAT_CRC_LIVE`). Either ROM
-call failing yields `E_FLASH` with the low byte of the ROM return code as
-detail.
+The device programs the data and immediately verifies it through the flash
+controller (a controller read-back, deliberately not an XIP read; see
+`FEAT_CRC_LIVE`). Either driver call failing yields `E_FLASH` with the low
+byte of the driver return code as detail (a diagnostic, not a stable API).
 
 Success response: 1 byte, `[OB_OK]`.
 

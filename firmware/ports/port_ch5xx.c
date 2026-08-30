@@ -99,9 +99,15 @@ uint32_t ob_uptime_ms(void)
     return up_ms;
 }
 
+/* Runs from RAM: the calibration below assumes ~4 cycles per spin, which
+ * only holds when the two-instruction loop is not refetched through XIP —
+ * CH570's flash fetch at the 6.4 MHz reset clock costs several times that,
+ * and an inflated poll interval is what starved the UART RX FIFO (see
+ * tr_rx_busy). RAM execution makes the constant honest on every chip. */
+__attribute__((section(".highcode")))
 void ob_delay_us(uint32_t us)
 {
-    /* Two-instruction loop (addi+bnez), approximately four XIP CPU cycles. */
+    /* Two-instruction loop (addi+bnez), approximately four CPU cycles. */
     uint32_t n = (us * (OB_CPU_HZ / 100000u)) / 40u;
 
     if (n == 0)

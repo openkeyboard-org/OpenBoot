@@ -185,7 +185,16 @@ class Obp:
                 hdr = self.s.read(4)
                 if len(hdr) < 4:
                     return None
-                return bytes(hdr) + bytes(self.s.read(hdr[2] + 4))
+                body = bytes(hdr) + bytes(self.s.read(hdr[2] + 4))
+                # Only a VALIDATED response counts: correct command echo,
+                # this sequence number, full length, good CRC. Anything
+                # else is line noise or a stale frame - keep hunting.
+                if (len(body) == 4 + hdr[2] + 4
+                        and body[0] == (cmd | 0x80) and body[1] == self.seq
+                        and zlib.crc32(body[:4 + hdr[2]]).to_bytes(4, "little")
+                            == body[4 + hdr[2]:]):
+                    return body
+                win = b""
         return None
 
     def status(self, r):

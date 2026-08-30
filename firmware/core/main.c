@@ -70,15 +70,22 @@ int main(void)
          * it can never run on dirty flash — mutation requires a session and
          * an active session suppresses the timeout — so XIP is coherent
          * here by construction. */
-        /* Mid-frame, stay hot: the bookkeeping below plus the sleep is one
-         * loop pass, and on the slowest supported XIP (CH570 at the UART
-         * image's 6.4 MHz) a pass measured ~410 us — more than half the
-         * 8-byte RX FIFO's 700 us of headroom at 115200, which lost bytes
-         * out of any continuous run longer than ~20 wire bytes. Bounded so
-         * a host that streams bytes forever still meets the idle deadline
-         * and the ~43 s clock fold below. */
-        if (tr_rx_busy() && ++busy_polls < OB_BUSY_POLLS_MAX)
+        /* Mid-frame, skip the bookkeeping: the clock fold and idle check
+         * below cost more than the sleep itself, and on the slowest
+         * supported XIP (CH570 at the UART image's 6.4 MHz) the full pass
+         * measured ~410 us — more than half the 8-byte RX FIFO's 700 us of
+         * headroom at 115200, which lost bytes out of any continuous run
+         * longer than ~20 wire bytes. The OB_POLL_INTERVAL_US sleep is
+         * deliberately KEPT on this path: transports convert milliseconds
+         * to poll counts with it (UART_IDLE_POLLS), so a sleepless hot loop
+         * would burn the 50 ms inter-byte allowance in a few ms of empty
+         * polls on PLL-clocked builds. Bounded so a host that streams bytes
+         * forever still meets the idle deadline and the ~43 s clock fold
+         * below. */
+        if (tr_rx_busy() && ++busy_polls < OB_BUSY_POLLS_MAX) {
+            ob_delay_us(OB_POLL_INTERVAL_US);
             continue;
+        }
         busy_polls = 0;
 
         /* Read the clock unconditionally, before any short-circuit can skip
