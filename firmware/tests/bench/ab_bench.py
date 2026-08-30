@@ -19,8 +19,8 @@ CHIPS = {
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
                   boot=f"{ROOT}/firmware/build/ch572-uart/openboot-ch572-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
-    "ch592": dict(serial="CEBD8F0653EF", port="/dev/ttyACM0",
-                  boot=f"{ROOT}/firmware/build/ch592-uart+bench-ch592/openboot-ch592-uart.bin",
+    "ch592": dict(serial="CEBD8F0653EF", port="/dev/cu.usbmodemCEBD8F0653EF2",
+                  boot=f"{ROOT}/firmware/build/ch592-uart/openboot-ch592-uart.bin",
                   slot_b=0x39000, cap=0x36000, bootreq=0x200067F0),
 }
 fails = []
