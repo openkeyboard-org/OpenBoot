@@ -173,6 +173,10 @@ def main() -> int:
 
     if args.elf and not args.nm:
         ap.error("--elf requires --nm")
+    if args.ram_symbol and not args.elf:
+        # The RAM-symbol check runs per --elf; without one it would silently
+        # pass without validating the symbol it was asked to pin.
+        ap.error("--ram-symbol requires --elf")
     if not args.object and not args.elf:
         ap.error("nothing to check: pass --object and/or --elf")
 
