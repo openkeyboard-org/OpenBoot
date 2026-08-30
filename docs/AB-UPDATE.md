@@ -12,8 +12,11 @@ power cut, a yanked cable or a crashed host anywhere in that window leaves it
 in the bootloader, needing a host to recover. That is the documented behaviour,
 and it is what this design replaces.
 
-The goal: an interrupted update leaves the **previous image running**, with no
-host involvement.
+The goal: an interrupted update leaves the **previous image bootable** with no
+host involvement — a power-loss/reset interruption boots straight back into it,
+and any other interruption (a crashed or disconnected host mid-session) leaves
+the device in the bootloader with that image still bootable on the next reset,
+never in a state where neither slot is valid.
 
 ## Constraints
 
@@ -72,8 +75,11 @@ roughly 4x headroom.
 
 ## The record
 
-Each slot is **self-describing**: a 32-byte record in the **final erase block**
-of its own slot, at `slot_base + slot_size - 4096`, written at COMMIT.
+Each slot is **self-describing**: a 32-byte record in a **fixed 4 KiB record
+reserve** at the top of its own slot, at `slot_base + slot_size - 4096`, written
+at COMMIT. The reserve is a fixed 4 KiB independent of the flash erase
+granularity (`OB_FLASH_PAGE_ERASE` may lower that to 256 B), so the record
+address is build-invariant; a rewrite erases only the record's own erase block.
 
 The record owns a whole 4096-byte block rather than just its 32 bytes because
 rewriting it means erasing it first — flash only clears bits — and erase

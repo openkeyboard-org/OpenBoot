@@ -42,11 +42,16 @@ def test_slot_and_record_geometry_is_invariant(dev_pe, dev59):
         assert dev_pe.slot_base(slot) == dev59.slot_base(slot)
         assert dev_pe.slot_record_addr(slot) == dev59.slot_record_addr(slot)
         assert dev_pe.slot_capacity(slot) == dev59.slot_capacity(slot)
-    # The record still sits a fixed 4 KiB below the slot end in page mode.
+    # The record sits a FIXED 4 KiB below the slot end in page mode — assert
+    # the literal distance, not just equality with dev59. Both libraries take
+    # geometry from the same mock header and CH592's region halves cleanly on
+    # both 256 and 4096, so an erase-block-relative reserve (256 B) would still
+    # equal dev59 only if dev59 also regressed; the literal 4096 pins it.
+    slot_size = dev_pe.slot_base(1) - dev_pe.slot_base(0)
+    assert dev_pe.slot_record_addr(0) == dev_pe.slot_base(0) + slot_size - 4096
+    assert dev_pe.slot_capacity(0) == slot_size - 4096
     assert (dev_pe.slot_record_addr(0)
             == dev_pe.slot_base(0) + dev_pe.slot_capacity(0))
-    assert (dev59.slot_record_addr(0) - dev59.slot_base(0)
-            == dev59.slot_capacity(0) == dev_pe.slot_capacity(0))
 
 
 def test_erase_alignment_is_256_in_page_mode(dev_pe):

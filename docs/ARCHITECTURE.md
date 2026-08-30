@@ -46,10 +46,10 @@ The boundaries are deliberately narrow:
   parser; USB maps one frame to one 64-byte HID report.
 - Ports own all special-function-register access, flash operations, boot-record
   storage, chip identity, delays, jumps, and resets.
-- The firmware is polled. It enables no interrupts, timers, or DMA; the main
-  loop paces itself with `OB_POLL_INTERVAL_US` (also the transports' poll-count
-  timeout base), while the idle auto-boot deadline reads a free-running SysTick
-  uptime clock.
+- The firmware is polled. It enables no interrupt handlers, timer interrupts,
+  or DMA; the main loop paces itself with `OB_POLL_INTERVAL_US` (also the
+  transports' poll-count timeout base), while the idle auto-boot deadline reads
+  a free-running SysTick counter (started at bring-up, no interrupt).
 
 There are no vtables or dynamic allocation. Selecting a port and transport at
 link time keeps the interfaces direct and the image small.

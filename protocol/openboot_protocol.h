@@ -145,12 +145,15 @@ _Static_assert(OB_HELLO_RESP_LEN <= OB_MAX_PAYLOAD,
 
 /* --- boot record (32 bytes, one per slot, written at COMMIT) ----------- */
 /* Each slot is self-describing: its record sits at the START of the slot's
- * FINAL 4096-byte erase block,
+ * fixed 4 KiB record reserve,
  *     slot_base + slot_size - 4096
- * and owns that whole block. Not just its own 32 bytes: rewriting a record
- * means erasing it first, since flash only clears bits, and erase granularity
- * is one block - an image able to reach into that block would be destroyed by
- * its own re-commit. Usable image size is therefore slot_size - 4096.
+ * and owns that whole reserve. Not just its own 32 bytes: rewriting a record
+ * means erasing it first, since flash only clears bits, so an image able to
+ * reach into the reserve would be destroyed by its own re-commit. The reserve
+ * is a FIXED 4 KiB, independent of the flash erase granularity (which
+ * OB_FLASH_PAGE_ERASE may lower to 256 B) so the record address never moves
+ * with a build knob; a rewrite erases only the record's own erase block within
+ * it. Usable image size is therefore slot_size - 4096.
  *
  * There is no shared metadata block, so nothing outside the slot being updated
  * is ever written or erased. The bootloader boots the highest valid

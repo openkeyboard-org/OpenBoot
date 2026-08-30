@@ -229,7 +229,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
 | 12 | 4 | u32 | app_end | exclusive end of the app region |
-| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a ch59x build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
+| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a `CHIP=ch592` build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
 | 20 | 2 | u16 | write_page | flash write page in bytes (256, informational) |
 | 22 | 1 | u8 | write_align | WRITE address/data alignment (4) |
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |
@@ -622,12 +622,14 @@ A record is valid iff the magic matches, `rec_crc32` matches, the reserved
 bytes are zero, and `img_len` is a nonzero multiple of 4 that fits the
 slot's capacity.
 
-**Storage.** Each record lives in the final 4096-byte erase block of the
-slot it describes, at `slot_base + slot_size - 4096`. It owns that block
-outright, because rewriting a record means erasing it first — flash only
-clears bits — and erase granularity is one block; an image that could reach
-into it would be destroyed by its own re-commit. Usable image size is
-therefore `slot_size - 4096`.
+**Storage.** Each record lives in a **fixed 4 KiB record reserve** at the top of
+the slot it describes, at `slot_base + slot_size - 4096`. The reserve is a fixed
+4 KiB *regardless of the flash erase granularity* (which `OB_FLASH_PAGE_ERASE`
+may lower to 256 B) so the record address never moves with a build knob and
+images stay compatible across it. The record owns the reserve so that rewriting
+it — which means erasing first, since flash only clears bits — cannot reach an
+image byte; a rewrite erases just the record's own `erase_block` within the
+reserve. Usable image size is therefore `slot_size - 4096`.
 
 Nothing outside the slot being updated is written or erased at any point in
 an update, which is what lets an interrupted update leave the other slot
