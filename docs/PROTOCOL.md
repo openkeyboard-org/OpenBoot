@@ -283,7 +283,7 @@ Request payload (8 bytes):
 
 | Offset | Size | Type | Field | Constraint |
 |---|---|---|---|---|
-| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 in page mode) |
+| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 on a `CHIP=ch592` page-erase build) |
 | 4 | 4 | u32 | len | multiple of `erase_block`, nonzero |
 
 `[addr, addr + len)` MUST lie entirely within
@@ -555,10 +555,11 @@ invalid, malicious, or truncated by power loss — can brick the device.**
    slot the device is currently able to boot, whether by mistake, by a
    stale address, or deliberately.
 3. **Arming: the erased-block bitmap.** A RAM bitmap with one bit per
-   `erase_block` of the writable slot, indexed relative to the slot
-   base and sized from the slot geometry (CH592's 220 KiB slot needs
-   55 bits in 7 bytes at a 4096 B block; 880 bits in 110 bytes in 256 B
-   page mode), records which blocks this session has
+   `erase_block` of the whole slot, indexed relative to the slot base and
+   sized from `slot_size` (CH592's 220 KiB slot needs 55 bits in 7 bytes at a
+   4096 B block; 880 bits in 110 bytes in 256 B page mode — the top block(s)
+   covering the fixed 4 KiB record reserve are simply never armed, since the
+   write window stops one reserve short), records which blocks this session has
    successfully erased. WRITE refuses (`E_NOT_ERASED`) any block not
    armed. The bitmap is cleared at reset, on every HELLO, and at COMMIT
    when the writable slot flips.

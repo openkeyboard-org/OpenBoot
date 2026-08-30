@@ -65,8 +65,10 @@ link time keeps the interfaces direct and the image small.
 | USB clock | 100 MHz | 60 MHz | 60 MHz |
 | Live XIP CRC | No (`OB_FEAT_CRC_LIVE` clear) | Yes | Yes |
 
-Builds use 4 KiB erase blocks by default (256 B on a CH592 build with
-`OB_FLASH_PAGE_ERASE=1`; the value is advertised as HELLO `erase_block`),
+Builds use 4 KiB erase blocks by default (256 B on page-erase-capable CH592F
+hardware built with `OB_FLASH_PAGE_ERASE=1` — the opcode hard-hangs a CH592A,
+so it is an opt-in the builder makes for a die verified to support it, see
+`docs/AB-UPDATE.md`; the value is advertised as HELLO `erase_block`),
 256-byte write pages, 4-byte write alignment, and an application base of
 `0x2000`. UART builds stay at the
 6.4 MHz reset clock. CH59x can remap UART1 to PB12/PB13 through a board
