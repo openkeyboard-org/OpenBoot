@@ -164,13 +164,15 @@ class Obp:
         self.s = serial.Serial(port, 115200, timeout=1.5)
         self.seq = 0
 
-    def xfer(self, cmd, payload=b""):
+    def xfer(self, cmd, payload=b"", t=2.0):
         """Responses carry the 0xB0 0x07 SOF too (uart_transport.c tr_send),
-        so hunt for it rather than assuming the frame starts at byte 0."""
+        so hunt for it rather than assuming the frame starts at byte 0.
+        t: response deadline — a CRC over the whole window at the UART
+        build's 6.4 MHz takes longer than any single flash op."""
         self.seq = (self.seq + 1) & 0xFF
         self.s.reset_input_buffer()
         self.s.write(frame(cmd, self.seq, payload))
-        deadline, win = time.time() + 2.0, b""
+        deadline, win = time.time() + t, b""
         while time.time() < deadline:
             b = self.s.read(1)
             if not b:

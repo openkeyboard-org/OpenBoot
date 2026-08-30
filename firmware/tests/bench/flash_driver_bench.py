@@ -41,6 +41,7 @@ import random
 import struct
 import sys
 import time
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ab_bench as ab
@@ -110,6 +111,32 @@ def obp_session(cfg):
     return c, base, cap
 
 
+def obp_crc(c, addr, length):
+    """OB_CMD_CRC over [addr, addr+length): the device's live CRC. The
+    deadline scales with length — a full-window CRC at 6.4 MHz outruns the
+    per-op default."""
+    r = c.xfer(0x04, addr.to_bytes(4, "little") + length.to_bytes(4, "little"),
+               t=5.0 + length / 32768)
+    if c.status(r) != 0:
+        raise RuntimeError(f"CRC status {c.status(r)}")
+    return int.from_bytes(r[5:9], "little")
+
+
+def obp_fill(c, base, img, label):
+    """Raw erase + 48 B writes through the running bootloader's driver.
+    Deliberately NO COMMIT anywhere in this file's raw flows: a committed
+    PRNG blob is a valid boot record over garbage, the next reset boots it
+    (opening the CDC port IS a reset), and the bootloader never answers
+    again without SWD surgery."""
+    ab.check(f"{label} erase", c.status(c.erase(base, len(img))), 0)
+    st = 0
+    for off in range(0, len(img), 48):
+        st = c.status(c.write(base + off, img[off:off + 48]))
+        if st != 0:
+            break
+    ab.check(f"{label} write", st, 0)
+
+
 def hello_uid(cfg):
     c = ab.Obp(cfg["port"])
     try:
@@ -125,38 +152,54 @@ def scenario_soak(name):
     cfg = ab.CHIPS[name]
     print(f"\n=== {name}: open-driver soak, SWD readback ===")
     ab.factory(cfg)
-    _, _, base, cap = ab.probe(cfg)
+    c, base, cap = obp_session(cfg)
     img = prng_image(cap - 4096, 0x5EED)     # leave the record block alone
-    path = f"{ab.HERE}/{name}-soak.bin"
-    open(path, "wb").write(img)
-    ab.check("PRNG image flashed through the open driver",
-             ab.flash(cfg, path, extra=("--no-boot",)).returncode, 0)
+    want = zlib.crc32(img) & 0xFFFFFFFF
+    try:
+        obp_fill(c, base, img, "PRNG image through the open driver:")
+        ab.check("live CRC matches the local image",
+                 obp_crc(c, base, len(img)), want)
+    finally:
+        c.close()
     got = read_region(cfg, base, len(img))
     ab.check("SWD readback matches byte-for-byte", got == img, True)
     ab.power_cycle(cfg)
-    r = ab.run([ab.OB, "--transport", "uart", "--port", cfg["port"],
-                "verify", path], 120)
-    ab.check("cold re-verify after power cycle", r.returncode, 0)
+    c, base, _ = obp_session(cfg)
+    try:
+        ab.check("cold re-verify after power cycle",
+                 obp_crc(c, base, len(img)), want)
+    finally:
+        c.close()
 
 
 def scenario_cross_driver(name):
+    """Content written raw by one driver build must CRC-match under the
+    other after a bootloader swap and power cycle (the swap and cycle also
+    force the checker's HELLO — its driver's UID path — on real silicon).
+    The device CRC reads over XIP, so what this pins is the WRITER's landed
+    bytes surviving a build swap, with the checker agreeing about them."""
     cfg = ab.CHIPS[name]
     print(f"\n=== {name}: cross-driver content verification ===")
     for writer, checker in (("open", "isp"), ("isp", "open")):
         wboot = cfg["boot"] if writer == "open" else isp_boot(cfg)
         cboot = cfg["boot"] if checker == "open" else isp_boot(cfg)
         ab.factory(dict(cfg, boot=wboot))
-        _, _, base, cap = ab.probe(cfg)
         img = prng_image(0x4000, {"open": 0x0BE4, "isp": 0x0151}[writer])
-        path = f"{ab.HERE}/{name}-x-{writer}.bin"
-        open(path, "wb").write(img)
-        ab.check(f"[{writer}->{checker}] flash with {writer} driver",
-                 ab.flash(cfg, path, extra=("--no-boot",)).returncode, 0)
+        want = zlib.crc32(img) & 0xFFFFFFFF
+        c, base, _ = obp_session(cfg)
+        try:
+            obp_fill(c, base, img, f"[{writer}->{checker}] {writer}-driver")
+            ab.check(f"[{writer}->{checker}] crc under the {writer} build",
+                     obp_crc(c, base, len(img)), want)
+        finally:
+            c.close()
         swap_boot(cfg, cboot)
-        r = ab.run([ab.OB, "--transport", "uart", "--port", cfg["port"],
-                    "verify", path], 120)
-        ab.check(f"[{writer}->{checker}] verified under {checker} build",
-                 r.returncode, 0)
+        c, base, _ = obp_session(cfg)
+        try:
+            ab.check(f"[{writer}->{checker}] crc under the {checker} build",
+                     obp_crc(c, base, len(img)), want)
+        finally:
+            c.close()
 
 
 def _recover_full_sector(cfg, seed):
