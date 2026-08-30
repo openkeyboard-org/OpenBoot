@@ -185,10 +185,12 @@ $(foreach knob,$(BOOLEAN_KNOBS),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
 # Page erase is a ch59x-only capability (ISP572/ch57x has no page-erase
-# command). Fail loudly rather than silently ignore the knob on ch57x.
+# command). Key on CHIP (the primary build input) rather than the derived
+# PORT so a stray PORT= override cannot slip a ch57x build past this; the
+# driver's #if OB_FL_ERASE_OP == 0x81 family guard is the C-side backstop.
 ifeq ($(OB_FLASH_PAGE_ERASE),1)
-  ifneq ($(PORT),ch59x)
-    $(error OB_FLASH_PAGE_ERASE=1 is ch59x-only (got PORT=$(PORT)))
+  ifeq ($(filter $(CHIP),ch591 ch592),)
+    $(error OB_FLASH_PAGE_ERASE=1 is ch59x-only (got CHIP=$(CHIP)))
   endif
 endif
 
