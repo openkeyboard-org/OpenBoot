@@ -51,7 +51,6 @@ extern uint32_t ob_host_bootreq;
 #define OB_BOOTREQ_ADDR ((uintptr_t)&ob_host_bootreq)
 
 /* ---- driver seams ------------------------------------------------------ */
-#define OB_FLASH_DRIVER_ISP 0
 #define OB_FL_HIGHCODE(fn)              /* no ELF sections on the host */
 
 #define OB_FL_REGS_MOCKED 1

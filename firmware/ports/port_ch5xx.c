@@ -58,34 +58,20 @@ void ob_port_init(void)
     ob_time_init();
 }
 
-/* No range checks here: the core validates before calling the flash API.
- * FLASH_DRIVER=isp routes to the vendor archive during the open driver's
- * validation window; the dispatch goes away with the knob. */
+/* No range checks here: the core validates before calling the flash API. */
 uint32_t ob_flash_erase(uint32_t addr, uint32_t len)
 {
-#if OB_FLASH_DRIVER_ISP
-    return FLASH_ROM_ERASE(addr, len);
-#else
     return ob_ch5xx_flash_erase(addr, len);
-#endif
 }
 
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
 {
-#if OB_FLASH_DRIVER_ISP
-    return FLASH_ROM_WRITE(addr, (void *)(uintptr_t)buf, len);
-#else
     return ob_ch5xx_flash_write(addr, buf, len);
-#endif
 }
 
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
 {
-#if OB_FLASH_DRIVER_ISP
-    return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
-#else
     return ob_ch5xx_flash_verify(addr, buf, len);
-#endif
 }
 
 uint8_t ob_chip_rev(void)

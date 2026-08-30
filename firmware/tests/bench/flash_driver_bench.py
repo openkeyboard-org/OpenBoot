@@ -3,38 +3,39 @@
 
 Companion to ab_bench.py (whose helpers this reuses), covering what the A/B
 state-machine scenarios do not: the driver's own erase/write/verify on real
-silicon, interruption INSIDE a flash operation, verification that does not
-trust the driver with its own homework, and identity parity against the
-vendor-archive build.
+silicon, interruption INSIDE a flash operation, and verification that does
+not trust the driver with its own homework.
 
 Scenarios (per chip):
-  soak            PRNG image through the open driver; readback over SWD
-                  (driver-independent); cold power-cycle; CLI verify again.
-  cross_driver    content written by the open driver CRC-verified by an
-                  isp-build bootloader, and vice versa. Bootloader swaps
-                  touch only flash 0x0000-0x2000, never the slots.
-  cut_erase       power cut aimed inside a sector erase; every trial is
-                  classified post-mortem over SWD (untouched / erased /
-                  partial); requires >= MIN_MIDOP confirmed mid-erase
-                  landings and full recovery after each.
-  cut_write       power cut aimed inside a page-program stream; classified
-                  the same way; requires >= MIN_MIDOP mid-program landings.
-  negative_verify overprogramming 0x0F over 0xF0 without an erase must fail
-                  E_FLASH with the driver's verify-mismatch detail — the one
-                  test that proves verify detects inequality on silicon.
+  soak            PRNG image through the driver's raw erase/write; readback
+                  over SWD (driver-independent); live CRC; cold power-cycle
+                  re-check.
+  cut_erase       power cut aimed inside the whole-window erase sequence
+                  (aim self-calibrated from the setup erase); every sector
+                  classified post-mortem from a full SWD dump; requires
+                  >= MIN_MIDOP mid-sequence landings and full recovery.
+  cut_write       power cut inside a paced page-program run; the frontier
+                  shape is enforced (classifier soundness) and at least one
+                  TORN program op must be observed across the runs.
+  negative_verify PRNG-over-PRNG without an erase; the wire report must
+                  match SWD ground truth (E_FLASH + verify-mismatch detail
+                  when the die refuses, exact content when it lands).
   boundaries      a 48 B write straddling a 256 B page boundary and one
                   ending exactly at a sector boundary, SWD-compared.
-  uid_parity      HELLO uid bytes identical between open and isp builds,
-                  and stable across a power cycle.
+  uid_stability   HELLO uid nonzero and stable across a power cycle.
 
-Requires: WCH-LinkE probes powering the targets (ab_bench.py CHIPS table),
-open and isp bootloader images built:
-    gmake CHIP=<c> TRANSPORT=uart [BOARD=...]                  # open
-    gmake CHIP=<c> TRANSPORT=uart [BOARD=...] FLASH_DRIVER=isp # @isp dir
+History: until the libISP cutover this file also carried cross_driver and
+uid_parity, which compared the open driver against the vendor-archive build
+per-die; that side-by-side evidence (CRC parity in both directions and
+byte-identical uids on CH592 and CH570, both clock regimes) is archived in
+the cutover PR.
+
+Requires: a WCH-LinkE powering the target (ab_bench.py CHIPS table) and the
+bootloader image built: gmake CHIP=<c> TRANSPORT=uart [BOARD=...]
 Override the minichlink path with MINICHLINK=... if ab_bench.py's default
 does not exist on this machine.
 
-Usage: flash_driver_bench.py <ch572|ch592> [scenario ...]
+Usage: flash_driver_bench.py <ch570|ch572|ch592> [scenario ...]
 """
 import os
 import random
@@ -55,26 +56,6 @@ E_FLASH = 0x08
 DETAIL_VERIFY_MISMATCH = 0x72       # flash_ch5xx.h OB_FLERR_VERIFY_MISMATCH
 MIN_MIDOP = 2                       # confirmed mid-op landings required
 TRIALS = 12
-
-
-def isp_boot(cfg):
-    """The isp-variant image path: the build keys only the non-default
-    variant, so insert @isp into the canonical build directory."""
-    d, f = os.path.split(cfg["boot"])
-    return os.path.join(d + "@isp", f)
-
-
-def swap_boot(cfg, image):
-    """Replace ONLY the bootloader (flash 0x0000-0x2000): no -E, so slot
-    contents survive. Read back and compare like ab.factory() does."""
-    import tempfile
-    boot = open(image, "rb").read()
-    ab.mc(cfg, "-w", image, "0x0")
-    with tempfile.NamedTemporaryFile(suffix=".bin") as rb:
-        ab.mc(cfg, "-r", rb.name, "0x0", str(len(boot)))
-        if open(rb.name, "rb").read() != boot:
-            raise RuntimeError("swap_boot(): bootloader readback mismatch")
-    ab.power_cycle(cfg)
 
 
 def read_region(cfg, addr, length):
@@ -158,36 +139,6 @@ def scenario_soak(name):
                  obp_crc(c, base, len(img)), want)
     finally:
         c.close()
-
-
-def scenario_cross_driver(name):
-    """Content written raw by one driver build must CRC-match under the
-    other after a bootloader swap and power cycle (the swap and cycle also
-    force the checker's HELLO — its driver's UID path — on real silicon).
-    The device CRC reads over XIP, so what this pins is the WRITER's landed
-    bytes surviving a build swap, with the checker agreeing about them."""
-    cfg = ab.CHIPS[name]
-    print(f"\n=== {name}: cross-driver content verification ===")
-    for writer, checker in (("open", "isp"), ("isp", "open")):
-        wboot = cfg["boot"] if writer == "open" else isp_boot(cfg)
-        cboot = cfg["boot"] if checker == "open" else isp_boot(cfg)
-        ab.factory(dict(cfg, boot=wboot))
-        img = prng_image(0x4000, {"open": 0x0BE4, "isp": 0x0151}[writer])
-        want = zlib.crc32(img) & 0xFFFFFFFF
-        c, base, _ = obp_session(cfg)
-        try:
-            obp_fill(c, base, img, f"[{writer}->{checker}] {writer}-driver")
-            ab.check(f"[{writer}->{checker}] crc under the {writer} build",
-                     obp_crc(c, base, len(img)), want)
-        finally:
-            c.close()
-        swap_boot(cfg, cboot)
-        c, base, _ = obp_session(cfg)
-        try:
-            ab.check(f"[{writer}->{checker}] crc under the {checker} build",
-                     obp_crc(c, base, len(img)), want)
-        finally:
-            c.close()
 
 
 def _recover_full_sector(cfg, seed):
@@ -438,30 +389,30 @@ def scenario_boundaries(name):
     ab.check("sector-edge content correct (SWD)", got2 == pat[48:], True)
 
 
-def scenario_uid_parity(name):
+def scenario_uid_stability(name):
+    """The uid must be a real device identity: nonzero (the CH570 MAC
+    fallback included) and identical across a power cycle. Byte-parity
+    against the vendor archive was proven before the libISP cutover and is
+    archived in that PR."""
     cfg = ab.CHIPS[name]
-    print(f"\n=== {name}: UID parity open vs isp ===")
-    ab.factory(cfg)                          # open bootloader
+    print(f"\n=== {name}: UID nonzero and stable ===")
+    ab.factory(cfg)
     ab.enter_bootloader(cfg)
-    u_open = hello_uid(cfg)
+    u1 = hello_uid(cfg)
+    ab.check("uid is nonzero", u1 != "0" * 16, True)
     ab.power_cycle(cfg)
     ab.enter_bootloader(cfg)
-    ab.check("uid stable across a power cycle", hello_uid(cfg), u_open)
-    swap_boot(cfg, isp_boot(cfg))
-    ab.enter_bootloader(cfg)
-    u_isp = hello_uid(cfg)
-    ab.check("uid identical under the vendor archive", u_isp, u_open)
-    print(f"  uid: {u_open}")
+    ab.check("uid stable across a power cycle", hello_uid(cfg), u1)
+    print(f"  uid: {u1}")
 
 
 SCENARIOS = {
     "soak": scenario_soak,
-    "cross_driver": scenario_cross_driver,
     "cut_erase": scenario_cut_erase,
     "cut_write": scenario_cut_write,
     "negative_verify": scenario_negative_verify,
     "boundaries": scenario_boundaries,
-    "uid_parity": scenario_uid_parity,
+    "uid_stability": scenario_uid_stability,
 }
 
 

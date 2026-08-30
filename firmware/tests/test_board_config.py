@@ -24,13 +24,9 @@ def gen_config(chip: str, board: str, transport: str = "usb") -> str:
     # path. Getting this wrong just fails to find a target, loudly.
     suffix = "" if board.startswith("generic-") else f"+{board}"
     cfg_rel = f"build/{chip}-{transport}{suffix}/openboot_config.h"
-    # FLASH_DRIVER is pinned: an outer `make test FLASH_DRIVER=isp` leaks the
-    # knob through MAKEFLAGS, and the isp variant builds under a @isp
-    # directory this canonical path has no rule for.
     subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
-         f"CHIP={chip}", f"TRANSPORT={transport}", f"BOARD={board}",
-         "FLASH_DRIVER=open", cfg_rel],
+         f"CHIP={chip}", f"TRANSPORT={transport}", f"BOARD={board}", cfg_rel],
         check=True, capture_output=True, text=True)
     return (FW / cfg_rel).read_text()
 
@@ -132,8 +128,7 @@ def test_cpu_hz_override_lands_on_uart_builds():
     cfg_rel = "build/ch592-uart/openboot_config.h"
     subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
-         "CHIP=ch592", "TRANSPORT=uart", "OB_CPU_HZ=60000000",
-         "FLASH_DRIVER=open", cfg_rel],
+         "CHIP=ch592", "TRANSPORT=uart", "OB_CPU_HZ=60000000", cfg_rel],
         check=True, capture_output=True, text=True)
     assert "#define OB_CPU_HZ 60000000\n" in (FW / cfg_rel).read_text()
 

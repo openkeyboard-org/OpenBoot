@@ -78,9 +78,11 @@ set `OB_BOOT_PIN_MASK`, but mask-ROM ISP remains the recovery mechanism.
 
 ## Flash and update safety
 
-All flash access goes through the WCH ROM entry point exposed by `libISP572.a`
-or `libISP592.a`. The port wrappers do not range-check because the shared core
-does so before every operation.
+All flash access goes through `ports/flash_ch5xx.c`, an open driver for the
+CH5xx flash controller written from disassemblies of WCH's vendor archives and
+validated side-by-side against them on CH592 and CH570 silicon. The port
+wrappers do not range-check because the shared core does so before every
+operation.
 
 The core enforces four update invariants:
 
@@ -109,7 +111,7 @@ One linker script serves all variants. The build generates the family-specific
 RAM geometry and boot-request address. It also:
 
 - limits the bootloader flash region to 8 KiB;
-- places `libISP` and required clock code in RAM-backed `.highcode`;
+- places the flash driver and required clock code in RAM-backed `.highcode`;
 - reserves and checks a 2 KiB stack; and
 - excludes the top 16 bytes of RAM for the application-to-bootloader request.
 
@@ -149,7 +151,7 @@ checklist in the [firmware README](../firmware/README.md#hardware-bring-up).
 
 ## Non-goals
 
-- SDK driver sources; only register headers and `libISP` are used
+- SDK driver sources and binaries; only register headers are used
 - interrupts, timers, DMA, or dynamic allocation
 - dual-transport images
 - bootloader self-update

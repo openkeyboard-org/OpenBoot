@@ -43,7 +43,7 @@ SHELL := /bin/sh
 # CHIP selects the flash geometry (app end address) and the HELLO family id.
 # TRANSPORT selects the one transport .c linked into the image and the CPU
 # clock: UART images run entirely at the 6.4 MHz boot clock (115200 baud fits
-# with DL=7, -0.79% error, and libISP flash ops are proven to work there), so
+# with DL=7, -0.79% error, and the flash driver is bench-proven there), so
 # they need no clock init at all. USB images use the PLL: 100 MHz on ch57x
 # and 60 MHz on ch59x.
 #
@@ -145,38 +145,13 @@ STARTUP_WRITE_BC1_ch59x := 0
 REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
-# Only headers and libISP come from here -- no SDK driver .c is compiled.
+# Only register headers come from here -- no SDK driver .c is compiled and
+# no SDK binary is linked. Flash access is ports/flash_ch5xx.c, an open
+# reimplementation validated side-by-side against the vendor libISP
+# archives on CH592 and CH570 silicon before those were dropped.
 SDK_ch57x := $(abspath ../third_party/openwch/ch570/EVT/EXAM)
 SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
-
-# The ROM flash API archive — the only binary linked from the SDK, and only
-# when FLASH_DRIVER=isp selects it (below).
-ISPLIB_ch57x := ISP572
-ISPLIB_ch59x := ISP592
-ISPLIB := $(ISPLIB_$(PORT))
-ISPLIB_A := $(SDK)/SRC/StdPeriphDriver/lib$(ISPLIB).a
-
-# ---------------------------------------------------------------------------
-# Flash driver. `open` (default) is ports/flash_ch5xx.c, the open
-# reimplementation; `isp` links the closed vendor archive instead. The knob
-# exists only for side-by-side hardware validation of the open driver and is
-# deleted — along with the whole isp path — once that evidence lands.
-# ---------------------------------------------------------------------------
-FLASH_DRIVER ?= open
-# Exact single-word match: $(filter) with the user value as the pattern would
-# accept 'open isp' (and then split the variant selection below).
-ifneq ($(words $(FLASH_DRIVER)),1)
-  $(error FLASH_DRIVER must be 'open' or 'isp' (got '$(FLASH_DRIVER)'))
-endif
-ifeq ($(filter open isp,$(FLASH_DRIVER)),)
-  $(error FLASH_DRIVER must be 'open' or 'isp' (got '$(FLASH_DRIVER)'))
-endif
-ifeq ($(FLASH_DRIVER),isp)
-  OB_FLASH_DRIVER_ISP := 1
-else
-  OB_FLASH_DRIVER_ISP := 0
-endif
 
 # ---------------------------------------------------------------------------
 # Board configuration. A board .mk provides the boot-strap pin and the idle
@@ -362,10 +337,7 @@ HOST_PYTHON ?= python3
 build_dir = build/$(1)-$(2)$(if $(filter-out generic-$(PORT_$(1)),$(3)),+$(3))
 
 TARGET := openboot-$(CHIP)-$(TRANSPORT)
-# Only the non-default isp variant gets a keyed directory: the canonical
-# paths stay stable for their consumers (tests/test_board_config.py,
-# check_board_policy.py) while both variants can coexist for A/B validation.
-BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))$(if $(filter isp,$(FLASH_DRIVER)),@isp)
+BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))
 MAX_IMAGE_BYTES := 8192
 
 # ---------------------------------------------------------------------------
@@ -404,10 +376,10 @@ ARCH_ch59x := -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
               -msmall-data-limit=8 -msave-restore
 ARCH := $(ARCH_$(PORT))
 
-# NO -flto, deliberately: the image links against the binary-only libISP
-# archives from the EVT tree, which were not built for LTO. Mixing LTO
-# objects with opaque archives risks symbol and section surprises in the
-# .highcode flash primitives that must run from RAM.
+# NO -flto yet: nothing closed blocks it any more, but LTO can clone or
+# inline .highcode code into flash-resident sections, so turning it on is
+# its own change — check_highcode.py must pass on the LTO ELFs and a bench
+# re-run is mandatory, not polish.
 CFLAGS := $(ARCH) -Os -g -std=gnu99
 CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
@@ -441,7 +413,6 @@ CONFIG_LINES := \
   '\#define OB_CPU_HZ $(CPU_HZ)' \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
-  '\#define OB_FLASH_DRIVER_ISP $(OB_FLASH_DRIVER_ISP)' \
   '\#define OB_STARTUP_CORECFGR $(STARTUP_CORECFGR_$(PORT))' \
   '\#define OB_STARTUP_WRITE_BC1 $(STARTUP_WRITE_BC1_$(PORT))' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
@@ -497,16 +468,9 @@ LDFLAGS += --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 LDFLAGS += -Wl,-Map=$(BUILD)/$(TARGET).map
 LDFLAGS += -L $(BUILD)          # INCLUDE memory.ld
-# Only isp builds may reference the vendor archive: the open link carrying no
-# -L into the SDK and no -lISP is the proof it depends on nothing closed.
-ifeq ($(FLASH_DRIVER),isp)
-LDFLAGS += -L $(SDK)/SRC/StdPeriphDriver
-LDLIBS := -l$(ISPLIB)
-ISPLIB_PREREQ := $(ISPLIB_A)
-else
+# No -L into the SDK and no vendor archive: the link touching nothing closed
+# is the proof the image depends on nothing closed.
 LDLIBS :=
-ISPLIB_PREREQ :=
-endif
 
 # ---------------------------------------------------------------------------
 # Targets.
@@ -555,7 +519,7 @@ $(MATRIX):
 # images it did not just build.
 matrix_board = $(if $(filter command line,$(origin BOARD)),$(BOARD),generic-$(PORT_$(1)))
 MATRIX_BINS := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),\
-  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))$(if $(filter isp,$(FLASH_DRIVER)),@isp)/openboot-$(c)-$(t).bin))
+  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))/openboot-$(c)-$(t).bin))
 
 # No family ships a stay-in-bootloader strap — the mask-ROM ISP entry pin is
 # the recovery mechanism (PA1, also USB D+, on ch57x; PB22 on ch59x). Getting
@@ -650,7 +614,7 @@ $(BUILD)/%.o: %.c | $(BUILD)
 $(BUILD)/%.o: %.S | $(BUILD)
 	"$(AS)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
-$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD) $(ISPLIB_PREREQ)
+$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD)
 	"$(LD)" $(LDFLAGS) $(OBJS) $(LDLIBS) -o "$@"
 	"$(SIZE)" "$@"
 	$(HOST_PYTHON) check_highcode.py --objdump "$(OBJDUMP)" --nm "$(NM)" \

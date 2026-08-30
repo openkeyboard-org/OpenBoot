@@ -16,7 +16,7 @@ OB = f"{ROOT}/tools/target/release/openboot"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CHIPS = {
-    "ch570": dict(serial="CEBD8F0653EF", port="/dev/cu.usbmodemCEBD8F0653EF2",
+    "ch570": dict(serial="CF148F065446", port="/dev/cu.usbmodemCF148F0654462",
                   boot=f"{ROOT}/firmware/build/ch570-uart/openboot-ch570-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",

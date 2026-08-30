@@ -530,7 +530,7 @@ run for WRITE).
 | `OB_E_ARG` | `0x05` | bad magic, bad BOOT mode, or nonzero flags | `0x00` |
 | `OB_E_ADDR` | `0x06` | address/range violation | `OB_DET_ADDR_RANGE = 0x01` (outside the app region), `OB_DET_ADDR_ALIGN = 0x02` (misaligned) |
 | `OB_E_NOT_ERASED` | `0x07` | WRITE into a block not erased this session | `0x00` |
-| `OB_E_FLASH` | `0x08` | flash ROM API failure | low byte of the ROM return code |
+| `OB_E_FLASH` | `0x08` | flash driver failure | low byte of the driver return code — a diagnostic, not a stable API; the values changed when the vendor ROM archive was replaced by the open driver |
 | `OB_E_VERIFY` | `0x09` | attestation/record failure | `OB_DET_VERIFY_MISMATCH = 0x01`, `OB_DET_VERIFY_NONSEQ = 0x02`, `OB_DET_VERIFY_NORECORD = 0x03` |
 | `OB_E_PROTO` | `0x0A` | unsupported protocol major in HELLO | `0x00` |
 

@@ -47,7 +47,7 @@ SECTIONS
         PROVIDE(_highcode_lma = .);
     } >FLASH AT>FLASH
 
-    /* libISP (.highcode.FLASH_*) and clock init: must execute from RAM */
+    /* the flash driver and clock init: must execute from RAM */
     .highcode :
     {
         . = ALIGN(4);
