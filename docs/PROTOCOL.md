@@ -695,7 +695,7 @@ At reset the bootloader decides, in this exact order:
 
 1. RAM boot-request magic present → stay in OpenBoot.
 2. No slot is bootable → stay in OpenBoot.
-3. Otherwise → jump to the base of the bootable slot with the highest
+3. Otherwise, jump to the base of the bootable slot with the highest
    `generation`.
 
 A slot is bootable when its record validates (section 9.1), its first word is

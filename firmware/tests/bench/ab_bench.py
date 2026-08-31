@@ -155,7 +155,6 @@ def flash(cfg, image, base=None, extra=()):
 
 
 # --- minimal OBP client, so an update can be stopped at a chosen instant ---
-import serial
 
 def frame(cmd, seq, payload=b""):
     body = bytes([cmd, seq, len(payload), 0]) + payload
@@ -164,6 +163,10 @@ def frame(cmd, seq, payload=b""):
 
 class Obp:
     def __init__(self, port):
+        # Lazy: the harness imports fine without pyserial, which a checkout has
+        # no reason to have; only the in-line OBP client needs it.
+        import serial
+
         self.s = serial.Serial(port, 115200, timeout=1.5)
         self.seq = 0
 

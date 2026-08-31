@@ -13,6 +13,7 @@ import ast
 import re
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,3 +81,74 @@ def test_chip_config_carries_what_the_scenarios_read(chip):
     entry = dict(zip([k.value for k in chips.keys], chips.values))[chip]
     keys = {kw.arg for kw in entry.keywords}
     assert {"serial", "port", "boot", "slot_b", "cap", "bootreq"} <= keys
+
+
+# --- mc() behaviour ---------------------------------------------------------
+# The static checks above cannot see mc()'s argv assembly, which is subtle and
+# has broken silently before: minichlink derives skip_startup from argv[1], so
+# the ACTION must lead and -l <serial> must trail; -t/-3 must become -kt/-k3 so
+# power control needs no live chip; and a zero exit that never reached the chip
+# must still raise. ab_bench imports without pyserial now (lazy), so these can
+# run in CI, unlike the hardware scenarios.
+
+def _ab_bench():
+    import importlib
+    import sys
+
+    sys.path.insert(0, str(BENCH))
+    try:
+        return importlib.import_module("ab_bench")
+    finally:
+        sys.path.pop(0)
+
+
+class _FakeRun:
+    """Records the argv mc() built; returns a canned minichlink result."""
+
+    def __init__(self, rc=0, out="", err=""):
+        self.rc, self.out, self.err = rc, out, err
+        self.calls = []
+
+    def __call__(self, cmd, t=90):
+        self.calls.append(list(cmd))
+        return SimpleNamespace(returncode=self.rc, stdout=self.out, stderr=self.err)
+
+
+def test_mc_puts_the_action_first_and_the_serial_last(monkeypatch):
+    ab = _ab_bench()
+    fake = _FakeRun()
+    monkeypatch.setattr(ab, "run", fake)
+    ab.mc({"serial": "SER1"}, "-r", "+", "0x0", "16")
+    assert fake.calls[-1] == [ab.MC, "-r", "+", "0x0", "16", "-l", "SER1"]
+
+
+def test_mc_maps_power_control_through_k(monkeypatch):
+    ab = _ab_bench()
+    fake = _FakeRun()
+    monkeypatch.setattr(ab, "run", fake)
+    ab.mc({"serial": "S"}, "-t")
+    assert fake.calls[-1][1] == "-kt", "-t must become -kt (power needs no live chip)"
+    ab.mc({"serial": "S"}, "-3")
+    assert fake.calls[-1][1] == "-k3"
+
+
+def test_mc_refuses_an_empty_action():
+    ab = _ab_bench()
+    with pytest.raises(ValueError):
+        ab.mc({"serial": "S"})
+
+
+def test_mc_flags_a_zero_exit_that_never_reached_the_chip(monkeypatch):
+    ab = _ab_bench()
+    monkeypatch.setattr(
+        ab, "run", _FakeRun(rc=0, err="link error, nothing connected to linker")
+    )
+    with pytest.raises(RuntimeError):
+        ab.mc({"serial": "S"}, "-A")
+
+
+def test_mc_raises_on_a_nonzero_exit(monkeypatch):
+    ab = _ab_bench()
+    monkeypatch.setattr(ab, "run", _FakeRun(rc=1, err="boom"))
+    with pytest.raises(RuntimeError):
+        ab.mc({"serial": "S"}, "-A")
