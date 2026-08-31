@@ -4,6 +4,18 @@
 #include "port_ch5xx.h"
 #include "flash_ch5xx.h"
 
+/* The app->bootloader request word occupies the top 16 bytes of RAM. Its
+ * address is hand-written per family in the protocol header (OB_BOOTREQ_ADDR,
+ * used by the app companion at runtime); cross-check it against the Makefile's
+ * RAM geometry (OB_RAM_ORIGIN/OB_RAM_SIZE_KB) so the two can never drift. This
+ * replaces a build-time sed of the protocol header — the linker still derives
+ * _eusrstack from the same geometry, and this is the check that used to live in
+ * openboot.ld. It lives in a real port file (not the core) so it compiles only
+ * in the firmware build, where OB_BOOTREQ_ADDR is a genuine address constant. */
+_Static_assert(OB_BOOTREQ_ADDR == OB_RAM_ORIGIN + (OB_RAM_SIZE_KB) * 1024u - 16u,
+               "OB_BOOTREQ_ADDR must be top-of-RAM minus 16; the protocol header "
+               "and the Makefile's RAM size have drifted apart");
+
 /* SysTick is the same block on both families. Its low count word sits at
  * +0x08 even though the full counter is 32-bit on CH57x and 64-bit on CH59x
  * (+0x0C is CNT[63:32] on CH59x but reserved on CH57x — the port header's

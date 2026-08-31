@@ -5,12 +5,18 @@ by A/B safety and the CH570 stale-XIP behaviour. Existing artifacts are roughly
 4.9–6.0 KiB, so source simplicity should take priority over aggressive byte
 shaving.
 
-## v0.11 implementation status
+## Implementation status
 
-Branch `refactor/v0.11` implements the wire-compatible, product-neutral items
-2, 3, 5, 6, 7, 9, 10, 11, and 13 below. OBP remains v0.2; the reported
-bootloader version and host package advance to v0.11. The scope-dependent items
-remain proposals.
+The wire-compatible, product-neutral items 2, 3, 5, 6, 7, 9, 11, and 13 landed
+in the v0.11 refactor. Since then items **4** (strap removal, PR #28), **8**
+(raw-tick timeout, PR #26), and the remainder of **10** (deriving the
+boot-request address cross-check from RAM geometry, retiring the last build-time
+`sed`) have also landed. OBP remains v0.2; the reported bootloader version and
+host package are at v0.11+.
+
+The only open proposals are the scope-dependent ones — **1** (boards as primary
+targets), **12** (specialize the bundle format), and **14** (trim informational
+HELLO fields) — each gated on a product decision.
 
 ## Highest-value refactors
 
@@ -47,6 +53,9 @@ remain proposals.
    duplication removal with no runtime cost.
 
 4. **Remove the OpenBoot strap feature if the product scope is authoritative.**
+   *(Done — PR #28. No external build used it; mask-ROM ISP is the sole
+   recovery path. The port hook, debounce, knobs, policy checker and docs are
+   gone.)*
 
    Every shipped board deliberately disables it, while mask-ROM ISP is the
    documented recovery path. Nevertheless, the port hook, debounce logic,
@@ -106,7 +115,10 @@ remain proposals.
 
 ## Useful secondary simplifications
 
-8. **Simplify product timeout measurement.**
+8. **Simplify product timeout measurement.** *(Done — PR #26. The idle deadline
+   is now a raw SysTick tick compare; the millisecond accumulator, its three
+   port globals, and `ob_ms_accumulate()` are gone. The deadline is capped at
+   2^31 ticks so the unsigned compare stays wrap-safe.)*
 
    All product boards use a ten-second timeout, below the low SysTick word's
    fastest wrap time of roughly 43 seconds. A raw `ob_ticks()` and unsigned
@@ -125,12 +137,16 @@ remain proposals.
    avoid the distinction between undefined and defined-as-zero.
 
 10. **Derive the linker boot-request address directly from RAM geometry.**
+    *(Done.)*
 
     The linker already places the stack at `ORIGIN(RAM) + LENGTH(RAM) - 16`,
-    but the Makefile parses a C header with `sed` to reproduce that address
-    (`firmware/Makefile:540`). Generate the C and linker values from one numeric
-    RAM-size setting, or let the linker define the address directly. This
-    removes a fragile build-time parser.
+    but the Makefile used to parse a C header with `sed` to reproduce that
+    address. Now `RAM_SIZE_KB` is the single per-family source: the Makefile
+    emits it to the linker (MEMORY `LENGTH`) and to the config header
+    (`OB_RAM_ORIGIN`/`OB_RAM_SIZE_KB`), and a `_Static_assert` in
+    `port_ch5xx.c` cross-checks the protocol header's hand-written
+    `OB_BOOTREQ_ADDR` against that geometry — replacing both the `sed` and the
+    linker `ASSERT`, at compile time.
 
 11. **Collapse the Rust `Transport` and `FrameLink` implementation boilerplate.**
     *(Done — historical.)*
