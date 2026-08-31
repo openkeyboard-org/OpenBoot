@@ -4,6 +4,8 @@
 # the CH592F's default PA8/RXD1 and PA9/TXD1 pins. Do not set
 # OB_UART1_REMAP here: PB13 is the board's CHWAKE output and must not become
 # UART1 TX.
+override CHIP := ch592
+override TRANSPORT := uart
 
 # A keyboard module must not remain in the bootloader after a stray update
 # request. With a blessed record, return to the application after 10 s when

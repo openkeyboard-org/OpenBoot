@@ -43,8 +43,8 @@ Three facts do most of the work here:
   is real: the CH592 datasheet §4.4 says *"CH592A does not support page erase"*
   and a CH592A hangs beyond SWD recovery, but a later register-level probe
   proved it works and is selective on **CH592F** (`firmware/tests/silicon/`) —
-  the earlier bench hang was an implementation issue, not the die. Because
-  `CHIP=ch592` cannot tell the A and F dies apart, page erase ships behind the
+  the earlier bench hang was an implementation issue, not the die. Because a
+  ch592 build cannot tell the A and F dies apart, page erase ships behind the
   `OB_FLASH_PAGE_ERASE` build knob (default off): setting it lowers the erase
   granularity to 256 B and is the builder's assertion that their die supports
   it. By default OpenBoot treats 4096 as the minimum erase on both families.

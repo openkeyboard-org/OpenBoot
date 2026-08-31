@@ -234,7 +234,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
 | 12 | 4 | u32 | app_end | exclusive end of the app region |
-| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a `CHIP=ch592` build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
+| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a ch592 build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
 | 20 | 2 | u16 | write_page | flash write page in bytes (256, informational) |
 | 22 | 1 | u8 | write_align | WRITE address/data alignment (4) |
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |
@@ -288,7 +288,7 @@ Request payload (8 bytes):
 
 | Offset | Size | Type | Field | Constraint |
 |---|---|---|---|---|
-| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 on a `CHIP=ch592` page-erase build) |
+| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 on a ch592 page-erase build) |
 | 4 | 4 | u32 | len | multiple of `erase_block`, nonzero |
 
 `[addr, addr + len)` MUST lie entirely within

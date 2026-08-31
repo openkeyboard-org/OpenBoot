@@ -128,21 +128,20 @@ Applications must use the matching layout described in
 
 ## Build and size controls
 
-The firmware Makefile builds this matrix:
+The firmware Makefile builds by **board**: each `boards/*.mk` selects its chip
+(`ch570` or `ch592`), transport (`usb` or `uart`), and `-D` knobs, so
+`make opendongle-ch592` builds that product. Only ch570 and ch592 are built —
+they carry the products — while the ch57x/ch59x ports and the host still cover
+CH572/CH591 silicon at runtime.
 
-```text
-CHIP={ch570,ch572,ch591,ch592} x TRANSPORT={usb,uart}
-```
-
-Each configuration has its own build directory. A non-default `BOARD=` adds
-the board name to that directory, preventing object reuse across variants.
-The generated `openboot_config.h` is force-included in every source file.
+Each board has its own `build/<board>/` directory, so several boards sharing a
+chip/transport never reuse each other's objects. The generated
+`openboot_config.h` is force-included in every source file.
 
 Every image must fit in 8192 bytes. The linker region and post-objcopy size
-check enforce the limit; `make check` from the repository root displays the
-current size of all eight images and runs both test suites. Exact sizes belong
-in that generated report rather than in
-documentation, where they quickly become stale.
+check enforce the limit; `make check` from the repository root displays every
+board's size and runs both test suites. Exact sizes belong in that generated
+report rather than in documentation, where they quickly become stale.
 
 ## Verification
 

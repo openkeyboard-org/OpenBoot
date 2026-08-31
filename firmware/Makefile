@@ -1,23 +1,29 @@
-# OpenBoot build entry point: one Makefile, an eight-image matrix.
+# OpenBoot build entry point: one Makefile, boards as the build targets.
 #
 # OpenBoot is an 8 KiB IAP bootloader living in flash [0x0000, 0x2000) on WCH
-# CH570/CH572/CH591/CH592 parts; the application starts at 0x2000. One image
-# is built per CHIP x TRANSPORT combination:
+# CH570/CH592 parts (the ch57x/ch59x ports also cover CH572/CH591 silicon at
+# runtime, but only ch570/ch592 are built); the application starts at 0x2000.
+# A BOARD is the build unit — it selects the chip, transport, and -D knobs:
 #
-#   CHIP      = ch570 | ch572 | ch591 | ch592
-#   TRANSPORT = usb | uart        (exactly one transport is linked per image)
-#
-#   make                            image for the default CHIP/TRANSPORT
-#   make CHIP=ch570 TRANSPORT=usb   one specific image
-#   make ch570-usb                  the same image, as a convenience target
-#   make all                        the full 8-image matrix
-#   make matrix-report              the matrix plus a size table
-#   make flash                      write the current image via minichlink (SWD)
-#   make flash-isp                  write the current image via wchisp (ROM ISP)
+#   make opendongle-ch592           build that product (chip/transport implied)
+#   make                            the bare `generic` board (ch592/uart default)
+#   make all                        every board (products + generics)
+#   make matrix-report              every board plus a size table
+#   make flash BOARD=<board>        build + write it via minichlink (SWD)
+#   make flash-isp BOARD=<board>    build + write it via wchisp (ROM ISP)
+#   make factory BOARD=<board> APP=app.bin   whole-chip: bootloader + pad + app
 #   make test                       host-native core tests, no cross toolchain
 #   make check-deps                 verify pinned SDKs + toolchain
-#   make print-image-path           absolute path of the current .bin, nothing else
-#   make factory APP=app.bin        whole-chip image: bootloader + pad + app
+#   make print-image-path BOARD=<board>   absolute path of that .bin, nothing else
+#
+# `make <board>` is the build shorthand; flash / flash-isp / factory /
+# print-image-path are actions on a board and take it as BOARD=<board> (a
+# make goal cannot also set a variable for the other goals in the same run).
+#
+# The boards are boards/*.mk. Raw CHIP=/TRANSPORT= remain as an internal,
+# dev-only escape hatch on the bare `generic` board (`make CHIP=ch570
+# TRANSPORT=uart`); products pin them with `override` so a stray command-line
+# value can't repoint them.
 #
 # Every image must fit the 8 KiB bootloader region. That is enforced three
 # ways: the linker script's FLASH MEMORY length, the post-objcopy byte gate in
@@ -38,7 +44,7 @@ SHELL := /bin/sh
 .DELETE_ON_ERROR:
 
 # ---------------------------------------------------------------------------
-# The build matrix.
+# Chip and transport — selected by the board (included just below).
 #
 # CHIP selects the flash geometry (app end address) and the HELLO family id.
 # TRANSPORT selects the one transport .c linked into the image and the CPU
@@ -47,10 +53,20 @@ SHELL := /bin/sh
 # they need no clock init at all. USB images use the PLL: 100 MHz on ch57x
 # and 60 MHz on ch59x.
 #
-# The default is CH592 UART, which leaves the debugger enabled.
+# The bare `generic` board pins neither, so plain `make` defaults to CH592
+# UART (debugger enabled).
 # ---------------------------------------------------------------------------
-CHIPS := ch570 ch572 ch591 ch592
+CHIPS := ch570 ch592
 TRANSPORTS := usb uart
+
+# Board selection comes FIRST: a board .mk `override`s CHIP/TRANSPORT and sets
+# its -D knobs, so BOARD is the primary build coordinate — `make opendongle-ch592`
+# builds that product with no CHIP=/TRANSPORT= needed. The bare `generic` board
+# pins nothing, so plain `make` (or a raw CHIP=/TRANSPORT= escape hatch, dev-only)
+# falls through to the defaults below. Included before every CHIP-derived value
+# because the board is what picks the chip.
+BOARD ?= generic
+include boards/$(BOARD).mk
 
 CHIP ?= ch592
 TRANSPORT ?= uart
@@ -62,25 +78,45 @@ ifeq ($(filter $(TRANSPORT),$(TRANSPORTS)),)
   $(error TRANSPORT must be one of {$(TRANSPORTS)}, got "$(TRANSPORT)")
 endif
 
-# Chip -> port family. CH570/CH572 share the ch57x port, CH591/CH592 the
-# ch59x port; everything variant-specific below the family level is injected
-# as a -D (see DEFINES) so the port sources stay variant-agnostic.
+# The set of buildable boards (each boards/*.mk is a `make <board>` target).
+# Defined here because TOOLCHAIN_GOALS below needs it; the board target rule is
+# near the bottom. ALL_BOARDS drops the bare `generic` escape hatch (no pinned
+# chip/transport), so it is excluded from `all`/matrix-report.
+BOARDS := $(patsubst boards/%.mk,%,$(wildcard boards/*.mk))
+ALL_BOARDS := $(filter-out generic,$(BOARDS))
+
+# `make <board>` is a BUILD shorthand only: a board name is a goal, not a
+# variable, so it selects the board only for its own recursive build. Combining
+# it with an action goal — `make opendongle-ch592 flash` — would run that action
+# in this top-level parse (BOARD=generic), silently flashing the wrong image.
+# Refuse it; the action forms take the board as BOARD=<board>. (Overriding a knob
+# alongside a board goal has the same split — the outer parse validates it
+# against `generic`, not the board — so use `make BOARD=<board> KNOB=...` too.)
+_BOARD_GOALS := $(filter $(BOARDS),$(MAKECMDGOALS))
+_ACTION_GOALS := $(filter flash flash-isp factory print-image-path,$(MAKECMDGOALS))
+ifneq ($(_BOARD_GOALS),)
+  ifneq ($(_ACTION_GOALS),)
+    $(error use `make $(firstword $(_ACTION_GOALS)) BOARD=$(firstword $(_BOARD_GOALS))`, \
+            not `make <board> <action>` — a board name is a build goal, not the BOARD variable)
+  endif
+endif
+
+# Chip -> port family. ch570 uses the ch57x port, ch592 the ch59x port (the
+# ports still serve their whole family — CH572/CH591 silicon runs a ch57x/ch59x
+# image with the runtime clamp — but only ch570/ch592 are built). Everything
+# variant-specific below the family level is injected as a -D (see DEFINES) so
+# the port sources stay variant-agnostic.
 PORT_ch570 := ch57x
-PORT_ch572 := ch57x
-PORT_ch591 := ch59x
 PORT_ch592 := ch59x
 PORT := $(PORT_$(CHIP))
 
 # Exclusive end of the application flash region, injected per VARIANT as
 # -DOB_FLASH_APP_END (openboot_port.h #errors if it is missing):
-#   ch570/ch572: 240 K part, app [0x2000, 0x3C000) -- all of CodeFlash, since
-#                records now live inside their slots rather than in a
-#                reserved block (see docs/AB-UPDATE.md)
-#   ch591:       192 K part, app [0x2000, 0x30000)
-#   ch592:       448 K part, app [0x2000, 0x70000)
+#   ch570: 240 K part, app [0x2000, 0x3C000) -- all of CodeFlash, since records
+#          now live inside their slots rather than in a reserved block (see
+#          docs/AB-UPDATE.md)
+#   ch592: 448 K part, app [0x2000, 0x70000)
 APP_END_ch570 := 0x0003C000
-APP_END_ch572 := 0x0003C000
-APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
 # `override` on both assignments: a variable set on the make COMMAND LINE
 # normally beats every assignment in the makefile, so without it
@@ -103,8 +139,6 @@ ERASE_BLOCK_BYTES := 4096
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
 FAMILY_ch570 := OB_FAMILY_CH570
-FAMILY_ch572 := OB_FAMILY_CH572
-FAMILY_ch591 := OB_FAMILY_CH591
 FAMILY_ch592 := OB_FAMILY_CH592
 CHIP_FAMILY := $(FAMILY_$(CHIP))
 
@@ -162,13 +196,10 @@ SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
 
 # ---------------------------------------------------------------------------
-# Board configuration. A board .mk maps hardware choices onto -D knobs (idle
-# auto-boot timeout, UART pin mapping, USB identity, ...); BOARD is overridable
-# so real hardware can ship its own file without touching this Makefile:
-#   make BOARD=myboard CHIP=ch592 ...
+# Board knob fallbacks. The board .mk was included above (before the CHIP
+# derivations, since it picks the chip); these `?=` fallbacks apply only when
+# the board — e.g. the bare `generic` — leaves a knob unset.
 # ---------------------------------------------------------------------------
-BOARD ?= generic-$(PORT)
-include boards/$(BOARD).mk
 # Fallback if a board file omits the timeout; 0 disables idle auto-boot.
 OB_IDLE_TIMEOUT_MS ?= 10000
 OB_UART1_REMAP ?= 0
@@ -189,11 +220,9 @@ $(foreach knob,$(BOOLEAN_KNOBS),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
 
 # Page erase is restricted to CHIP=ch592, the only silicon it is PROVEN on
-# (CH592F, firmware/tests/silicon/). ch57x (ISP572) has no page-erase command
-# at all; ch591 shares the ch59x controller but is build-validated only and
-# was never bench-tested for 0x81 — so it stays out until proven. Key on CHIP
-# (the primary build input) so a stray PORT= override cannot slip another chip
-# past this. $(strip) both sides: a trailing space (e.g. 'OB_FLASH_PAGE_ERASE=1 '
+# (CH592F, firmware/tests/silicon/). ch570 — the only other build target — has
+# no page-erase command at all. Key on CHIP (the primary build input) so a
+# stray PORT= override cannot slip another chip past this. $(strip) both sides: a trailing space (e.g. 'OB_FLASH_PAGE_ERASE=1 '
 # or a board assignment before a comment) otherwise makes the ifeq compare
 # unequal and silently skip the guard. The driver's #if OB_CHIP_FAMILY !=
 # OB_FAMILY_CH592 family guard is the hard C-side backstop regardless.
@@ -226,8 +255,9 @@ endif
 # set here also holds on larger silicon.
 #
 # Bounded rather than trusted: must be 4096-aligned (the erase granularity)
-# and inside (app base, silicon end]. Board files are included above, after
-# the per-chip default is assigned, which is what makes the override land.
+# and inside (app base, silicon end]. The board set OB_APP_END at include time
+# (above); the per-chip APP_END default was assigned after that; this block then
+# re-assigns APP_END from OB_APP_END, which is what makes the board's clamp land.
 ifneq ($(strip $(OB_APP_END)),)
   # Arithmetic expansion rather than printf '%d': POSIX requires $(( )) to
   # accept C integer constants including 0x hex, but does NOT require printf
@@ -261,9 +291,8 @@ endif
 # is left unused at the top rather than making the slots unequal, which the
 # per-slot link addresses could not express anyway.
 #
-#   ch570/ch572 (0x3C000): A [0x02000,0x1F000)  B [0x1F000,0x3C000)  116 KiB
+#   ch570       (0x3C000): A [0x02000,0x1F000)  B [0x1F000,0x3C000)  116 KiB
 #   ch570 clamped 0x3A000: A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
-#   ch591       (0x30000): A [0x02000,0x19000)  B [0x19000,0x30000)   92 KiB
 #   ch592       (0x70000): A [0x02000,0x39000)  B [0x39000,0x70000)  220 KiB
 # ---------------------------------------------------------------------------
 SLOT_GEOM := $(shell \
@@ -296,8 +325,7 @@ MRS_TOOLCHAIN ?=
 # firmware targets do, including the default goal and matrix convenience
 # targets, so fail at parse time with one actionable message.
 TOOLCHAIN_GOALS := image all matrix-report check-deps flash flash-isp \
-                   factory \
-                   $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
+                   factory $(BOARDS)
 ifeq ($(strip $(MAKECMDGOALS)),)
   NEEDS_TOOLCHAIN := 1
 else ifneq ($(strip $(filter $(TOOLCHAIN_GOALS),$(MAKECMDGOALS))),)
@@ -356,18 +384,13 @@ PYTHON ?= /usr/bin/python3 -I
 HOST_PYTHON ?= python3
 
 # ---------------------------------------------------------------------------
-# Artifact names: build/<chip>-<transport>/openboot-<chip>-<transport>.{elf,
-# bin,hex,map}. Each matrix cell gets its own directory, so the whole matrix
-# can coexist (and `make -j all` can build it in parallel).
+# Artifact names: build/<board>/openboot-<board>.{elf,bin,hex,map}. The board
+# is the build unit now, so each board gets its own directory — several boards
+# share a chip/transport (opencontroller/mk65mx/bench are all ch592/uart) and
+# must not reuse each other's objects. `make -j all` builds them in parallel.
 # ---------------------------------------------------------------------------
-# $(call build_dir,<chip>,<transport>,<board>) — the ONE place that knows the
-# artifact layout. A non-default board gets its own directory so it can never
-# reuse the default board's objects; the default keeps the documented
-# build/<chip>-<transport> path unchanged.
-build_dir = build/$(1)-$(2)$(if $(filter-out generic-$(PORT_$(1)),$(3)),+$(3))
-
-TARGET := openboot-$(CHIP)-$(TRANSPORT)
-BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))
+BUILD := build/$(BOARD)
+TARGET := openboot-$(BOARD)
 MAX_IMAGE_BYTES := 8192
 
 # ---------------------------------------------------------------------------
@@ -509,17 +532,18 @@ LDLIBS :=
 # Targets.
 # ---------------------------------------------------------------------------
 .DEFAULT_GOAL := image
-MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
+# BOARDS/ALL_BOARDS are defined up top (TOOLCHAIN_GOALS needs them). Each board
+# .mk is a `make <board>` target; the recursive rule is below.
 .PHONY: image all matrix-report clean check-deps test flash flash-isp \
-        print-image-path factory $(MATRIX)
+        print-image-path factory $(BOARDS)
 
 image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
        $(BUILD)/$(TARGET).manifest
 
-# Where the current CHIP/TRANSPORT/BOARD image lands, for consumers that
-# package the bootloader (a superproject composing a factory image, say).
-# The build_dir template above is the only definition of that layout, and a
-# consumer hardcoding it breaks silently the day the template changes.
+# Where the current board's image lands, for consumers that package the
+# bootloader (a superproject composing a factory image, say). BUILD/TARGET above
+# are the only definition of that layout, and a consumer hardcoding it breaks
+# silently the day the layout changes.
 #
 # Contract: prints one absolute path and NOTHING else, builds nothing, and is
 # deliberately absent from TOOLCHAIN_GOALS so it answers without
@@ -529,41 +553,32 @@ image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
 print-image-path:
 	@echo "$(abspath $(BUILD)/$(TARGET).bin)"
 
-# The full matrix, one recursive make per cell so each gets its own CHIP/
-# TRANSPORT (and thus its own flag set and build directory). The `+` marks
-# the recursion for the jobserver, so `make -j8 all` parallelizes across
-# cells and `make -n all` dry-runs into them.
-all: $(MATRIX)
+# Each board builds via a recursive make that sets BOARD, so it gets its own
+# knob set and build directory. The `+` marks the recursion for the jobserver
+# and keeps `make -n all` a dry-run. (A high -j across all boards can trip
+# GCC's LTO under load — pre-existing, the same recursion as before; a plain
+# `make all` is reliable.)
+$(BOARDS):
+	+$(MAKE) --no-print-directory BOARD=$@ MRS_TOOLCHAIN="$(MRS_TOOLCHAIN)" image
 
-$(MATRIX):
-	+$(MAKE) --no-print-directory \
-	    CHIP=$(firstword $(subst -, ,$@)) \
-	    TRANSPORT=$(lastword $(subst -, ,$@)) \
-	    MRS_TOOLCHAIN="$(MRS_TOOLCHAIN)" image
+all: $(ALL_BOARDS)
 
-# Size table over the whole matrix -- the third leg of the size gate, and
-# the number to watch while the USB transport grows. Paths come from the
-# same build_dir template the per-cell builds use, so the layout is defined
-# in exactly one place.
-# A BOARD= given on the command line reaches the recursive per-cell makes
-# through MAKEFLAGS, so those cells build into build/<chip>-<transport>+<board>.
-# The report has to look where the build actually went, or it reads whatever
-# stale default-board binaries happen to be lying around and reports sizes for
-# images it did not just build.
-matrix_board = $(if $(filter command line,$(origin BOARD)),$(BOARD),generic-$(PORT_$(1)))
-MATRIX_BINS := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),\
-  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))/openboot-$(c)-$(t).bin))
+# Size table over every board -- the third leg of the size gate, and the number
+# to watch while the USB transport grows. Each board's artifact lands under its
+# own build/<board>/ (BUILD above), so the report looks exactly where each
+# recursive build wrote, never at a stale default lying around.
+MATRIX_BINS := $(foreach b,$(ALL_BOARDS),build/$(b)/openboot-$(b).bin)
 
 matrix-report: all
 	@echo; \
-	 printf '%-22s %s\n' "image" "bytes / limit"; \
-	 printf '%s\n' "-------------------------------------"; \
+	 printf '%-24s %s\n' "board" "bytes / limit"; \
+	 printf '%s\n' "-----------------------------------------"; \
 	 for b in $(MATRIX_BINS); do \
 	   n="$$(basename "$$b" .bin)"; n="$${n#openboot-}"; \
 	   if [ -f "$$b" ]; then \
-	     printf '%-22s %5s / $(MAX_IMAGE_BYTES)\n' "$$n" "$$(wc -c < "$$b")"; \
+	     printf '%-24s %5s / $(MAX_IMAGE_BYTES)\n' "$$n" "$$(wc -c < "$$b")"; \
 	   else \
-	     printf '%-22s %s\n' "$$n" "missing"; \
+	     printf '%-24s %s\n' "$$n" "missing"; \
 	   fi; \
 	 done
 
@@ -685,7 +700,7 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 # caller's application, and slot A's boot record. One file to write at flash 0
 # on a blank part, which then boots the application on its own.
 #
-#   make factory APP=/path/to/app.bin CHIP=ch592 TRANSPORT=usb
+#   make factory BOARD=opendongle-ch592 APP=/path/to/app.bin
 #
 # The application must be the SLOT A build: the record describes slot A, and
 # an application only runs at the base it was linked for.

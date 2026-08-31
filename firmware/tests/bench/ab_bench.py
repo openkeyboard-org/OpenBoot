@@ -17,13 +17,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 CHIPS = {
     "ch570": dict(serial="CF148F065446", port="/dev/cu.usbmodemCF148F0654462",
-                  boot=f"{ROOT}/firmware/build/ch570-uart/openboot-ch570-uart.bin",
+                  boot=f"{ROOT}/firmware/build/generic-ch570-uart/openboot-generic-ch570-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
+    # CH572 is no longer a build target; the CH572 silicon on the bench runs the
+    # ch570 (ch57x) image — the runtime wrong-variant clamp makes that safe.
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
-                  boot=f"{ROOT}/firmware/build/ch572-uart/openboot-ch572-uart.bin",
+                  boot=f"{ROOT}/firmware/build/generic-ch570-uart/openboot-generic-ch570-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
     "ch592": dict(serial="CEBD8F0653EF", port="/dev/cu.usbmodemCEBD8F0653EF2",
-                  boot=f"{ROOT}/firmware/build/ch592-uart/openboot-ch592-uart.bin",
+                  boot=f"{ROOT}/firmware/build/generic-ch592-uart/openboot-generic-ch592-uart.bin",
                   slot_b=0x39000, cap=0x36000, bootreq=0x200067F0),
 }
 fails = []

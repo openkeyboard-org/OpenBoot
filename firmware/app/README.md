@@ -128,7 +128,7 @@ A blank part needs the bootloader and the application written together. Build
 a whole-chip image with the bootloader, a pad, and the application:
 
 ```sh
-make -C firmware CHIP=ch592 TRANSPORT=usb factory APP=/path/to/app.bin
+make -C firmware factory BOARD=opendongle-ch592 APP=/path/to/app.bin
 ```
 
 The result is `<image>-factory.bin` in the build directory, written at flash

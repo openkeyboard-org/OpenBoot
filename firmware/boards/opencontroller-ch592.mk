@@ -2,10 +2,11 @@
 #
 # The module has no host-facing USB: its only wired link is UART1 on the
 # PB12/PB13 alternate mapping, shared with the application's QMK-host
-# protocol (probe RX <- PB13/TXD1_, probe TX -> PB12/RXD1_). Build with
-# TRANSPORT=uart.
+# protocol (probe RX <- PB13/TXD1_, probe TX -> PB12/RXD1_).
 #
-# Recovery: mask-ROM ISP; see generic-ch59x.mk.
+# Recovery: mask-ROM ISP; see firmware/README.md.
+override CHIP := ch592
+override TRANSPORT := uart
 
 # Idle auto-boot: a keyboard module must never sit dead in the bootloader.
 # With a blessed record, a spurious enter-bootloader (stray A6 81 from the

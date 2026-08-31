@@ -1,7 +1,7 @@
 # OpenBoot firmware
 
-The firmware builds one bootloader image for each supported chip and
-transport. Each image occupies flash `[0x0000, 0x2000)`; the application starts
+The firmware builds one bootloader image per board (each board selects a chip
+and transport). Each image occupies flash `[0x0000, 0x2000)`; the application starts
 at `0x2000`. The region above it is split into two A/B slots so an
 interrupted update leaves the previous application bootable.
 
@@ -61,17 +61,24 @@ GCC 12's linker rejects the option that would silence it.
 
 ## Build
 
-The matrix is `CHIP={ch570,ch572,ch591,ch592}` by
-`TRANSPORT={usb,uart}`. Outputs are written to
-`build/<chip>-<transport>/`; non-default boards add `+<board>` to the
-directory name.
+A **board** is the build unit — it selects the chip, transport, and knobs, so
+`make opendongle-ch592` builds that product with no `CHIP=`/`TRANSPORT=`.
+Outputs land in `build/<board>/openboot-<board>.{elf,bin,hex,map}`. The boards
+are `boards/*.mk`: the products are `opendongle-ch570`, `opendongle-ch592`,
+`opencontroller-ch592`, and `mk65mx-wireless-ch592`, with
+`generic-<chip>-<transport>` bring-up boards alongside.
 
 ```sh
-make CHIP=ch592 TRANSPORT=usb   # one image
-make all                        # all eight images
-make matrix-report              # build all images and report their sizes
+make opendongle-ch592           # one product
+make all                        # every board
+make matrix-report              # build every board and report their sizes
 make test                       # host-native core tests
 ```
+
+Only **ch570 and ch592** are built (they carry the products); the ch57x/ch59x
+ports still cover CH572/CH591 silicon at runtime, and the host still recognizes
+it. For a bare bring-up image, the internal `CHIP=`/`TRANSPORT=` escape hatch
+drives the `generic` board: `make CHIP=ch570 TRANSPORT=uart`.
 
 Every binary is limited to 8192 bytes by the linker and a post-build check.
 
@@ -81,7 +88,7 @@ Ask where the image lands rather than reconstructing the directory name, which
 is a build-system detail:
 
 ```sh
-make --no-print-directory CHIP=ch592 TRANSPORT=usb BOARD=myboard print-image-path
+make --no-print-directory BOARD=myboard print-image-path
 ```
 
 It prints one absolute path and nothing else, builds nothing, and needs no
@@ -106,8 +113,10 @@ compares a vendored OpenBoot against its gitlink.
 
 ## Board configuration
 
-Board settings live in `boards/*.mk` and may be overridden on the Make command
-line.
+A board `.mk` is the build unit: it `override`s `CHIP`/`TRANSPORT` (so
+`make <board>` builds it) and sets the `-D` knobs below. The bare `generic`
+board pins nothing and is what the internal `CHIP=`/`TRANSPORT=` escape hatch
+drives.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -115,7 +124,7 @@ line.
 | `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
 | `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
 | `OB_UART1_ALT_PINS_HIZ` | `0` | With default CH59x UART1 pins, `1` releases PB12/PB13 as floating inputs |
-| `OB_FLASH_PAGE_ERASE` | `0` | `CHIP=ch592` only: `1` uses 256 B page erase (`0x81`) instead of 4 KiB sector erase (advertised as `erase_block` in HELLO). The A/B slot/record layout is unchanged. **Opt-in — hangs a CH592A; only enable on a die verified to support it (proven on CH592F, `firmware/tests/silicon/`).** See `docs/AB-UPDATE.md` and `ports/CH32FUN.md` |
+| `OB_FLASH_PAGE_ERASE` | `0` | ch592 boards only: `1` uses 256 B page erase (`0x81`) instead of 4 KiB sector erase (advertised as `erase_block` in HELLO). The A/B slot/record layout is unchanged. **Opt-in — hangs a CH592A; only enable on a die verified to support it (proven on CH592F, `firmware/tests/silicon/`).** See `docs/AB-UPDATE.md` and `ports/CH32FUN.md` |
 | `OB_CPU_HZ` | transport default | UART-only: bootloader (and handoff) clock in Hz; must be a frequency the port's clock init supports |
 | `OB_HSE_CAP_LOAD` | `6` | CH57x-only HSE load field (`0..7` selects 6..20 pF in 2 pF steps) |
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
@@ -162,7 +171,7 @@ One file that programs a blank part and leaves it running the application —
 no host tool, no `openboot bless`, nothing to do on the line after the write:
 
 ```sh
-make CHIP=ch592 TRANSPORT=usb APP=app-slot-a.bin factory
+make factory BOARD=opendongle-ch592 APP=app-slot-a.bin
 ```
 
 It composes the bootloader, a `0x00` pad to the app base, the application, and
@@ -189,8 +198,8 @@ slot A active, and its first update goes to slot B like any other.
 Use either SWD through a WCH-LinkE or the chip's mask-ROM ISP:
 
 ```sh
-make CHIP=ch592 TRANSPORT=uart flash       # minichlink; includes readback
-make CHIP=ch592 TRANSPORT=uart flash-isp   # wchisp; chip must be in ROM ISP
+make flash BOARD=bench-ch592       # minichlink; includes readback
+make flash-isp BOARD=bench-ch592   # wchisp; chip must be in ROM ISP
 ```
 
 `WCHLINK_SERIAL=<serial>` selects a probe when several are attached. The
@@ -211,8 +220,9 @@ enables USB. Recover through mask-ROM ISP:
 3. Confirm the ROM responds, then flash a UART build or erase the chip:
 
    ```sh
+   make generic-ch570-uart
    wchisp info
-   wchisp flash build/ch570-uart/openboot-ch570-uart.bin
+   wchisp flash build/generic-ch570-uart/openboot-generic-ch570-uart.bin
    ```
 
 PA1 is not 5 V tolerant. Pull it to the board's 3.3 V rail, or limit clamp

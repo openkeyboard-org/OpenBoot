@@ -2,10 +2,11 @@
 generated configuration header.
 
 test_core_native.py proves the core honors a build bound tighter than the
-silicon; these tests prove the board .mk actually PRODUCES that bound —
-the include ordering in firmware/Makefile (per-chip APP_END default first,
-board file second) is what makes the ch570 clamp effective, and nothing
-else would notice if that ordering regressed.
+silicon; these tests prove the board .mk actually PRODUCES that bound. The
+board file is now included FIRST (it picks the chip), the per-chip APP_END
+default runs next, and the board's OB_APP_END clamp re-overrides it after —
+that ordering is what makes the ch570 clamp effective, and nothing else would
+notice if it regressed.
 
 Only the config-header rule runs (a printf + cmp rule), so no cross
 toolchain is needed.
@@ -19,14 +20,13 @@ FW = Path(__file__).resolve().parent.parent
 
 
 def gen_config(chip: str, board: str, transport: str = "usb") -> str:
-    # Mirrors build_dir in firmware/Makefile: only a NON-default board gets a
-    # +<board> suffix, so the default keeps the documented build/<chip>-<tr>
-    # path. Getting this wrong just fails to find a target, loudly.
-    suffix = "" if board.startswith("generic-") else f"+{board}"
-    cfg_rel = f"build/{chip}-{transport}{suffix}/openboot_config.h"
+    # The board now picks the chip/transport, so the build is invoked by BOARD
+    # alone and lands under build/<board>/. `chip`/`transport` stay in the
+    # signature only because callers pass them as the parametrize values they
+    # also assert against; they no longer drive the build.
+    cfg_rel = f"build/{board}/openboot_config.h"
     subprocess.run(
-        ["make", "--no-print-directory", "-C", str(FW),
-         f"CHIP={chip}", f"TRANSPORT={transport}", f"BOARD={board}", cfg_rel],
+        ["make", "--no-print-directory", "-C", str(FW), f"BOARD={board}", cfg_rel],
         check=True, capture_output=True, text=True)
     return (FW / cfg_rel).read_text()
 
@@ -51,28 +51,42 @@ def test_product_config_boot_image_crc(chip, board):
 
 def test_page_erase_knob_defaults_off_and_lands_when_set():
     # Default off, always emitted (consumed with #if).
-    assert "#define OB_FLASH_PAGE_ERASE 0\n" in gen_config("ch592", "generic-ch59x")
+    assert "#define OB_FLASH_PAGE_ERASE 0\n" in gen_config("ch592", "generic-ch592-uart")
     # Explicit opt-in on a ch59x build lands as 1.
     cfg = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch592", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
-         "build/ch592-uart/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         check=True, capture_output=True, text=True)
     assert "#define OB_FLASH_PAGE_ERASE 1\n" in \
-        (FW / "build/ch592-uart/openboot_config.h").read_text()
+        (FW / "build/generic/openboot_config.h").read_text()
 
 
-@pytest.mark.parametrize("chip", ["ch570", "ch572", "ch591"])
+@pytest.mark.parametrize("chip", ["ch570"])
 def test_page_erase_is_ch592_only(chip):
-    # Proven only on CH592F; ch57x has no page-erase command, and ch591 is
-    # build-validated only (never bench-tested for 0x81) — all rejected.
+    # Proven only on CH592F; ch570 (ch57x) has no page-erase command, so the
+    # one other buildable chip is rejected. (ch572/ch591 are no longer build
+    # targets at all — see test_dropped_chips_are_rejected.)
     result = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          f"CHIP={chip}", "TRANSPORT=uart", "OB_FLASH_PAGE_ERASE=1",
-         f"build/{chip}-uart/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         capture_output=True, text=True)
     assert result.returncode != 0
     assert "OB_FLASH_PAGE_ERASE=1 is CH592-only" in result.stderr
+
+
+@pytest.mark.parametrize("chip", ["ch572", "ch591"])
+def test_dropped_chips_are_rejected(chip):
+    """CH572/CH591 have no product and are no longer build targets, so the build
+    must refuse them at chip-validation. The runtime wrong-variant safety and
+    the host-side family enums that recognize this silicon are unaffected."""
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW), f"CHIP={chip}",
+         "build/generic/openboot_config.h"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "CHIP must be one of {ch570 ch592}" in result.stderr
 
 
 def test_page_erase_leaves_injected_slot_geometry_unchanged():
@@ -80,7 +94,7 @@ def test_page_erase_leaves_injected_slot_geometry_unchanged():
     # change only the erase granularity, never the Make-injected slot geometry
     # (OB_SLOT_SIZE / bases / app end) — that invariance is what keeps images
     # and factory blessings compatible across the knob.
-    cfg_rel = "build/ch592-uart/openboot_config.h"
+    cfg_rel = "build/generic/openboot_config.h"
     keys = ("OB_SLOT_SIZE", "OB_SLOT_A_BASE", "OB_SLOT_B_BASE",
             "OB_FLASH_APP_END")
 
@@ -101,10 +115,26 @@ def test_page_erase_must_be_an_exact_boolean(bad):
     result = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch592", "TRANSPORT=uart", f"OB_FLASH_PAGE_ERASE={bad}",
-         "build/ch592-uart/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         capture_output=True, text=True)
     assert result.returncode != 0
     assert "OB_FLASH_PAGE_ERASE must be 0 or 1" in result.stderr
+
+
+@pytest.mark.parametrize("board,chip,transport", [
+    ("opendongle-ch570",      "ch570", "USB"),
+    ("opendongle-ch592",      "ch592", "USB"),
+    ("opencontroller-ch592",  "ch592", "UART"),
+    ("mk65mx-wireless-ch592", "ch592", "UART"),
+    ("generic-ch570-uart",    "ch570", "UART"),
+])
+def test_boards_pin_their_chip_and_transport(board, chip, transport):
+    """A board `override`s CHIP/TRANSPORT; prove both actually reach the config.
+    Without this, a typo pointing a board at the wrong silicon or transport would
+    still pass every knob test — those don't look at family/transport."""
+    cfg = gen_config(chip, board)
+    assert f"#define OB_CHIP_FAMILY OB_FAMILY_{chip.upper()}\n" in cfg
+    assert f"#define OB_TRANSPORT_ID OB_TRANSPORT_ID_{transport}\n" in cfg
 
 
 @pytest.mark.parametrize("chip,board", [
@@ -123,16 +153,17 @@ def test_product_boards_use_the_dongle_usb_identity(chip, board):
 def test_default_board_leaves_the_usb_identity_alone():
     """Absent knobs must emit no line at all, so usb_transport.c's #ifndef
     defaults win — the same contract as every other optional knob."""
-    assert "OB_USB_" not in gen_config("ch592", "generic-ch59x")
+    assert "OB_USB_" not in gen_config("ch592", "generic-ch592-uart")
 
 
 @pytest.mark.parametrize("chip,board,size,b_base", [
-    # Two equal slots, floored to the erase block. ch570 generic now spans all
-    # of CodeFlash and halves exactly; the OpenDongle clamp to 0x3A000 keeps
-    # OBP off the bond page and halves exactly too, at a smaller size.
-    ("ch570", "generic-ch57x",       "0x0001D000", "0x0001F000"),
+    # Two equal slots, floored to the erase block. ch570 generic spans all of
+    # CodeFlash and halves exactly; the OpenDongle clamp to 0x3A000 keeps OBP
+    # off the bond page and halves exactly too, at a smaller size. (Geometry is
+    # transport-independent, so a single generic per chip suffices.)
+    ("ch570", "generic-ch570-uart",  "0x0001D000", "0x0001F000"),
     ("ch570", "opendongle-ch570",    "0x0001C000", "0x0001E000"),
-    ("ch591", "generic-ch59x",       "0x00017000", "0x00019000"),
+    ("ch592", "generic-ch592-uart",  "0x00037000", "0x00039000"),
     ("ch592", "opendongle-ch592",    "0x00037000", "0x00039000"),
 ])
 def test_slot_geometry(chip, board, size, b_base):
@@ -172,7 +203,7 @@ def test_unusable_app_end_is_refused(bad):
     result = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch570", "TRANSPORT=usb", f"OB_APP_END={bad}",
-         "build/ch570-usb/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         capture_output=True, text=True)
 
     assert result.returncode != 0
@@ -183,7 +214,7 @@ def test_cpu_hz_override_lands_on_uart_builds():
     """OB_CPU_HZ pins the bootloader (and handoff) clock; the port's clock
     init #errors on unsupported values, so here we only prove the knob
     reaches the config header."""
-    cfg_rel = "build/ch592-uart/openboot_config.h"
+    cfg_rel = "build/generic/openboot_config.h"
     subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch592", "TRANSPORT=uart", "OB_CPU_HZ=60000000", cfg_rel],
@@ -197,7 +228,7 @@ def test_cpu_hz_override_is_refused_on_usb_builds():
     result = subprocess.run(
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch592", "TRANSPORT=usb", "OB_CPU_HZ=6400000",
-         "build/ch592-usb/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         capture_output=True, text=True)
     assert result.returncode != 0
     assert "only settable on UART builds" in result.stderr
@@ -241,7 +272,7 @@ def test_uart_alt_pins_hiz_must_be_an_exact_boolean(bad):
         ["make", "--no-print-directory", "-C", str(FW),
          "CHIP=ch592", "TRANSPORT=uart",
          f"OB_UART1_ALT_PINS_HIZ={bad}",
-         "build/ch592-uart/openboot_config.h"],
+         "build/generic/openboot_config.h"],
         capture_output=True, text=True)
 
     assert result.returncode != 0
