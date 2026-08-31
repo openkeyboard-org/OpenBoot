@@ -66,7 +66,8 @@ A **board** is the build unit — it selects the chip, transport, and knobs, so
 Outputs land in `build/<board>/openboot-<board>.{elf,bin,hex,map}`. The boards
 are `boards/*.mk`: the products are `opendongle-ch570`, `opendongle-ch592`,
 `opencontroller-ch592`, and `mk65mx-wireless-ch592`, with
-`generic-<chip>-<transport>` bring-up boards alongside.
+`generic-<chip>-<transport>` bring-up boards and `bench-ch592` (the CDC-UART
+bench harness) alongside.
 
 ```sh
 make opendongle-ch592           # one product
