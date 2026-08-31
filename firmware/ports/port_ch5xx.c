@@ -27,8 +27,6 @@
 #error "port header must define OB_STK_CNT64 (0: 32-bit SysTick CNT, 1: 64-bit)"
 #endif
 
-static uint32_t up_ms, up_rem, up_last;
-
 /* Stop the counter, then clear the latched flag — in that order, so a tick
  * cannot re-latch CNTIF between the two stores — then zero the count so the
  * block is back in its reset state. CMP is deliberately not written: it is
@@ -48,7 +46,6 @@ static void ob_systick_stop(void)
 static void ob_time_init(void)
 {
     ob_systick_stop();
-    up_ms = up_rem = up_last = 0;
     OB_STK_CTLR = OB_STK_RUN;
 }
 
@@ -90,13 +87,15 @@ void ob_read_uid(uint8_t uid[8])
         uid[i] = b[i];
 }
 
-uint32_t ob_uptime_ms(void)
+/* Raw free-running SysTick tick count (low 32 bits). The idle deadline
+ * compares tick deltas directly — the core derives the timeout in ticks from
+ * OB_CPU_HZ — so no millisecond conversion or accumulator state lives here.
+ * On ch59x the counter is 64-bit, but the low word at +0x08 serves both
+ * families and covers any deadline shorter than one 2^32-tick wrap (~43 s at
+ * the fastest supported clock). */
+uint32_t ob_now_ticks(void)
 {
-    uint32_t now = OB_STK_CNTL;
-
-    ob_ms_accumulate(&up_ms, &up_rem, now - up_last, OB_CPU_HZ / 1000u);
-    up_last = now;
-    return up_ms;
+    return OB_STK_CNTL;
 }
 
 /* Runs from RAM: the calibration below assumes ~4 cycles per spin, which

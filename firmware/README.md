@@ -113,7 +113,7 @@ line.
 |---|---|---|
 | `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
 | `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
-| `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it |
+| `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it; clock-dependent max (see below) |
 | `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
 | `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
 | `OB_UART1_ALT_PINS_HIZ` | `0` | With default CH59x UART1 pins, `1` releases PB12/PB13 as floating inputs |
@@ -143,6 +143,12 @@ It used to be a poll count merely named after milliseconds, which drifted
 badly under load — the default `10000` measured about 273 seconds on CH570 USB
 and about 86 seconds on CH592 USB. The value is unchanged; what moved is that
 it now means what it says.
+
+The deadline is a direct SysTick tick compare, so it is bounded by half the
+32-bit counter at the build's clock: roughly 21 s at 100 MHz (ch57x USB), 36 s
+at 60 MHz (ch59x USB), and 335 s at the 6.4 MHz UART clock. A larger value
+fails the build with a static assertion; the 10 s default and any realistic
+idle window sit far inside the limit.
 
 `OB_USB_VID` / `OB_USB_PID` let a product enumerate its bootloader under its
 own USB identity instead of a bootloader-specific one, so a user sees one

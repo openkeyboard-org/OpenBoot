@@ -150,25 +150,14 @@ class OpenBootNative:
         L.host_boot_decide_result.restype = c_int32
         L.ob_crc32.argtypes = [c_void_p, c_uint32]
         L.ob_crc32.restype = c_uint32
-        L.host_set_uptime_ms.argtypes = [c_uint32]
-        L.host_set_uptime_ms.restype = None
         L.ob_idle_elapsed.argtypes = [c_uint32, c_uint32, c_uint32]
         L.ob_idle_elapsed.restype = c_int32
-        L.ob_ms_accumulate.argtypes = [POINTER(c_uint32), POINTER(c_uint32),
-                                       c_uint32, c_uint32]
-        L.ob_ms_accumulate.restype = None
         self._lib = L
 
-    def idle_elapsed(self, start_ms: int, now_ms: int, timeout_ms: int) -> bool:
-        return bool(self._lib.ob_idle_elapsed(start_ms, now_ms, timeout_ms))
-
-    def ms_accumulate(self, ms: int, rem: int, delta_ticks: int,
-                      ticks_per_ms: int) -> tuple[int, int]:
-        """-> (ms, rem) after folding delta_ticks in."""
-        c_ms, c_rem = c_uint32(ms), c_uint32(rem)
-        self._lib.ob_ms_accumulate(byref(c_ms), byref(c_rem),
-                                   delta_ticks, ticks_per_ms)
-        return c_ms.value, c_rem.value
+    def idle_elapsed(self, start_ticks: int, now_ticks: int,
+                     timeout_ticks: int) -> bool:
+        return bool(self._lib.ob_idle_elapsed(start_ticks, now_ticks,
+                                              timeout_ticks))
 
     def reset(self):
         self._lib.host_reset()
