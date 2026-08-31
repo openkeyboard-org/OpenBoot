@@ -128,9 +128,11 @@ Applications must use the matching layout described in
 
 ## Build and size controls
 
-The firmware Makefile builds by **board**: each `boards/*.mk` selects its chip
-(`ch570` or `ch592`), transport (`usb` or `uart`), and `-D` knobs, so
-`make opendongle-ch592` builds that product. Only ch570 and ch592 are built —
+The firmware Makefile builds by **board**: product and bring-up board files
+select their chip (`ch570` or `ch592`), transport (`usb` or `uart`), and `-D`
+knobs, while the bare `generic` board pins neither (leaving `CHIP=`/`TRANSPORT=`
+as a dev escape hatch), so `make opendongle-ch592` builds that product. Only
+ch570 and ch592 are built —
 they carry the products — while the ch57x/ch59x ports and the host still cover
 CH572/CH591 silicon at runtime.
 

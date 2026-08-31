@@ -24,8 +24,10 @@ CHIPS = {
     "ch572": dict(serial="C2228F064754", port="/dev/ttyACM2",
                   boot=f"{ROOT}/firmware/build/generic-ch570-uart/openboot-generic-ch570-uart.bin",
                   slot_b=0x1F000, cap=0x1C000, bootreq=0x20002FF0),
+    # bench-ch592 is the board for the WCH-LinkE CDC UART wiring (OB_UART1_REMAP
+    # -> PB12/PB13); the generic ch592 image would listen on PA8/PA9 instead.
     "ch592": dict(serial="CEBD8F0653EF", port="/dev/cu.usbmodemCEBD8F0653EF2",
-                  boot=f"{ROOT}/firmware/build/generic-ch592-uart/openboot-generic-ch592-uart.bin",
+                  boot=f"{ROOT}/firmware/build/bench-ch592/openboot-bench-ch592.bin",
                   slot_b=0x39000, cap=0x36000, bootreq=0x200067F0),
 }
 fails = []

@@ -59,13 +59,26 @@ SHELL := /bin/sh
 CHIPS := ch570 ch592
 TRANSPORTS := usb uart
 
+# The set of build boards (each boards/*.mk is a `make <board>` target),
+# discovered by wildcard so a new board file needs no Makefile edit. ALL_BOARDS
+# drops the bare `generic` escape hatch (it pins no chip/transport), so it is
+# excluded from `all`/matrix-report. Defined here — before the include below and
+# TOOLCHAIN_GOALS later — so BOARD can be validated against it up front.
+BOARDS := $(patsubst boards/%.mk,%,$(wildcard boards/*.mk))
+ALL_BOARDS := $(filter-out generic,$(BOARDS))
+
 # Board selection comes FIRST: a board .mk `override`s CHIP/TRANSPORT and sets
 # its -D knobs, so BOARD is the primary build coordinate — `make opendongle-ch592`
 # builds that product with no CHIP=/TRANSPORT= needed. The bare `generic` board
 # pins nothing, so plain `make` (or a raw CHIP=/TRANSPORT= escape hatch, dev-only)
 # falls through to the defaults below. Included before every CHIP-derived value
-# because the board is what picks the chip.
+# because the board is what picks the chip. Validate BOARD against the discovered
+# set BEFORE interpolating it into the include, so a stray value (a path like
+# `../x`, a glob like `*`) cannot pull an arbitrary makefile into the build.
 BOARD ?= generic
+ifeq ($(filter $(BOARD),$(BOARDS)),)
+  $(error BOARD must name a boards/*.mk file {$(BOARDS)}, got "$(BOARD)")
+endif
 include boards/$(BOARD).mk
 
 CHIP ?= ch592
@@ -78,22 +91,25 @@ ifeq ($(filter $(TRANSPORT),$(TRANSPORTS)),)
   $(error TRANSPORT must be one of {$(TRANSPORTS)}, got "$(TRANSPORT)")
 endif
 
-# The set of buildable boards (each boards/*.mk is a `make <board>` target).
-# Defined here because TOOLCHAIN_GOALS below needs it; the board target rule is
-# near the bottom. ALL_BOARDS drops the bare `generic` escape hatch (no pinned
-# chip/transport), so it is excluded from `all`/matrix-report.
-BOARDS := $(patsubst boards/%.mk,%,$(wildcard boards/*.mk))
-ALL_BOARDS := $(filter-out generic,$(BOARDS))
-
 # `make <board>` is a BUILD shorthand only: a board name is a goal, not a
-# variable, so it selects the board only for its own recursive build. Combining
-# it with an action goal — `make opendongle-ch592 flash` — would run that action
-# in this top-level parse (BOARD=generic), silently flashing the wrong image.
-# Refuse it; the action forms take the board as BOARD=<board>. (Overriding a knob
-# alongside a board goal has the same split — the outer parse validates it
-# against `generic`, not the board — so use `make BOARD=<board> KNOB=...` too.)
+# variable. Two footguns follow, both refused up front:
+#  1. A mutating action needs an explicit board. `make flash` / `make all flash`
+#     would otherwise program the DEFAULT `generic` build, not the product you
+#     built — so flash/flash-isp/factory require BOARD= set on the command line.
+#  2. Combining a board GOAL with an action goal (`make opendongle-ch592 flash`)
+#     would run the action in this top-level parse (BOARD=generic) — refuse it.
+# Overriding a knob alongside a board goal has the same split (the outer parse
+# validates it against `generic`, not the board), so use `make BOARD=<board>
+# KNOB=...` too.
 _BOARD_GOALS := $(filter $(BOARDS),$(MAKECMDGOALS))
 _ACTION_GOALS := $(filter flash flash-isp factory print-image-path,$(MAKECMDGOALS))
+_MUTATING := $(filter flash flash-isp factory,$(_ACTION_GOALS))
+ifneq ($(_MUTATING),)
+  ifeq ($(origin BOARD),file)
+    $(error a mutating action needs an explicit board: `make $(firstword $(_MUTATING)) BOARD=<board>` \
+            (bare `make $(firstword $(_MUTATING))` would program the default `generic` build))
+  endif
+endif
 ifneq ($(_BOARD_GOALS),)
   ifneq ($(_ACTION_GOALS),)
     $(error use `make $(firstword $(_ACTION_GOALS)) BOARD=$(firstword $(_BOARD_GOALS))`, \
