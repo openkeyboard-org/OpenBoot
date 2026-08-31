@@ -36,6 +36,16 @@ pub trait Transport {
     fn send_frame(&mut self, frame: &[u8]) -> Result<()>;
     fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>>;
 
+    /// Whether leaving the device in the bootloader is a state the caller can
+    /// rely on. True for a direct link (UART/HID to the bootloader itself): the
+    /// device simply waits. False for the QMK tunnel, which holds the session by
+    /// disabling the module's idle auto-boot, so a module left un-booted would
+    /// sit off air behind the keyboard — `flash --no-boot` handles that case
+    /// specially rather than silently launching the app.
+    fn holds_in_bootloader(&self) -> bool {
+        true
+    }
+
     fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
         let deadline = Instant::now() + timeout;
         self.send_frame(&req.encode())?;

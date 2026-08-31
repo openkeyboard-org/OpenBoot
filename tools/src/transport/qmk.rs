@@ -170,6 +170,17 @@ fn parse_status(payload: &[u8]) -> Option<BridgeStatus> {
     })
 }
 
+/// The instant the module acknowledged, `elapsed_ms` ago. The value is device
+/// reported, so a malformed or absurd one (a stuck `0xFFFF_FFFF`, ~49 days)
+/// must not underflow the host's monotonic clock — that panics on some
+/// platforms. Clamp such a value to "now": at worst the settle window is
+/// measured from a hair late, never from a time before the host booted.
+fn anchor_from_elapsed(elapsed_ms: u32) -> Instant {
+    Instant::now()
+        .checked_sub(Duration::from_millis(u64::from(elapsed_ms)))
+        .unwrap_or_else(Instant::now)
+}
+
 /// One demultiplexed report. `Ignored` is distinct from "nothing arrived":
 /// mistaking a control report for silence would abandon a half-read frame.
 enum Rx {
@@ -198,6 +209,14 @@ pub struct QmkTransport {
     pub path: String,
     /// How long the bootloader took to answer, measured from the acknowledgement.
     pub settled: Duration,
+    /// The bridge is in passthrough (module taken off air) — set the moment
+    /// ENTER succeeds or an open tunnel is adopted, BEFORE the HELLO probe. It
+    /// is what teardown keys off: even a construction that fails at the probe
+    /// has to send OP_EXIT, or the keyboard stays off air until the bridge's
+    /// own ten second watchdog fires.
+    passthrough: bool,
+    /// A HELLO succeeded, so the module is confirmed in the bootloader with its
+    /// idle auto-boot disabled — teardown must launch the app to restore it.
     entered: bool,
     booted: bool,
 }
@@ -228,6 +247,7 @@ impl QmkTransport {
             rx: VecDeque::new(),
             path,
             settled: Duration::ZERO,
+            passthrough: false,
             entered: false,
             booted: false,
         };
@@ -320,7 +340,7 @@ impl QmkTransport {
         let anchor = if initial.state == ST_PASSTHRU || initial.state == ST_SETTLING {
             // A previous run left the tunnel open; adopt its clock rather than
             // bouncing the module again.
-            Instant::now() - Duration::from_millis(u64::from(initial.elapsed_ms))
+            anchor_from_elapsed(initial.elapsed_ms)
         } else {
             match self.enter(false, opts) {
                 Ok(t) => t,
@@ -341,6 +361,9 @@ impl QmkTransport {
             }
         };
 
+        // The module is now off air behind the bridge. From here, every exit —
+        // including a probe that never lands — must send OP_EXIT.
+        self.passthrough = true;
         self.probe_until_alive(anchor, opts)
     }
 
@@ -384,9 +407,7 @@ impl QmkTransport {
                         continue;
                     };
                     if status.state == ST_SETTLING || status.state == ST_PASSTHRU {
-                        return Ok(
-                            Instant::now() - Duration::from_millis(u64::from(status.elapsed_ms))
-                        );
+                        return Ok(anchor_from_elapsed(status.elapsed_ms));
                     }
                     if status.state == ST_ERROR {
                         return Err(match status.last_error {
@@ -462,6 +483,13 @@ impl ByteSource for QmkTransport {
 }
 
 impl Transport for QmkTransport {
+    // The tunnel disabled the module's idle auto-boot to hold the session, so a
+    // module left in the bootloader would strand the keyboard off air rather
+    // than wait harmlessly. flash --no-boot keys off this to park it safely.
+    fn holds_in_bootloader(&self) -> bool {
+        false
+    }
+
     fn send_frame(&mut self, frame: &[u8]) -> Result<()> {
         // Remember an explicit BOOT so the teardown below never overrides it;
         // `boot --stay` and `flash --no-boot` park the module deliberately.
@@ -498,11 +526,17 @@ impl Drop for QmkTransport {
     /// every exit path — including a read-only probe, a refused dry run, or an
     /// error anywhere in a flow — has to put the module back.
     fn drop(&mut self) {
-        if !self.entered {
+        // Never opened the tunnel: nothing was taken off air, nothing to undo.
+        if !self.passthrough {
             return;
         }
 
-        if !self.booted {
+        // Launch the app only when a HELLO confirmed the module is in the
+        // bootloader with its idle auto-boot disabled — then it will not return
+        // on its own. If the probe never landed (entered == false) the module
+        // still has a live idle timer, so leave it: OP_EXIT below hands the
+        // keyboard back, and the module auto-boots itself.
+        if self.entered && !self.booted {
             let frame = Frame::new(OB_CMD_BOOT, 0xF0, proto::boot_req_payload(OB_BOOT_APP));
             let _ = self.send_frame(&frame.encode());
             // BOOT's answer may legitimately never arrive: the device resets.
@@ -510,7 +544,9 @@ impl Drop for QmkTransport {
         }
 
         // The keyboard answers this from its own state machine, so it does not
-        // depend on a module that is mid-reset and emitting noise.
+        // depend on a module that is mid-reset and emitting noise. Reaching it
+        // on every passthrough exit — success or a failed probe — is what keeps
+        // the keyboard from waiting out the bridge's watchdog to come back.
         let _ = self.write_control(OP_EXIT, &[]);
         let _ = self.read_control(Instant::now() + Duration::from_millis(200));
     }
@@ -755,6 +791,7 @@ mod tests {
             rx: VecDeque::new(),
             path: "test".into(),
             settled: Duration::ZERO,
+            passthrough: false,
             entered: false,
             booted: false,
         };
@@ -787,6 +824,7 @@ mod tests {
             rx: VecDeque::new(),
             path: "test".into(),
             settled: Duration::ZERO,
+            passthrough: false,
             entered: false,
             booted: false,
         };
@@ -1045,11 +1083,66 @@ mod tests {
             rx: VecDeque::new(),
             path: "test".into(),
             settled: Duration::ZERO,
+            passthrough: false,
             entered: false,
             booted: false,
         };
         drop(t);
         assert!(link.written().is_empty());
+    }
+
+    /// ENTER lands (the module is off air) but the bootloader never answers a
+    /// HELLO probe, so construction fails. The keyboard must still be handed
+    /// back with OP_EXIT rather than left off air until the bridge's own ten
+    /// second watchdog fires.
+    #[test]
+    fn a_failed_probe_still_exits_passthrough() {
+        let link = ScriptedLink::new();
+        let mut state = ST_IDLE;
+        link.on_write(move |report| {
+            if report[0] != TAG_CONTROL {
+                return vec![]; // never answer a HELLO probe
+            }
+            match report[2] {
+                OP_STATUS => vec![status_report(state, 0, 0)],
+                OP_ENTER => {
+                    state = ST_SETTLING;
+                    vec![control(OP_ENTER, &[OBB_OK])]
+                }
+                OP_EXIT => vec![control(OP_EXIT, &[OBB_OK])],
+                _ => vec![],
+            }
+        });
+
+        assert!(open(&link).is_err(), "a probe that never lands must fail");
+        assert!(
+            link.control_ops().contains(&OP_EXIT),
+            "a failed open must still send OP_EXIT to release the keyboard"
+        );
+    }
+
+    /// The tunnel disables the module's idle auto-boot, so leaving it in the
+    /// bootloader would strand the keyboard — `flash --no-boot` keys off this to
+    /// park it with BOOT --stay instead.
+    #[test]
+    fn the_tunnel_does_not_hold_the_module_in_the_bootloader() {
+        let link = happy_link(ST_IDLE);
+        let t = open(&link).expect("handshake should succeed");
+        assert!(!t.holds_in_bootloader());
+    }
+
+    /// A device-reported elapsed of any size must not underflow the monotonic
+    /// clock (which panics on some platforms). Reaching the assertions at all
+    /// proves the subtraction did not panic.
+    #[test]
+    fn a_bogus_elapsed_does_not_underflow_the_clock() {
+        let anchor = anchor_from_elapsed(u32::MAX); // ~49 days; must not panic
+        assert!(
+            anchor <= Instant::now(),
+            "anchor must never be in the future"
+        );
+        // A sane value still walks the anchor back by that much.
+        assert!(anchor_from_elapsed(1000).elapsed() >= Duration::from_millis(1000));
     }
 
     #[test]

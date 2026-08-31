@@ -459,8 +459,18 @@ fn execute_flash(
     if p.boot {
         boot_device(client, BootMode::App)?;
         println!("boot: device is starting the application");
-    } else {
+    } else if client.holds_in_bootloader() {
         println!("boot: skipped (--no-boot); device stays in the bootloader");
+    } else {
+        // The tunnel holds the session by disabling the module's idle auto-boot,
+        // so leaving it un-booted would strand the keyboard off air. Reset it
+        // into the bootloader instead (BOOT --stay): that re-arms its own idle
+        // timer, so it comes back on its own, and the app is never launched here.
+        boot_device(client, BootMode::Stay)?;
+        println!(
+            "boot: --no-boot over the QMK tunnel resets the module into the \
+             bootloader; it re-arms auto-boot and returns on its own"
+        );
     }
     Ok(())
 }
