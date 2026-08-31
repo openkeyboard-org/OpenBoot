@@ -151,25 +151,11 @@ uint32_t ob_boot_select(uint32_t *highest_generation)
     return best;
 }
 
-int ob_idle_elapsed(uint32_t start_ms, uint32_t now_ms, uint32_t timeout_ms)
+int ob_idle_elapsed(uint32_t start, uint32_t now, uint32_t timeout)
 {
-    if (timeout_ms == 0u)
+    if (timeout == 0u)
         return 0;                       /* 0 disables idle auto-boot */
-    return (uint32_t)(now_ms - start_ms) >= timeout_ms;
-}
-
-void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
-                      uint32_t delta_ticks, uint32_t ticks_per_ms)
-{
-    /* Divide first and carry the remainder separately: adding delta_ticks
-     * into *rem before dividing would overflow uint32_t on a large delta.
-     * Both remainders are < ticks_per_ms, so their sum cannot. */
-    *ms  += delta_ticks / ticks_per_ms;
-    *rem += delta_ticks % ticks_per_ms;
-    if (*rem >= ticks_per_ms) {
-        *rem -= ticks_per_ms;
-        (*ms)++;
-    }
+    return (uint32_t)(now - start) >= timeout;
 }
 
 int ob_boot_app_valid(uint32_t slot)

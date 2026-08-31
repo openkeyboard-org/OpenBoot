@@ -48,21 +48,15 @@ int ob_record_load(uint32_t slot, ob_boot_record_t *rec);
  * other slot's record is still the newest valid one. */
 uint32_t ob_record_store(uint32_t slot, ob_boot_record_t *rec);
 
-/* Nonzero once timeout_ms has elapsed between two ob_uptime_ms() readings.
- * Lives here rather than in main.c so the host suite can reach it: main.c
- * needs a transport and is only syntax-checked.
+/* Nonzero once `timeout` ticks have elapsed between two ob_now_ticks()
+ * readings. Lives here rather than in main.c so the host suite can reach it:
+ * main.c needs a transport and is only syntax-checked.
  *
- * Wrap-safe by unsigned subtraction, so it stays correct across the 2^32 ms
- * rollover. timeout_ms == 0 means "disabled" and never elapses — that is the
- * documented meaning of OB_IDLE_TIMEOUT_MS = 0, and it must not degenerate
- * into "expire immediately". */
-int ob_idle_elapsed(uint32_t start_ms, uint32_t now_ms, uint32_t timeout_ms);
-
-/* Fold delta_ticks of a free-running counter into a running millisecond
- * total, carrying the sub-millisecond remainder so no ticks are lost across
- * calls. Split out of the ports so this arithmetic exists once and the host
- * suite can test it; a port keeps only the register read and the state. */
-void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
-                      uint32_t delta_ticks, uint32_t ticks_per_ms);
+ * Wrap-safe by unsigned subtraction, so it stays correct across the single
+ * 2^32-tick rollover a valid deadline may straddle. timeout == 0 means
+ * "disabled" and never elapses — that is the documented meaning of
+ * OB_IDLE_TIMEOUT_MS = 0, and it must not degenerate into "expire
+ * immediately". */
+int ob_idle_elapsed(uint32_t start, uint32_t now, uint32_t timeout);
 
 #endif /* OB_BOOT_DECISION_H */

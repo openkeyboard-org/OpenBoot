@@ -157,16 +157,18 @@ void    ob_read_uid(uint8_t uid[8]);
 
 void ob_delay_us(uint32_t us);
 
-/* Free-running milliseconds since ob_port_init(). Monotonic, wraps at 2^32
- * (~49 days). Backed by SysTick, which the port starts once the clock is
- * settled — this is the only real time source in the bootloader.
+/* Raw free-running SysTick tick count (low 32 bits), counting at OB_CPU_HZ
+ * since ob_port_init(). Monotonic, wraps at 2^32 ticks — ~43 s at the fastest
+ * supported clock (100 MHz), ~11 min at the 6.4 MHz boot clock. This is the
+ * only real time source in the bootloader.
  *
- * CONTRACT: the caller must poll this more often than the underlying tick
- * counter wraps, which is ~43 s at the fastest supported clock. The main
- * loop calls it every iteration (tens of microseconds), so the accumulator
- * cannot miss a wrap. Anything that blocks for tens of seconds without
- * calling it would lose time. */
-uint32_t ob_uptime_ms(void);
+ * CONTRACT: a deadline built on this must be shorter than one 2^32-tick wrap
+ * and must be checked before that much time elapses. The idle auto-boot is the
+ * only user; it anchors a start tick, compares tick deltas (ob_idle_elapsed),
+ * and its deadline is a few seconds — far inside one wrap — so a single
+ * unsigned subtraction is exact. There is no millisecond accumulator: nothing
+ * carries state across wraps, and nothing needs to. */
+uint32_t ob_now_ticks(void);
 
 /* Launch the application at `base` — the base of the slot the boot decision
  * chose, not a fixed address, because either slot may be active.

@@ -219,19 +219,13 @@ void ob_delay_us(uint32_t us)
     (void)us;
 }
 
-/* Test-controlled clock. main.c is the only caller in the firmware and is
- * not linked here, so this exists to satisfy the port contract and to let a
- * test drive ob_idle_elapsed() against a chosen "now". */
-static uint32_t host_now_ms;   /* zeroed by both reset paths */
-
-uint32_t ob_uptime_ms(void)
+/* Port-contract stub. main.c is the only firmware caller of the tick source
+ * and is not linked here, and the host suite drives ob_idle_elapsed() with
+ * explicit start/now/timeout values, so nothing calls this — it exists so the
+ * port surface stays complete. */
+uint32_t ob_now_ticks(void)
 {
-    return host_now_ms;
-}
-
-void host_set_uptime_ms(uint32_t v)
-{
-    host_now_ms = v;
+    return 0;
 }
 
 void ob_jump_app(uint32_t base)
@@ -251,7 +245,6 @@ void ob_reset(void)
 
 void host_reset(void)
 {
-    host_now_ms = 0;
     fill_erased(sim_flash, 0, sizeof sim_flash);
     memset(blk_erased, 0, sizeof blk_erased);
     memset(blk_dirty, 0, sizeof blk_dirty);
@@ -268,7 +261,6 @@ void host_reset(void)
 
 void host_power_cycle(void)
 {
-    host_now_ms = 0;
     memset(blk_erased, 0, sizeof blk_erased);   /* erases don't survive reset */
     memset(blk_dirty, 0, sizeof blk_dirty);     /* XIP coherent again */
     fail_after = -1;
