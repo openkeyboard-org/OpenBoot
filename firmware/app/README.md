@@ -128,7 +128,7 @@ A blank part needs the bootloader and the application written together. Build
 a whole-chip image with the bootloader, a pad, and the application:
 
 ```sh
-make -C firmware CHIP=ch592 TRANSPORT=usb factory APP=/path/to/app.bin
+make -C firmware factory BOARD=opendongle-ch592 APP=/path/to/app.bin
 ```
 
 The result is `<image>-factory.bin` in the build directory, written at flash
@@ -142,10 +142,15 @@ address, so nothing has to be positioned by hand.
 > pad region. `firmware/compose_factory.py` owns this rule; use it rather than
 > concatenating by hand.
 
-An application written this way has no boot record, so the device comes up in
-the bootloader. Attest it once over OBP and boot:
+By default this factory image includes slot A's boot record, so the part boots
+the application on its first power-on — nothing to do on the line after the
+write. `APP` must be the slot A build (the record describes slot A).
+
+For the older post-flash flow, pass `FACTORY_BLESS=0`; the image then carries no
+record, the part comes up in the bootloader, and you attest it once over OBP:
 
 ```sh
+make -C firmware factory BOARD=opendongle-ch592 APP=/path/to/app.bin FACTORY_BLESS=0
 openboot bless app.bin
 openboot boot
 ```

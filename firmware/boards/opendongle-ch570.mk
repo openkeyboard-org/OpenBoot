@@ -1,8 +1,10 @@
 # OpenDongle product dongle, CH570D, USB transport.
 #
-# Recovery: mask-ROM ISP via the PA1/D+ pull-up cable; see generic-ch57x.mk
+# Recovery: mask-ROM ISP via the PA1/D+ pull-up cable; see firmware/README.md
 # (a USB image clears RB_PIN_DEBUG_EN, so SWD is gone while the bootloader or
 # app is running).
+override CHIP := ch570
+override TRANSPORT := usb
 
 # Idle auto-boot, in real milliseconds. Kept enabled so a dongle never sits
 # dead in the bootloader. Previously a poll count that measured ~273 s here

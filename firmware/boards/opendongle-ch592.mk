@@ -1,6 +1,8 @@
 # OpenDongle product dongle, CH592F, USB transport.
 #
-# Recovery: mask-ROM ISP; see generic-ch59x.mk.
+# Recovery: mask-ROM ISP; see firmware/README.md.
+override CHIP := ch592
+override TRANSPORT := usb
 
 # Idle auto-boot: with a valid boot record and no HELLO received, boot the app
 # after this many milliseconds. A dongle must never sit dead in the

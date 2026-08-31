@@ -26,7 +26,7 @@ import hid
 ROOT = ab.ROOT
 CFG = dict(
     serial="CEBD8F0653EF",   # adjust per fixture
-    boot=f"{ROOT}/firmware/build/ch592-usb/openboot-ch592-usb.bin",
+    boot=f"{ROOT}/firmware/build/generic-ch592-usb/openboot-generic-ch592-usb.bin",
     bootreq=0x200067F0,
 )
 CFG["port"] = None   # no UART on this fixture
