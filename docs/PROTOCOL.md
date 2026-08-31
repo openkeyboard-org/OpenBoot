@@ -693,10 +693,9 @@ applications integrating with OpenBoot must reserve the same 16 bytes (see
 
 At reset the bootloader decides, in this exact order:
 
-1. Board boot strap asserted → stay in OpenBoot.
-2. RAM boot-request magic present → stay in OpenBoot.
-3. No slot is bootable → stay in OpenBoot.
-4. Otherwise → jump to the base of the bootable slot with the highest
+1. RAM boot-request magic present → stay in OpenBoot.
+2. No slot is bootable → stay in OpenBoot.
+3. Otherwise → jump to the base of the bootable slot with the highest
    `generation`.
 
 A slot is bootable when its record validates (section 9.1), its first word is
@@ -711,9 +710,7 @@ seen so far, so two valid slots claiming the SAME generation would resolve to
 the lower-numbered one — by position, not by recency. COMMIT is responsible
 for never creating that tie (section 6.5).
 
-The request word is always cleared after it is read, including when the strap
-wins, so it is one-shot. No shipped board defines the optional OpenBoot strap;
-products may set `OB_BOOT_PIN_MASK`. It is sampled only at reset.
+The request word is always cleared after it is read, so it is one-shot.
 
 With the build-time `OB_BOOT_IMAGE_CRC=1` setting, the device also checks the
 full image against the record before jumping. This is off by default because
@@ -732,10 +729,7 @@ anything that fits a slot.
 boot record anchors a deadline `OB_IDLE_TIMEOUT_MS` milliseconds ahead
 (default `10000`). If it passes while still in IDLE — no successful HELLO this
 power cycle — the device boots the app, so one that entered the bootloader by
-strap glitch or stray boot request recovers by itself.
-
-A held strap does not inhibit idle auto-boot because it is not sampled again;
-it provides a connection window, not permanent residency.
+a stray boot request recovers by itself.
 
 The first successful HELLO disables auto-boot until the next reset;
 **no traffic of any kind resets the deadline** — valid, rejected, malformed

@@ -79,8 +79,8 @@ SWD. See the recovery procedure in the
 [firmware README](../firmware/README.md#ch570ch572-usb-recovery) before
 flashing those images.
 
-No shipped board defines an OpenBoot stay-in-bootloader strap. Products may
-set `OB_BOOT_PIN_MASK`, but mask-ROM ISP remains the recovery mechanism.
+OpenBoot has no stay-in-bootloader strap; mask-ROM ISP is the recovery
+mechanism for a device that cannot request an update.
 
 ## Flash and update safety
 
@@ -140,8 +140,8 @@ The generated `openboot_config.h` is force-included in every source file.
 
 Every image must fit in 8192 bytes. The linker region and post-objcopy size
 check enforce the limit; `make check` from the repository root displays the
-current size of all eight images, applies the board-policy check, and runs both
-test suites. Exact sizes belong in that generated report rather than in
+current size of all eight images and runs both test suites. Exact sizes belong
+in that generated report rather than in
 documentation, where they quickly become stale.
 
 ## Verification

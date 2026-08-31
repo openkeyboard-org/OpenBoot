@@ -21,8 +21,8 @@ uint32_t ob_slot_capacity(uint32_t slot);
 
 /* Returns only when staying in the bootloader; otherwise calls
  * ob_jump_app(). The RAM boot-request magic is read and cleared first, so it
- * is always consumed. Decision priority is then: strap pin (debounced), boot
- * request, then the newest bootable slot. */
+ * is always consumed. Decision priority is then: an armed boot request keeps
+ * the bootloader, otherwise the newest bootable slot is launched. */
 void ob_boot_decide(void);
 
 /* The slot the device should boot: the highest `generation` among slots whose
@@ -31,7 +31,7 @@ void ob_boot_decide(void);
  * one whose image is not bootable; COMMIT must outrank all such records. */
 uint32_t ob_boot_select(uint32_t *highest_generation);
 
-/* Record + image checks for ONE slot (no strap/bootreq, no side effects).
+/* Record + image checks for ONE slot (no boot-request, no side effects).
  * Sole caller: boot_record_trusted's OB_REC_INVALID branch (explicit BOOT
  * after this session invalidated the write slot), which must ask only the
  * untouched slot and so cannot go through ob_boot_select. */

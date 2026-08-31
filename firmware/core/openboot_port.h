@@ -136,11 +136,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);
  * flash on both families, so it is read through XIP and written with the
  * flash hooks above like any other app byte. See docs/AB-UPDATE.md. */
 
-/* Boot strap pin, debounced by the caller. Returns nonzero when the
- * stay-in-bootloader strap is asserted. Compiled to `return 0` when the
- * board disables it (OB_BOOT_PIN_MASK undefined). */
-int ob_bootpin_asserted(void);
-
 /* Chip identity for HELLO. */
 uint8_t ob_chip_rev(void);          /* ROM config chip-id byte */
 

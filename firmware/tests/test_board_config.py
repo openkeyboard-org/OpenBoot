@@ -203,16 +203,6 @@ def test_cpu_hz_override_is_refused_on_usb_builds():
     assert "only settable on UART builds" in result.stderr
 
 
-@pytest.mark.parametrize("chip,board", [
-    ("ch570", "opendongle-ch570"),
-    ("ch592", "opendongle-ch592"),
-])
-def test_product_boards_define_no_strap(chip, board):
-    """Strap policy: product boards must not define OB_BOOT_PIN_MASK
-    (board-policy's nm-based gate only checks the default boards)."""
-    assert "OB_BOOT_PIN_MASK" not in gen_config(chip, board)
-
-
 def test_opencontroller_board_lands_its_knobs():
     """The keyboard module board is UART-transport with the PB12/PB13 remap;
     a regression in the board file or the Makefile include ordering would
@@ -243,7 +233,6 @@ def test_mk65mx_wireless_board_lands_its_knobs():
     assert "#define OB_BOOT_IMAGE_CRC 1\n" in cfg
     assert "#define OB_IDLE_TIMEOUT_MS 10000\n" in cfg
     assert "#define OB_FLASH_APP_END 0x00070000\n" in cfg
-    assert "OB_BOOT_PIN_MASK" not in cfg
 
 
 @pytest.mark.parametrize("bad", ["2", "yes", "0 1"])

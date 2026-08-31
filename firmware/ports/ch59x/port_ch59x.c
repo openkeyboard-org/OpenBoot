@@ -39,31 +39,6 @@ void ob_family_clock_init(void)
 #endif
 }
 
-/* ---- boot strap pin (active low) -------------------------------------- */
-/* used+noinline: check_board_policy.py proves strap policy by this SYMBOL's
- * presence and size in the linked ELF; LTO must not inline it away. */
-__attribute__((used, noinline))
-int ob_bootpin_asserted(void)
-{
-#ifndef OB_BOOT_PIN_MASK
-    return 0;
-#else
-    /* input + pull-up; pull-down/drive bit must be off for the pull-up to
-     * win; caller debounces (repeat calls with delay) */
-#if OB_BOOT_PIN_PORT_B
-    R32_PB_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PB_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PB_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PB_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
-#else
-    R32_PA_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PA_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
-#endif
-#endif
-}
-
 /* ---- app-region clamp -------------------------------------------------- */
 /* This is the case that matters: CH591 is a 192 KiB part and CH592 a 448 KiB
  * one, and they share this port. Flashing the ch592 image onto a CH591 would
