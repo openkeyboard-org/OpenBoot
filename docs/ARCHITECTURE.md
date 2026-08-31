@@ -164,3 +164,6 @@ checklist in the [firmware README](../firmware/README.md#hardware-bring-up).
 - dual-transport images
 - bootloader self-update
 - authentication, signing, encryption, or multi-image management
+- awareness of host-side transport intermediaries. A host may reach the UART
+  through something that forwards bytes transparently — the `openboot` tool's
+  QMK tunnel does exactly that — but the firmware neither knows nor needs to.

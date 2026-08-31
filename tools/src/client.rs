@@ -124,6 +124,11 @@ impl<'a> BootClient<'a> {
         BootClient { transport, seq: 0 }
     }
 
+    /// See `Transport::holds_in_bootloader`.
+    pub fn holds_in_bootloader(&self) -> bool {
+        self.transport.holds_in_bootloader()
+    }
+
     fn next_seq(&mut self) -> u8 {
         let seq = self.seq;
         self.seq = self.seq.wrapping_add(1);

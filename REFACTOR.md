@@ -133,12 +133,22 @@ remain proposals.
     removes a fragile build-time parser.
 
 11. **Collapse the Rust `Transport` and `FrameLink` implementation boilerplate.**
+    *(Done — historical.)*
 
-    The host has a public exchange trait and a second byte-level trait, followed
-    by identical `xfer()` implementations in HID, UART and test transports
-    (`tools/src/transport/mod.rs:23`). A default method or blanket
-    implementation over `FrameLink` would preserve the layering while removing
-    those repeated adapters.
+    The host used to have a public exchange trait plus a second byte-level
+    trait, followed by identical `xfer()` implementations in the HID, UART and
+    test transports. Both are gone: `Transport` now carries a default `xfer()`
+    and `FrameLink` no longer exists.
+
+11a. **Extract the RX framing behind a byte-source trait.** *(Done.)*
+
+    The SOF-hunt parser lived inside `UartTransport::recv_frame`, and adding
+    the QMK tunnel would have duplicated 55 lines whose three subtle behaviours
+    — the `B0 B0 07` re-arm, the over-long-length re-hunt, and the mid-frame-gap
+    resync — had no direct test coverage at all. It now lives in
+    `tools/src/transport/framing.rs` behind `ByteSource`, shared by both
+    byte-stream transports and covered by its own tests. This is the byte-level
+    trait item 11 contemplated, scoped to where the duplication actually was.
 
 12. **Specialize bundles for the actual two-slot model.**
 

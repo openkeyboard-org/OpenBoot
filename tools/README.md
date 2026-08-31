@@ -41,11 +41,16 @@ openboot flash app.obb --force                # picks the slot's build itself
 
 Global selectors:
 
-- `--transport usb|uart` (USB by default)
+- `--transport usb|uart|qmk` (USB by default; `qmk` is never implied and must
+  be asked for)
 - `--port PATH` (implies UART; there is no port auto-scan)
-- `--serial SN` (implies USB; serial is the 16-hex-digit ROM UID)
+- `--serial SN` (implies USB; serial is the 16-hex-digit ROM UID. With `qmk` it
+  picks *which keyboard*, so the two compose rather than conflict)
 - `--vid` and `--pid` (defaults `0x1209:0x0001`; a product may ship its
-  bootloader on its own identity, in which case pass both)
+  bootloader on its own identity, in which case pass both. **Required, with no
+  default, for `--transport qmk`** — see below)
+- `--usage-page` and `--usage` (`--transport qmk` only; default
+  `0xFF61`/`0x62`)
 
 Flat binaries default to base `0x2000`; use `--base` to override it. Intel HEX
 files use addresses from their records. Images are padded to a 4-byte boundary
@@ -136,6 +141,55 @@ device's perspective; cross TX and RX to the adapter and connect ground.
 | CH591 / CH592 | PA9 | PA8 |
 
 CH59x boards may remap UART1 to PB13 TX / PB12 RX with `OB_UART1_REMAP`.
+
+## QMK tunnel
+
+When the module is soldered into a keyboard its UART pins are usually not
+reachable. If the keyboard's QMK firmware carries the OpenBoot bridge, the same
+UART transport can be driven through a vendor HID interface on the keyboard
+instead:
+
+```sh
+openboot --transport qmk --vid 0x4D4B --pid 0x0002 flash fw.obb --force
+```
+
+The keyboard is a **dumb byte bridge**. It parses none of this protocol — the
+client stays on the PC and the device still reports `transport = UART` — so no
+bootloader firmware knows the tunnel exists, and a protocol revision needs no
+keyboard reflash.
+
+`--vid`/`--pid` are mandatory here and have no default: `0x1209:0x0001` is the
+*bootloader's* identity, while the tunnel carries the *keyboard's*.
+
+**The keyboard goes off air for the duration.** Opening the tunnel reboots the
+module into the bootloader, so 2.4 GHz and Bluetooth stop until it comes back.
+USB typing keeps working throughout — the bridge pins the keyboard's output to
+USB while it works, and restores the previous setting afterwards.
+
+**Every invocation costs that downtime, including read-only ones.** `probe`,
+`verify` and a dry-run `flash` all begin with a HELLO, and a successful HELLO
+is exactly what disables the bootloader's ten second idle auto-boot. So the
+tool boots the application back itself when it closes the tunnel, on every exit
+path including errors — but expect a few seconds of downtime even from `probe`.
+
+`--no-boot` and `boot --stay` ask to leave the module in the bootloader. Over
+this transport that does not persist: they reset the module into the
+bootloader, but once the tool closes the tunnel no session holds it, so the
+bootloader auto-boots the application after its ~10 s idle timeout — the
+keyboard is off air only until then. Both print a warning.
+
+Rather than sleeping out a fixed post-reset settle, the tool asks the keyboard
+how long it has been since the module acknowledged — the keyboard holds the
+only usable anchor, since the host cannot observe the reset — and probes HELLO
+across the window, typically connecting around 2.4 s in.
+
+On Linux this needs a hidraw rule for the **keyboard's** VID:PID; the rule
+under "USB permissions" only covers `1209:0001`.
+
+```udev
+# /etc/udev/rules.d/70-openboot-qmk.rules
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="4d4b", ATTRS{idProduct}=="0002", MODE="0660", TAG+="uaccess"
+```
 
 ## Bless an SWD-flashed image
 
