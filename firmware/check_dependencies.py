@@ -58,17 +58,22 @@ PINNED_COMPILER_SHA256 = (
 # Anything else warns and proceeds (see the module docstring); this is a
 # statement about what has been qualified, not a permission list.
 #
-# GCC15 is deliberately absent. It builds the whole matrix cleanly and is fine
-# on ch59x, but on a ch57x part (CH572, bench 2026-08-04) it produced an idle
-# auto-boot that fired early and erratically — 1.51 s, 1.71 s and 4.75 s
-# against a configured 10 s, with a marker app confirming the application
-# really had been launched — where GCC12 on the same part and configuration
-# gave 9.96 s every time. It also failed to come back from a software reset
-# 4 times in 32 attempts, against 0 in 32 for GCC12. The generated code for
-# ob_uptime_ms/ob_ms_accumulate/ob_idle_elapsed is instruction-identical
-# between the two compilers, so the cause is elsewhere and is not yet found.
-# Until it is, GCC15 warns rather than being advertised as validated.
-SUPPORTED_GCC_MAJORS = (12,)
+# GCC15 was gated for a while. On 2026-08-04 a CH572 built with GCC15 produced
+# an idle auto-boot that fired early and erratically — 1.51 s, 1.71 s and
+# 4.75 s against a configured 10 s (marker-app-confirmed), where GCC12 on the
+# same part gave 9.96 s every time, and it failed to come back from a software
+# reset 4 times in 32 (against 0/32 for GCC12). CH570 and CH592 were clean under
+# both compilers even then, and the timing functions disassembled identically,
+# so the cause was never a clean codegen story.
+#
+# Re-validated on silicon 2026-08-31 on the same CH572, against current main.
+# The symptom is gone: GCC15 gives a healthy, stable 10 s idle timeout (flip
+# 9.5→10.0 s, no early fire across repeated low-T samples) and 32/32 clean
+# software-reset returns — identical to GCC12 — on both the CH572 and the CH570
+# (ch57x-UART, 6.4 MHz). Something in the 2026-08-04 → now refactors (v0.11
+# simplification; moving ob_delay_us into .highcode; tr_rx_busy) resolved it;
+# the exact commit was not bisected. Evidence: OpenBoot-evidence/2026-08-31/.
+SUPPORTED_GCC_MAJORS = (12, 15)
 
 # MounRiver renamed the tools at GCC15: riscv-wch-elf-* became
 # riscv32-wch-elf-*. Probe for either so neither install needs symlinks.
