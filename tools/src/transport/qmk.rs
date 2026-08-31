@@ -280,16 +280,20 @@ impl QmkTransport {
         if n < 2 {
             return Ok(Some(Rx::Ignored));
         }
+        // Reject a length that overruns a report or claims more than was read,
+        // rather than clamping it. Clamping would feed the report's padding into
+        // the framing parser and desync the stream; a malformed report yields no
+        // bytes at all.
+        let len = usize::from(buf[1]);
+        if len > STREAM_MAX || len > n - 2 {
+            return Ok(Some(Rx::Ignored));
+        }
         match buf[0] {
             TAG_STREAM => {
-                let count = usize::from(buf[1]).min(STREAM_MAX).min(n - 2);
-                self.rx.extend(&buf[2..2 + count]);
-                Ok(Some(Rx::Stream(count)))
+                self.rx.extend(&buf[2..2 + len]);
+                Ok(Some(Rx::Stream(len)))
             }
-            TAG_CONTROL => {
-                let count = usize::from(buf[1]).min(STREAM_MAX).min(n - 2);
-                Ok(Some(Rx::Control(buf[2..2 + count].to_vec())))
-            }
+            TAG_CONTROL => Ok(Some(Rx::Control(buf[2..2 + len].to_vec()))),
             _ => Ok(Some(Rx::Ignored)),
         }
     }
@@ -795,10 +799,11 @@ mod tests {
             entered: false,
             booted: false,
         };
-        // The over-long count is clamped to what the report actually holds, so
-        // it yields zero bytes rather than reading past the buffer.
+        // An over-long length, a truncated report, an unknown tag: each is
+        // rejected outright, so none contributes a byte and the parser sees
+        // silence rather than injected padding.
         let got = t.pump_byte(Duration::from_millis(5)).expect("no IO error");
-        assert_eq!(got, Some(0));
+        assert_eq!(got, None);
     }
 
     /// The property the tag byte exists for: a control report arriving in the

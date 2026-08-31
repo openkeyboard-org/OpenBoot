@@ -436,19 +436,19 @@ fn open_transport(cli: &Cli) -> Result<Box<dyn Transport>> {
     }
 }
 
-/// Warn where both facts are visible: parking the module in the bootloader is
-/// legitimate, but over the tunnel it means the keyboard stays off air, and the
-/// ten second auto-boot that would normally rescue it has already been disabled
-/// by the HELLO the transport had to send to get here.
+/// Warn where the fact is easy to miss: over the tunnel, "stay in the
+/// bootloader" does not persist. These reset the module into the bootloader,
+/// but once the tool closes the tunnel there is no session to hold it, so the
+/// bootloader auto-boots the application after its idle timeout.
 fn warn_if_parking_over_the_tunnel(cli: &Cli) {
     if cli.transport != Some(TransportArg::Qmk) {
         return;
     }
     eprintln!(
-        "WARNING: this leaves the module in the bootloader. A successful HELLO \
-         has already disabled the ten second idle auto-boot, so the keyboard \
-         stays off air until you run `openboot --transport qmk --vid ... \
-         --pid ... boot` or power-cycle it."
+        "WARNING: over the QMK tunnel this does not keep the module parked. It \
+         resets into the bootloader, but with the tunnel closed no session \
+         holds it, so the bootloader auto-boots the application after its ~10 s \
+         idle timeout. The keyboard is off air until then."
     );
 }
 

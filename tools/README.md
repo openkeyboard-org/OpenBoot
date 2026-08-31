@@ -172,10 +172,11 @@ is exactly what disables the bootloader's ten second idle auto-boot. So the
 tool boots the application back itself when it closes the tunnel, on every exit
 path including errors — but expect a few seconds of downtime even from `probe`.
 
-`--no-boot` and `boot --stay` deliberately park the module in the bootloader.
-Over this transport that means the keyboard stays off air until you run
-`openboot --transport qmk … boot` or power-cycle it, because the idle auto-boot
-that would normally rescue it has already been disabled. Both print a warning.
+`--no-boot` and `boot --stay` ask to leave the module in the bootloader. Over
+this transport that does not persist: they reset the module into the
+bootloader, but once the tool closes the tunnel no session holds it, so the
+bootloader auto-boots the application after its ~10 s idle timeout — the
+keyboard is off air only until then. Both print a warning.
 
 Rather than sleeping out a fixed post-reset settle, the tool asks the keyboard
 how long it has been since the module acknowledged — the keyboard holds the
