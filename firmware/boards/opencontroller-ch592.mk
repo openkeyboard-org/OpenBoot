@@ -5,7 +5,7 @@
 # protocol (probe RX <- PB13/TXD1_, probe TX -> PB12/RXD1_). Build with
 # TRANSPORT=uart.
 #
-# No strap: see generic-ch59x.mk (ROM ISP is the recovery path).
+# Recovery: mask-ROM ISP; see generic-ch59x.mk.
 
 # Idle auto-boot: a keyboard module must never sit dead in the bootloader.
 # With a blessed record, a spurious enter-bootloader (stray A6 81 from the

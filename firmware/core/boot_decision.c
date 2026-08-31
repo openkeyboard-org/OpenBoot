@@ -171,28 +171,17 @@ int ob_boot_app_valid(uint32_t slot)
 void ob_boot_decide(void)
 {
     /* App-requested entry: magic word at reserved top-of-RAM. Read and clear
-     * it before evaluating any boot decision because the request is one-shot.
-     * A strap or invalid application may still keep us in the bootloader, but
-     * must not leave a stale request that swallows the next BOOT. */
+     * it before evaluating any boot decision because the request is one-shot —
+     * an invalid application still leaves the bootloader in control, but must
+     * not leave a stale request that swallows the next BOOT. */
     volatile uint32_t *req = (volatile uint32_t *)(uintptr_t)(OB_BOOTREQ_ADDR);
     int requested = (*req == OB_BOOTREQ_MAGIC);
     uint32_t slot;
 
-    if (requested)
+    if (requested) {
         *req = 0;
-
-    /* Strap pin: 10 ms + 5 ms double-read debounce. */
-    if (ob_bootpin_asserted()) {
-        ob_delay_us(10000);
-        if (ob_bootpin_asserted()) {
-            ob_delay_us(5000);
-            if (ob_bootpin_asserted())
-                return;
-        }
-    }
-
-    if (requested)
         return;
+    }
 
     slot = ob_boot_select(0);
     if (slot == OB_SLOT_NONE)

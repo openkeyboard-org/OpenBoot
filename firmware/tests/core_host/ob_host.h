@@ -17,7 +17,6 @@ uint32_t host_violations(void);            /* port-contract breaches seen by the
 uint32_t host_op_total(void);              /* mutating flash ops attempted since reset */
 void     host_set_bootreq(uint32_t v);
 uint32_t host_get_bootreq(void);
-void     host_set_bootpin(int32_t v);
 void     host_set_silicon_app_end(uint32_t v);
 void     host_set_f26(int32_t v);          /* default: on for ch57x builds */
 int32_t  host_boot_decide_result(void);    /* 0 = jump app, 1 = stay */

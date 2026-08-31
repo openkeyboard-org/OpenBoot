@@ -80,8 +80,8 @@ SUPPORTED_GCC_MAJORS = (12, 15)
 TOOL_PREFIXES = ("riscv-wch-elf-", "riscv32-wch-elf-")
 
 # What the Makefile invokes, prefix-less. Checked here so a missing tool fails
-# at check-deps rather than mid-build (nm is only used by board-policy, which
-# runs after a full matrix build).
+# at check-deps rather than mid-build (nm is used by check_highcode after a
+# build).
 REQUIRED_TOOLS = ("gcc", "objcopy", "size", "nm")
 
 

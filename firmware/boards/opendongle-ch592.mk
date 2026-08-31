@@ -1,6 +1,6 @@
 # OpenDongle product dongle, CH592F, USB transport.
 #
-# No strap: see generic-ch59x.mk (ROM ISP is the recovery path).
+# Recovery: mask-ROM ISP; see generic-ch59x.mk.
 
 # Idle auto-boot: with a valid boot record and no HELLO received, boot the app
 # after this many milliseconds. A dongle must never sit dead in the

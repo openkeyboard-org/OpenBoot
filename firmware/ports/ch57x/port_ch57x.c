@@ -54,28 +54,6 @@ void ob_family_clock_init(void)
 #endif
 }
 
-/* ---- boot strap pin (active low) -------------------------------------- */
-#if defined(OB_BOOT_PIN_MASK) && OB_BOOT_PIN_PORT_B
-#error "ch57x has no GPIO port B"
-#endif
-
-/* used+noinline: check_board_policy.py proves strap policy by this SYMBOL's
- * presence and size in the linked ELF; LTO must not inline it away. */
-__attribute__((used, noinline))
-int ob_bootpin_asserted(void)
-{
-#ifndef OB_BOOT_PIN_MASK
-    return 0;
-#else
-    /* input + pull-up; pull-down/drive bit must be off for the pull-up to
-     * win; caller debounces (repeat calls with delay) */
-    R32_PA_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PA_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
-#endif
-}
-
 /* ---- app-region clamp -------------------------------------------------- */
 /* Both ch57x variants are 240 KiB parts, so the clamp is a no-op today; it
  * exists so the rule ("trust the silicon, not the build") is uniform across

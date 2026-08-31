@@ -3,7 +3,7 @@
 #
 # Same policy and timeout as generic-ch59x; only the UART pins differ.
 
-# No strap: see generic-ch59x.mk (ROM ISP is the recovery path).
+# Recovery: mask-ROM ISP; see generic-ch59x.mk.
 
 OB_IDLE_TIMEOUT_MS := 10000
 

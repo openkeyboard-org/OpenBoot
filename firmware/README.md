@@ -69,7 +69,7 @@ directory name.
 ```sh
 make CHIP=ch592 TRANSPORT=usb   # one image
 make all                        # all eight images
-make matrix-report              # build, size, and board-policy checks
+make matrix-report              # build all images and report their sizes
 make test                       # host-native core tests
 ```
 
@@ -111,8 +111,6 @@ line.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `OB_BOOT_PIN_MASK` | unset | Active-low OpenBoot entry strap; unset disables it |
-| `OB_BOOT_PIN_PORT_B` | `0` | `1` selects port B; invalid on CH57x |
 | `OB_IDLE_TIMEOUT_MS` | `10000` | Idle auto-boot deadline in milliseconds; `0` disables it; clock-dependent max (see below) |
 | `OB_BOOT_IMAGE_CRC` | `0` | `1` checks the complete image CRC on every boot |
 | `OB_UART1_REMAP` | `0` | `1` moves CH59x UART1 to PB12/PB13 instead of PA8/PA9 |
@@ -123,7 +121,7 @@ line.
 | `OB_APP_END` | silicon end | Shrink the app region so OBP cannot reach flash the board reserves |
 | `OB_USB_VID` / `OB_USB_PID` | `0x1209` / `0x0001` | USB identity; set both or neither |
 
-No shipped board defines an OpenBoot strap; mask-ROM ISP is the recovery path.
+Mask-ROM ISP is the recovery path; OpenBoot has no stay-in-bootloader strap.
 Shipped product boards: `opendongle-ch570` and `opendongle-ch592` (USB
 transport) and `opencontroller-ch592` (the keyboard wireless module — UART
 transport on the PB12/PB13 remap, no USB), plus
@@ -219,9 +217,6 @@ enables USB. Recover through mask-ROM ISP:
 
 PA1 is not 5 V tolerant. Pull it to the board's 3.3 V rail, or limit clamp
 current appropriately; do not connect it directly to USB VBUS.
-
-`OB_BOOT_PIN_MASK` is unrelated to the ROM-ISP pin. The shipped boards leave
-that OpenBoot-specific strap disabled.
 
 A WCH-LinkE can sometimes catch the core before USB disables debug:
 

@@ -157,16 +157,15 @@ SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
 
 # ---------------------------------------------------------------------------
-# Board configuration. A board .mk provides the boot-strap pin and the idle
-# auto-boot timeout; BOARD is overridable so real hardware can ship its own
-# file without touching this Makefile:  make BOARD=myboard CHIP=ch592 ...
+# Board configuration. A board .mk maps hardware choices onto -D knobs (idle
+# auto-boot timeout, UART pin mapping, USB identity, ...); BOARD is overridable
+# so real hardware can ship its own file without touching this Makefile:
+#   make BOARD=myboard CHIP=ch592 ...
 # ---------------------------------------------------------------------------
 BOARD ?= generic-$(PORT)
 include boards/$(BOARD).mk
 # Fallback if a board file omits the timeout; 0 disables idle auto-boot.
 OB_IDLE_TIMEOUT_MS ?= 10000
-# A board that defines only a strap mask selects port A by default.
-OB_BOOT_PIN_PORT_B ?= 0
 OB_UART1_REMAP ?= 0
 OB_UART1_ALT_PINS_HIZ ?= 0
 OB_BOOT_IMAGE_CRC ?= 0
@@ -178,8 +177,8 @@ OB_FLASH_PAGE_ERASE ?= 0
 # Boolean knobs must be exactly the single word 0 or 1. A bare membership
 # $(filter) is not enough: its pattern list is word-split, so a mangled
 # value like '0 1' would pass — the $(words) term closes that hole.
-BOOLEAN_KNOBS := OB_BOOT_PIN_PORT_B OB_UART1_REMAP \
-                 OB_UART1_ALT_PINS_HIZ OB_BOOT_IMAGE_CRC OB_FLASH_PAGE_ERASE
+BOOLEAN_KNOBS := OB_UART1_REMAP OB_UART1_ALT_PINS_HIZ \
+                 OB_BOOT_IMAGE_CRC OB_FLASH_PAGE_ERASE
 $(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
@@ -291,7 +290,7 @@ MRS_TOOLCHAIN ?=
 # Host-native tests and clean do not need the cross-toolchain. All public
 # firmware targets do, including the default goal and matrix convenience
 # targets, so fail at parse time with one actionable message.
-TOOLCHAIN_GOALS := image all matrix-report board-policy check-deps flash flash-isp \
+TOOLCHAIN_GOALS := image all matrix-report check-deps flash flash-isp \
                    factory \
                    $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
 ifeq ($(strip $(MAKECMDGOALS)),)
@@ -427,13 +426,12 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CPU_HZ        per transport (boot clock vs PLL).
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
-# The Boolean board knobs (OB_BOOT_PIN_PORT_B, OB_UART1_REMAP,
-# OB_UART1_ALT_PINS_HIZ, OB_BOOT_IMAGE_CRC, OB_FLASH_PAGE_ERASE) are normalized
-# to a literal 0 or 1 above, always emitted, and consumed with #if — never
-# #ifdef, where
+# The Boolean board knobs (OB_UART1_REMAP, OB_UART1_ALT_PINS_HIZ,
+# OB_BOOT_IMAGE_CRC, OB_FLASH_PAGE_ERASE) are normalized to a literal 0 or 1
+# above, always emitted, and consumed with #if — never #ifdef, where
 # defined-but-zero would read as enabled. Knobs that may be legitimately absent
-# (OB_HSE_CAP_LOAD, OB_BOOT_PIN_MASK, the USB identity) still emit no
-# line when unset, and their consumers #ifdef-test them.
+# (OB_HSE_CAP_LOAD, the USB identity) still emit no line when unset, and their
+# consumers #ifdef-test them.
 CONFIG_H := $(BUILD)/openboot_config.h
 
 CONFIG_LINES := \
@@ -446,7 +444,6 @@ CONFIG_LINES := \
   '\#define OB_STARTUP_CORECFGR $(STARTUP_CORECFGR_$(PORT))' \
   '\#define OB_STARTUP_WRITE_BC1 $(STARTUP_WRITE_BC1_$(PORT))' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
-  '\#define OB_BOOT_PIN_PORT_B $(OB_BOOT_PIN_PORT_B)' \
   '\#define OB_UART1_REMAP $(OB_UART1_REMAP)' \
   '\#define OB_UART1_ALT_PINS_HIZ $(OB_UART1_ALT_PINS_HIZ)' \
   '\#define OB_BOOT_IMAGE_CRC $(OB_BOOT_IMAGE_CRC)' \
@@ -467,11 +464,6 @@ ifeq ($(filter 0 1 2 3 4 5 6 7,$(strip $(OB_HSE_CAP_LOAD))),)
 $(error OB_HSE_CAP_LOAD must be one value from 0 to 7)
 endif
 CONFIG_LINES += '\#define OB_HSE_CAP_LOAD $(OB_HSE_CAP_LOAD)'
-endif
-# A board that wants no strap leaves OB_BOOT_PIN_MASK unset and the port
-# compiles ob_bootpin_asserted() to `return 0`.
-ifneq ($(strip $(OB_BOOT_PIN_MASK)),)
-CONFIG_LINES += '\#define OB_BOOT_PIN_MASK $(OB_BOOT_PIN_MASK)'
 endif
 # USB identity. Absent leaves the pid.codes test allocation compiled into
 # usb_transport.c. A product sets both so its bootloader enumerates under the
@@ -511,7 +503,7 @@ LDLIBS :=
 # ---------------------------------------------------------------------------
 .DEFAULT_GOAL := image
 MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
-.PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
+.PHONY: image all matrix-report clean check-deps test flash flash-isp \
         print-image-path factory $(MATRIX)
 
 image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
@@ -555,16 +547,7 @@ matrix_board = $(if $(filter command line,$(origin BOARD)),$(BOARD),generic-$(PO
 MATRIX_BINS := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),\
   $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))/openboot-$(c)-$(t).bin))
 
-# No family ships a stay-in-bootloader strap — the mask-ROM ISP entry pin is
-# the recovery mechanism (PA1, also USB D+, on ch57x; PB22 on ch59x). Getting
-# that wrong is silent on the bench: a strap on a pin the package does not
-# bond just reads its own pull-up and never asserts. So it is checked in the
-# built artifact rather than the board file, right where the whole matrix is
-# already in hand.
-board-policy: all
-	@$(HOST_PYTHON) check_board_policy.py --nm "$(NM)" --build build --board "$(BOARD)"
-
-matrix-report: all board-policy
+matrix-report: all
 	@echo; \
 	 printf '%-22s %s\n' "image" "bytes / limit"; \
 	 printf '%s\n' "-------------------------------------"; \

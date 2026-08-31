@@ -141,8 +141,6 @@ class OpenBootNative:
         L.host_set_bootreq.argtypes = [c_uint32]
         L.host_set_bootreq.restype = None
         L.host_get_bootreq.restype = c_uint32
-        L.host_set_bootpin.argtypes = [c_int32]
-        L.host_set_bootpin.restype = None
         L.host_set_silicon_app_end.argtypes = [c_uint32]
         L.host_set_silicon_app_end.restype = None
         L.host_set_f26.argtypes = [c_int32]
@@ -225,8 +223,6 @@ class OpenBootNative:
     def get_bootreq(self) -> int:
         return self._lib.host_get_bootreq()
 
-    def set_bootpin(self, v: int):
-        self._lib.host_set_bootpin(v)
 
     def set_silicon_app_end(self, v: int):
         """Pretend the die has a different app end than the build assumed

@@ -1091,30 +1091,6 @@ def test_boot_decision_truth_table(dev):
     assert dev.get_bootreq() == 0x12345678                # left alone
 
 
-def test_bootpin_overrides_all(dev):
-    _setup_app(dev, True, False)
-    dev.set_bootpin(1)
-    assert dev.boot_decide() == 1
-    dev.set_bootpin(0)
-    assert dev.boot_decide() == 0
-
-
-def test_bootpin_consumes_a_pending_bootreq(dev):
-    """A strap-held reset must still consume the app's one-shot request.
-
-    Otherwise the magic survives in RAM, and the next BOOT — which now
-    always answers OK and resets — finds it and stays in the bootloader
-    instead of launching, so a successful BOOT silently fails to boot.
-    """
-    _setup_app(dev, True, False)
-    dev.set_bootreq(BOOTREQ_MAGIC)
-    dev.set_bootpin(1)
-    assert dev.boot_decide() == 1                  # strap wins, as before
-    assert dev.get_bootreq() == 0                  # ...and the request is spent
-    dev.set_bootpin(0)
-    assert dev.boot_decide() == 0                  # next reset launches the app
-
-
 # --- retry/reset reconciliation regressions ------------------------------
 
 def test_write_retry_idempotent_stream(dev):
