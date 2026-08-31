@@ -38,7 +38,7 @@
  * 60 MHz, ~335 s at 6.4 MHz; the 10 s default and any realistic idle window sit
  * far inside it (see firmware/README.md). */
 #define OB_IDLE_TIMEOUT_TICKS \
-    ((uint32_t)((OB_IDLE_TIMEOUT_MS) * (OB_CPU_HZ / 1000u)))
+    ((uint32_t)((uint64_t)(OB_IDLE_TIMEOUT_MS) * (OB_CPU_HZ / 1000u)))
 _Static_assert(OB_CPU_HZ % 1000u == 0u, "OB_CPU_HZ must be a whole number of kHz");
 _Static_assert(OB_IDLE_TIMEOUT_MS == 0u ||
                (uint64_t)(OB_IDLE_TIMEOUT_MS) * (OB_CPU_HZ / 1000u) <= 0x80000000u,

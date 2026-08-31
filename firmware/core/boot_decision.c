@@ -151,11 +151,12 @@ uint32_t ob_boot_select(uint32_t *highest_generation)
     return best;
 }
 
-int ob_idle_elapsed(uint32_t start, uint32_t now, uint32_t timeout)
+int ob_idle_elapsed(uint32_t start_ticks, uint32_t now_ticks,
+                    uint32_t timeout_ticks)
 {
-    if (timeout == 0u)
+    if (timeout_ticks == 0u)
         return 0;                       /* 0 disables idle auto-boot */
-    return (uint32_t)(now - start) >= timeout;
+    return (uint32_t)(now_ticks - start_ticks) >= timeout_ticks;
 }
 
 int ob_boot_app_valid(uint32_t slot)

@@ -154,8 +154,10 @@ class OpenBootNative:
         L.ob_idle_elapsed.restype = c_int32
         self._lib = L
 
-    def idle_elapsed(self, start: int, now: int, timeout: int) -> bool:
-        return bool(self._lib.ob_idle_elapsed(start, now, timeout))
+    def idle_elapsed(self, start_ticks: int, now_ticks: int,
+                     timeout_ticks: int) -> bool:
+        return bool(self._lib.ob_idle_elapsed(start_ticks, now_ticks,
+                                              timeout_ticks))
 
     def reset(self):
         self._lib.host_reset()
