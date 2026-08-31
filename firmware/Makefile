@@ -73,10 +73,17 @@ ALL_BOARDS := $(filter-out generic,$(BOARDS))
 # pins nothing, so plain `make` (or a raw CHIP=/TRANSPORT= escape hatch, dev-only)
 # falls through to the defaults below. Included before every CHIP-derived value
 # because the board is what picks the chip. Validate BOARD against the discovered
-# set BEFORE interpolating it into the include, so a stray value (a path like
-# `../x`, a glob like `*`) cannot pull an arbitrary makefile into the build.
+# set BEFORE interpolating it into the include, so a stray value cannot pull an
+# arbitrary makefile into the build. Both `filter` and `include` treat BOARD as
+# space-separated words, so a bare membership test is not enough: `BOARD=generic
+# ../evil` would match on `generic` yet expand `include boards/generic ../evil.mk`
+# — reading `../evil.mk` too. Require exactly one word, then reject any word that
+# is not an exact board name (a literal `filter-out` pattern also stops `%`).
 BOARD ?= generic
-ifeq ($(filter $(BOARD),$(BOARDS)),)
+ifneq ($(words $(BOARD)),1)
+  $(error BOARD must be a single board name {$(BOARDS)}, got "$(BOARD)")
+endif
+ifneq ($(filter-out $(BOARDS),$(BOARD)),)
   $(error BOARD must name a boards/*.mk file {$(BOARDS)}, got "$(BOARD)")
 endif
 include boards/$(BOARD).mk

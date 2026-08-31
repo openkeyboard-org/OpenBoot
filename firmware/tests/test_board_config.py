@@ -89,6 +89,43 @@ def test_dropped_chips_are_rejected(chip):
     assert "CHIP must be one of {ch570 ch592}" in result.stderr
 
 
+def test_board_include_cannot_be_smuggled_a_path(tmp_path):
+    """Security: `include boards/$(BOARD).mk` must never read a file outside
+    boards/. A bare `$(filter $(BOARD),$(BOARDS))` membership test would accept
+    `BOARD=generic <path>` — the `generic` word matches — and then
+    `include boards/generic <path>.mk` would also read `<path>.mk`, evaluating
+    attacker-controlled Make. The single-word guard must reject it before the
+    include, so the planted makefile is never reached."""
+    evil = tmp_path / "evil.mk"
+    evil.write_text("$(error EVIL_MAKEFILE_INCLUDED)\n")
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         f"BOARD=generic {tmp_path / 'evil'}", "print-image-path"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "EVIL_MAKEFILE_INCLUDED" not in (result.stdout + result.stderr)
+    assert "BOARD must be a single board name" in result.stderr
+
+
+@pytest.mark.parametrize("bad,msg", [
+    ("generic extra", "BOARD must be a single board name"),  # multi-word
+    ("",              "BOARD must be a single board name"),  # empty
+    ("%",             "BOARD must name a boards/*.mk file"),  # a Make glob
+    ("opendongle-c%", "BOARD must name a boards/*.mk file"),  # % on a real prefix
+    ("../evil",       "BOARD must name a boards/*.mk file"),  # bare path
+    ("nonexistent",   "BOARD must name a boards/*.mk file"),  # unknown name
+])
+def test_malformed_board_is_rejected(bad, msg):
+    """The two-stage guard: exactly one word, then an exact board name (a literal
+    `filter-out` pattern, so `%` cannot match either)."""
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-C", str(FW),
+         f"BOARD={bad}", "print-image-path"],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert msg in result.stderr
+
+
 def test_page_erase_leaves_injected_slot_geometry_unchanged():
     # The record-block decoupling in the REAL build: OB_FLASH_PAGE_ERASE must
     # change only the erase granularity, never the Make-injected slot geometry
