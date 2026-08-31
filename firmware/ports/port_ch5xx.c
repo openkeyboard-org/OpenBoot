@@ -12,6 +12,9 @@
  * _eusrstack from the same geometry, and this is the check that used to live in
  * openboot.ld. It lives in a real port file (not the core) so it compiles only
  * in the firmware build, where OB_BOOTREQ_ADDR is a genuine address constant. */
+#if !defined(OB_RAM_ORIGIN) || !defined(OB_RAM_SIZE_KB)
+#error "build must inject OB_RAM_ORIGIN and OB_RAM_SIZE_KB (RAM geometry; see firmware/Makefile)"
+#endif
 _Static_assert(OB_BOOTREQ_ADDR == OB_RAM_ORIGIN + (OB_RAM_SIZE_KB) * 1024u - 16u,
                "OB_BOOTREQ_ADDR must be top-of-RAM minus 16; the protocol header "
                "and the Makefile's RAM size have drifted apart");

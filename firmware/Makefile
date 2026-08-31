@@ -131,7 +131,13 @@ CPU_HZ := $(CPU_HZ_$(TRANSPORT)_$(PORT))
 # header's hand-written OB_BOOTREQ_ADDR (which the app companion uses at
 # runtime) — the one guard keeping the RAM size and the protocol constant from
 # drifting apart. That replaced a build-time sed of the protocol header.
-OB_RAM_ORIGIN := 0x20000000
+#
+# OB_RAM_ORIGIN is a fixed hardware fact (both families base RAM at 0x20000000),
+# so it is `override` — no command line can move it, which would otherwise let a
+# paired override slide the RAM region while keeping top-of-RAM at the asserted
+# address. RAM_SIZE_KB is the only real per-family knob; overriding it flows to
+# both the linker LENGTH and the assert, so a wrong value trips the build.
+override OB_RAM_ORIGIN := 0x20000000
 RAM_SIZE_KB_ch57x := 12
 RAM_SIZE_KB_ch59x := 26
 RAM_SIZE_KB := $(RAM_SIZE_KB_$(PORT))

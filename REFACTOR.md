@@ -52,20 +52,11 @@ HELLO fields) — each gated on a product decision.
    constants and one optional CSR write. This is a particularly clean
    duplication removal with no runtime cost.
 
-4. **Remove the OpenBoot strap feature if the product scope is authoritative.**
-   *(Done — PR #28. No external build used it; mask-ROM ISP is the sole
-   recovery path. The port hook, debounce, knobs, policy checker and docs are
-   gone.)*
+4. **Remove the OpenBoot strap feature.** *(Done — PR #28.)*
 
-   Every shipped board deliberately disables it, while mask-ROM ISP is the
-   documented recovery path. Nevertheless, the port hook, debounce logic,
-   board knobs, comments and artifact-policy checker remain
-   (`firmware/core/boot_decision.c:195` and
-   `firmware/core/openboot_port.h:127`).
-
-   Removing it would simplify both families and the build system. Keep it only
-   if external users genuinely configure custom boards with an
-   OpenBoot-specific strap.
+   No external build used it and mask-ROM ISP is the sole recovery path, so the
+   port hook, debounce logic, board knobs, comments, and the artifact-policy
+   checker were removed — simplifying both families and the build system.
 
 5. **Perform boot-record selection in one pass and retain the generation.**
 
@@ -115,19 +106,12 @@ HELLO fields) — each gated on a product decision.
 
 ## Useful secondary simplifications
 
-8. **Simplify product timeout measurement.** *(Done — PR #26. The idle deadline
-   is now a raw SysTick tick compare; the millisecond accumulator, its three
-   port globals, and `ob_ms_accumulate()` are gone. The deadline is capped at
-   2^31 ticks so the unsigned compare stays wrap-safe.)*
+8. **Simplify product timeout measurement.** *(Done — PR #26.)*
 
-   All product boards use a ten-second timeout, below the low SysTick word's
-   fastest wrap time of roughly 43 seconds. A raw `ob_ticks()` and unsigned
-   tick comparison could replace the millisecond accumulator, three port
-   globals, and `ob_ms_accumulate()`.
-
-   This is worthwhile only if long configurable timeouts are not needed.
-   Otherwise, retain the current general implementation and merely move it
-   into the shared port source.
+   The idle deadline is now a raw SysTick tick compare; the millisecond
+   accumulator, its three port globals, and `ob_ms_accumulate()` are gone. The
+   deadline is capped at 2^31 ticks so the unsigned compare stays wrap-safe,
+   which imposes a clock-dependent maximum (documented in the firmware README).
 
 9. **Normalize build booleans.**
 
