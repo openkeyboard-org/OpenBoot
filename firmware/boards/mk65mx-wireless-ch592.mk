@@ -16,6 +16,11 @@ OB_IDLE_TIMEOUT_MS := 10000
 # record itself is still valid.
 OB_BOOT_IMAGE_CRC := 1
 
+# Run the bootloader on the 60 MHz PLL clock instead of the 6.4 MHz boot
+# clock. The Bluetooth application is about 184 KB, and the boot-time and
+# COMMIT image CRC take about 6 s per image at 6.4 MHz.
+OB_CPU_HZ := 60000000
+
 # A software reset can enter OpenBoot after an application has used another
 # pin mapping. Explicitly release PB12/PB13 as floating inputs; PB13 is the
 # MK65MX CHWAKE net and must remain undriven while the bootloader is active.
