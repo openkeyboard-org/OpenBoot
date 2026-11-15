@@ -420,8 +420,35 @@ void tr_send(const uint8_t *frame, uint32_t len)
     }
 }
 
+/* How long the device stays attached after the last reply, before the
+ * pull-up goes. A workaround for what looks like a race between the detach
+ * and the host getting that reply. tr_send() returns when the IN report has
+ * been ACKed (or its wait has run out), and behind a high-speed hub the ACK
+ * comes from the hub's transaction translator: the host collects the report
+ * from the hub in a later microframe. With the detach following at once,
+ * the host tool behind a Genesys Logic hub (05E3:0610) saw the device vanish
+ * with its last answer unread, the one to BOOT, every time, and reported an
+ * update that had succeeded as failed; a root port and another hub
+ * delivered it. What exactly loses the race (the hub's handling of the
+ * disconnect, or the host cancelling the read) has not been captured.
+ *
+ * Without this the margin is an accident of how fast the poll loop runs.
+ * Where ob_delay_us() executes from flash every poll takes longer, the
+ * detach comes later after the ACK, and the same hub got its answer each
+ * time it was tried; with the delay loop in RAM it lost it every time.
+ * Forty microframes is ample for a complete-split. */
+#define USB_DETACH_SETTLE_US 5000u
+
 void tr_deinit(void)
 {
+    /* Nothing is pumped in this window, so nothing can re-open EP1 OUT (a
+     * bus reset or a CLEAR_FEATURE would) and a report cannot be ACKed on
+     * the wire and then dropped. The hub and the host need nothing more
+     * from this side to finish; a SETUP that arrives now goes unanswered
+     * until the detach ends it. */
+    R8_UEP1_CTRL = (R8_UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_NAK;
+    ob_delay_us(USB_DETACH_SETTLE_US);
+
     R8_USB_CTRL = RB_UC_RESET_SIE;
     OB_USB_PHY_DETACH();
     ob_delay_us(10000);
