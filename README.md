@@ -44,7 +44,7 @@ git submodule update --init
 export MRS_TOOLCHAIN=/path/to/toolchain/bin
 make          # all firmware images and the release host tool
 make test
-make check    # tests plus firmware size and board-policy checks
+make check    # tests plus the firmware size report
 ```
 
 Use `make firmware` or `make tool` to build only one component. The firmware

@@ -22,16 +22,25 @@
 #endif
 
 #define OB_FLASH_APP_START   OB_APP_BASE
+/* Mirror the real ch59x port: OB_FLASH_PAGE_ERASE (the ch59x_pageerase core
+ * variant passes it as -D) lowers the flash erase granularity to 256 B. This
+ * changes the erase opcode/bitmap/alignment/HELLO — NOT the slot/record
+ * geometry, which stays keyed to the fixed 4 KiB region (below). */
+#if defined(OB_FLASH_PAGE_ERASE) && OB_FLASH_PAGE_ERASE
+#define OB_FLASH_ERASE_BLOCK 256u
+#else
 #define OB_FLASH_ERASE_BLOCK 4096u
+#endif
 #define OB_FLASH_WRITE_PAGE  256u
 #define OB_CPU_HZ            6400000u
 
 /* A/B slots. The real build computes these in the Makefile and injects them;
- * reproduce the same rule here (half the region, floored to the erase block)
- * so the harness exercises the geometry the firmware actually ships with. */
+ * reproduce the same rule here — half the region, floored to the 4 KiB REGION
+ * alignment (Make's ERASE_BLOCK_BYTES), which is independent of the flash
+ * erase granularity — so a page-mode variant keeps the exact slot/record map
+ * the firmware ships with (the record reserve is a fixed 4 KiB, OB_RECORD_BLOCK). */
 #define OB_SLOT_SIZE \
-    ((((OB_FLASH_APP_END - OB_FLASH_APP_START) / 2u) / OB_FLASH_ERASE_BLOCK) \
-     * OB_FLASH_ERASE_BLOCK)
+    ((((OB_FLASH_APP_END - OB_FLASH_APP_START) / 2u) / 4096u) * 4096u)
 #define OB_SLOT_A_BASE OB_FLASH_APP_START
 #define OB_SLOT_B_BASE (OB_SLOT_A_BASE + OB_SLOT_SIZE)
 

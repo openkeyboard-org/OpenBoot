@@ -3,11 +3,14 @@
  */
 #include "openboot_port.h"
 #include "../port_ch5xx.h"
+#include "../flash_ch5xx.h"
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG) while XIP would
  * otherwise be fetching this very code. */
-__attribute__((section(".highcode")))
+/* noinline: LTO must never absorb this into a flash-resident
+ * caller — check_highcode --ram-symbol pins it. */
+__attribute__((section(".highcode"), noinline))
 void ob_family_clock_init(void)
 {
 #if OB_CPU_HZ == 60000000
@@ -33,28 +36,6 @@ void ob_family_clock_init(void)
     /* boot clock (32 MHz XT / 5); 115200 baud works without any init */
 #else
 #error "OB_CPU_HZ must be 6400000 or 60000000 on ch59x"
-#endif
-}
-
-/* ---- boot strap pin (active low) -------------------------------------- */
-int ob_bootpin_asserted(void)
-{
-#ifndef OB_BOOT_PIN_MASK
-    return 0;
-#else
-    /* input + pull-up; pull-down/drive bit must be off for the pull-up to
-     * win; caller debounces (repeat calls with delay) */
-#if OB_BOOT_PIN_PORT_B
-    R32_PB_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PB_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PB_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PB_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
-#else
-    R32_PA_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PA_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
-#endif
 #endif
 }
 
@@ -87,5 +68,5 @@ uint32_t ob_app_end(void)
 
 void ob_family_read_uid(uint32_t buf[4])
 {
-    FLASH_EEPROM_CMD(CMD_GET_UNIQUE_ID, 0, buf, 0);
+    ob_ch5xx_flash_uid_read(buf);
 }

@@ -34,9 +34,18 @@ FAMILIES = {
     "ch57x": "-DOB_HOST_CH57X",
     "ch59x": "-DOB_HOST_CH59X",
     "ch57x_imagecrc": "-DOB_HOST_CH57X -DOB_BOOT_IMAGE_CRC=1",
+    # The full core at 256 B page-erase granularity: exercises the bitmap
+    # sizing/indexing, ERASE alignment, HELLO erase_block, and — the crux —
+    # that the slot/record geometry stays invariant (test_page_erase_core.py).
+    "ch59x_pageerase": "-DOB_HOST_CH59X -DOB_FLASH_PAGE_ERASE=1",
 }
 
-DEPS = CORE_SRC + HOST_SRC + [
+FLASH_HOST = HERE.parent / "flash_host"
+FLASH_SRC = [FW / "ports" / "flash_ch5xx.c", FLASH_HOST / "ob_flash_mock.c"]
+
+DEPS = CORE_SRC + HOST_SRC + FLASH_SRC + [
+    FLASH_HOST / "ob_flash_host_port.h",
+    FW / "ports" / "flash_ch5xx.h",
     HERE / "ob_host_port.h",
     HERE / "ob_host.h",
     FW / "core" / "crc32.h",
@@ -71,6 +80,24 @@ def build(cc=None):
         so = OUT / f"ob_{fam}.so"
         _run([cc, *CFLAGS, *dflags.split(), "-fPIC", "-shared",
               *CORE_SRC, *HOST_SRC, "-o", so])
+    # The open flash driver against the recording register mock: the REAL
+    # ports/flash_ch5xx.c sequencing logic, one library per family because
+    # the gate bits, resume send and info-window addressing diverge
+    # (test_flash_driver.py). The mock port header replaces every hardware
+    # seam, so this exercises opcode order, page splitting, cleanup and
+    # timeout inversion without silicon.
+    # ch59x_pageerase: the same ch59x driver with OB_FLASH_PAGE_ERASE=1, which
+    # lowers the erase block to 256 and selects the 0x81 page-erase opcode —
+    # so the mock verifies the page-erase sequencing without silicon.
+    for fam, fdef in (("ch57x", "-DOB_HOST_CH57X"),
+                      ("ch59x", "-DOB_HOST_CH59X"),
+                      ("ch59x_pageerase",
+                       "-DOB_HOST_CH59X -DOB_FLASH_PAGE_ERASE=1")):
+        _run([cc, "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+              f"-I{FW / 'core'}", f"-I{FW / 'ports'}", f"-I{FLASH_HOST}",
+              '-DOB_PORT_HEADER="ob_flash_host_port.h"',
+              "-DOB_TRANSPORT_ID=OB_TRANSPORT_ID_USB", *fdef.split(),
+              "-fPIC", "-shared", *FLASH_SRC, "-o", OUT / f"ob_flash_{fam}.so"])
     # Application companion as a host library: this repo ships it but
     # nothing here compiled it until the review that added this - a rename
     # or an API drift was invisible. The record validator is then testable
@@ -99,7 +126,9 @@ def ensure_built(cc=None):
     # ob_app.so included: freshness gated only on the family libraries would
     # skip build() on a checkout where those exist from before the companion
     # library did, and the companion tests then load a missing artifact.
-    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"]
+    sos = [OUT / f"ob_{fam}.so" for fam in FAMILIES] + [OUT / "ob_app.so"] + \
+          [OUT / f"ob_flash_{fam}.so"
+           for fam in ("ch57x", "ch59x", "ch59x_pageerase")]
     if all(so.exists() for so in sos):
         newest_src = max(p.stat().st_mtime for p in DEPS)
         if min(so.stat().st_mtime for so in sos) > newest_src:

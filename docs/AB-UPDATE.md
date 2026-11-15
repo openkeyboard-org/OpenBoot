@@ -12,8 +12,11 @@ power cut, a yanked cable or a crashed host anywhere in that window leaves it
 in the bootloader, needing a host to recover. That is the documented behaviour,
 and it is what this design replaces.
 
-The goal: an interrupted update leaves the **previous image running**, with no
-host involvement.
+The goal: an interrupted update leaves the **previous image bootable** with no
+host involvement — a power-loss/reset interruption boots straight back into it,
+and any other interruption (a crashed or disconnected host mid-session) leaves
+the device in the bootloader with that image still bootable on the next reset,
+never in a state where neither slot is valid.
 
 ## Constraints
 
@@ -22,7 +25,7 @@ Verified against the vendor SDK headers and the datasheets vendored in
 
 | | CH570 / CH572 | CH591 / CH592 |
 |---|---|---|
-| Minimum erase | 4096 B (code flash) | 4096 B (code flash) |
+| Minimum erase | 4096 B (code flash) | 4096 B default; 256 B on a CH592F build with `OB_FLASH_PAGE_ERASE=1` |
 | Minimum write | 4 B | 4 B (code flash) |
 | DataFlash | none | 32 KiB, 256 B page erase **documented but unusable** |
 | Record lives in | code flash, inside its slot | code flash, inside its slot |
@@ -35,11 +38,16 @@ shared record used have been **reclaimed**: ch57x's app region grows to
 
 Three facts do most of the work here:
 
-- **No page erase.** `ISP572.h` exposes no page-erase command at all; 4096 is
-  the floor. `ISP592.h` documents a 256 B DataFlash page erase, but the CH592
-  datasheet §4.4 says *"CH592A does not support page erase"* — confirmed on the
-  bench, where issuing one hung the part hard enough that SWD never recovered.
-  Treat 4096 as the minimum erase on both families.
+- **Page erase is opt-in, CH592 only.** ch57x (ISP572) exposes no page-erase
+  command at all; 4096 is the floor there. On ch59x, 256 B page erase (`0x81`)
+  is real: the CH592 datasheet §4.4 says *"CH592A does not support page erase"*
+  and a CH592A hangs beyond SWD recovery, but a later register-level probe
+  proved it works and is selective on **CH592F** (`firmware/tests/silicon/`) —
+  the earlier bench hang was an implementation issue, not the die. Because a
+  ch592 build cannot tell the A and F dies apart, page erase ships behind the
+  `OB_FLASH_PAGE_ERASE` build knob (default off): setting it lowers the erase
+  granularity to 256 B and is the builder's assertion that their die supports
+  it. By default OpenBoot treats 4096 as the minimum erase on both families.
 - **No flash remap.** The only address-related bit, `RB_ROM_CODE_OFS`, is a
   fixed boot-entry selector, not a translation.
 - **The application cannot be relocated.** The vendor blobs are
@@ -67,8 +75,11 @@ roughly 4x headroom.
 
 ## The record
 
-Each slot is **self-describing**: a 32-byte record in the **final erase block**
-of its own slot, at `slot_base + slot_size - 4096`, written at COMMIT.
+Each slot is **self-describing**: a 32-byte record in a **fixed 4 KiB record
+reserve** at the top of its own slot, at `slot_base + slot_size - 4096`, written
+at COMMIT. The reserve is a fixed 4 KiB independent of the flash erase
+granularity (`OB_FLASH_PAGE_ERASE` may lower that to 256 B), so the record
+address is build-invariant; a rewrite erases only the record's own erase block.
 
 The record owns a whole 4096-byte block rather than just its 32 bytes because
 rewriting it means erasing it first — flash only clears bits — and erase
@@ -98,7 +109,7 @@ is written or erased at any point in an update. That is the whole design.
 "Passes the boot check" is weaker than "CRC-valid" unless the board asks for
 more. By default the bootloader validates the record and that the slot's first
 word is not the erased pattern; with `OB_BOOT_IMAGE_CRC=1` it also recomputes
-the whole image CRC. Both product boards set that knob, and any board relying
+the whole image CRC. Shipped product boards set that knob, and any board relying
 on A/B to survive out-of-band corruption should — the record alone proves the
 image was verified *at commit time*, not that it is still intact.
 

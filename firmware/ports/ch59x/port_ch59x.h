@@ -1,8 +1,8 @@
 /*
  * OpenBoot port: CH591/CH592 ("ch59x").
  *
- * Raw registers + libISP only: this port includes CH592SFR.h and ISP592.h
- * and nothing else from the SDK (no CH59x_common.h, no driver .c files).
+ * Raw registers only: this port includes CH592SFR.h and nothing else from
+ * the SDK (no CH59x_common.h, no driver .c files, no vendor archive).
  */
 #ifndef OPENBOOT_PORT_CH59X_H
 #define OPENBOOT_PORT_CH59X_H
@@ -11,14 +11,6 @@
 #include "../../../protocol/openboot_protocol.h"
 
 #include "CH592SFR.h"
-
-/* ISP592.h needs RV_STATIC_INLINE (normally from core_riscv.h, which we do
- * not include); its EEPROM_ERASE inline must NEVER be called — it spins
- * forever on CH592A when Length % 4096 != 0 */
-#ifndef RV_STATIC_INLINE
-#define RV_STATIC_INLINE static inline
-#endif
-#include "ISP592.h"
 
 /* injected per variant by the build; family values below depend on them */
 #ifndef OB_FLASH_APP_END
@@ -39,7 +31,22 @@
 
 /* ---- contract constants ---------------------------------------------- */
 #define OB_FLASH_APP_START    OB_APP_BASE
+/* OB_FLASH_PAGE_ERASE (build knob, default 0) drops the erase granularity to
+ * 256 B, driving 0x81 page erase in flash_ch5xx.c and the 256 B erase block
+ * everywhere the core keys off this macro. It does NOT move the A/B record
+ * block (fixed 4 KiB — see OB_RECORD_BLOCK in boot_decision.c). Opt-in only:
+ * 0x81 hard-hangs CH592A — see OB_FL_ERASE_OP and docs/AB-UPDATE.md.
+ * The Makefile normalizes the knob to 0/1; this exact-value backstop catches a
+ * value slipped past that gate (e.g. an overridden BOOLEAN_KNOBS), which the
+ * plain #if below would otherwise read as enabled. */
+#if OB_FLASH_PAGE_ERASE != 0 && OB_FLASH_PAGE_ERASE != 1
+#error "OB_FLASH_PAGE_ERASE must be 0 or 1"
+#endif
+#if OB_FLASH_PAGE_ERASE
+#define OB_FLASH_ERASE_BLOCK  256u
+#else
 #define OB_FLASH_ERASE_BLOCK  4096u
+#endif
 #define OB_FLASH_WRITE_PAGE   256u
 #define OB_ERASED_WORD        0xF3F9BDA9u  /* bench-verified on CH592A silicon
                                             * (0xF5F9BDA9 from the EVT lore was
@@ -121,6 +128,19 @@ static inline void sys_safe_access_disable(void)
 #define OB_UART_TX_PIN  (1u << 9)   /* PA9 = bTXD1 */
 #define OB_UART_RX_PIN  (1u << 8)   /* PA8 = bRXD1 */
 
+/* A default-mapping board may reuse the alternate pins. Undo any application
+ * configuration before clearing the remap so PB12/PB13 cannot keep driving. */
+#if OB_UART1_ALT_PINS_HIZ
+#define OB_UART_ALT_PINS_RELEASE() do {                                   \
+        const uint32_t ob_alt_pins = (1u << 12) | (1u << 13);             \
+        R32_PB_PD_DRV &= ~ob_alt_pins;                                    \
+        R32_PB_PU     &= ~ob_alt_pins;                                    \
+        R32_PB_DIR    &= ~ob_alt_pins;                                    \
+    } while (0)
+#else
+#define OB_UART_ALT_PINS_RELEASE() do { } while (0)
+#endif
+
 /* Clear PA8's digital-input-disable bit in R32_PIN_CONFIG2 (PA4..15 =
  * bits 4..15), matching the vendor GPIOA_PinCfg(pin, ENABLE) behavior. */
 #define OB_UART_PINS_INIT() do {                                          \
@@ -130,6 +150,7 @@ static inline void sys_safe_access_disable(void)
         R32_PA_PU     |= OB_UART_RX_PIN;                                  \
         R32_PA_DIR    &= ~OB_UART_RX_PIN;                                 \
         R32_PIN_CONFIG2 &= ~(1u << 8);                                    \
+        OB_UART_ALT_PINS_RELEASE();                                       \
         R16_PIN_ALTERNATE &= (uint16_t)~RB_PIN_UART1;                     \
     } while (0)
 

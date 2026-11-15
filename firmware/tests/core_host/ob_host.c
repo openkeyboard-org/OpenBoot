@@ -34,7 +34,6 @@ _Static_assert(OB_BOOT_RECORD_SIZE == sizeof(ob_boot_record_t),
 static uint32_t violations;
 static uint32_t op_total;
 static int32_t  fail_after = -1;
-static int32_t  bootpin;
 static uint32_t sim_silicon_app_end;   /* 0 = unknown chip id */
 #if defined(OB_HOST_CH57X)
 #define OB_HOST_F26_DEFAULT 1
@@ -186,11 +185,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
     return memcmp(&sim_flash[addr], buf, len) ? 0xE5 : 0;
 }
 
-int ob_bootpin_asserted(void)
-{
-    return bootpin;
-}
-
 /* Mirrors the real ports: the app end comes from the silicon, clamped by the
  * build. host_set_chip_id() lets a test pretend to be the wrong variant. */
 uint32_t ob_app_end(void)
@@ -219,19 +213,13 @@ void ob_delay_us(uint32_t us)
     (void)us;
 }
 
-/* Test-controlled clock. main.c is the only caller in the firmware and is
- * not linked here, so this exists to satisfy the port contract and to let a
- * test drive ob_idle_elapsed() against a chosen "now". */
-static uint32_t host_now_ms;   /* zeroed by both reset paths */
-
-uint32_t ob_uptime_ms(void)
+/* Port-contract stub. main.c is the only firmware caller of the tick source
+ * and is not linked here, and the host suite drives ob_idle_elapsed() with
+ * explicit start/now/timeout values, so nothing calls this — it exists so the
+ * port surface stays complete. */
+uint32_t ob_now_ticks(void)
 {
-    return host_now_ms;
-}
-
-void host_set_uptime_ms(uint32_t v)
-{
-    host_now_ms = v;
+    return 0;
 }
 
 void ob_jump_app(uint32_t base)
@@ -251,14 +239,12 @@ void ob_reset(void)
 
 void host_reset(void)
 {
-    host_now_ms = 0;
     fill_erased(sim_flash, 0, sizeof sim_flash);
     memset(blk_erased, 0, sizeof blk_erased);
     memset(blk_dirty, 0, sizeof blk_dirty);
     violations = 0;
     op_total = 0;
     fail_after = -1;
-    bootpin = 0;
     f26_mode = OB_HOST_F26_DEFAULT;
     sim_silicon_app_end = OB_FLASH_APP_END;   /* matching part by default */
     ob_host_bootreq = 0;
@@ -268,7 +254,6 @@ void host_reset(void)
 
 void host_power_cycle(void)
 {
-    host_now_ms = 0;
     memset(blk_erased, 0, sizeof blk_erased);   /* erases don't survive reset */
     memset(blk_dirty, 0, sizeof blk_dirty);     /* XIP coherent again */
     fail_after = -1;
@@ -333,7 +318,6 @@ uint32_t host_violations(void)      { return violations; }
 uint32_t host_op_total(void)        { return op_total; }
 void host_set_bootreq(uint32_t v)   { ob_host_bootreq = v; }
 uint32_t host_get_bootreq(void)     { return ob_host_bootreq; }
-void host_set_bootpin(int32_t v)    { bootpin = v; }
 void host_set_silicon_app_end(uint32_t v) { sim_silicon_app_end = v; }
 void host_set_f26(int32_t v)        { f26_mode = v; }
 

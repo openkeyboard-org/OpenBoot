@@ -1,8 +1,8 @@
 /*
  * OpenBoot port: CH570/CH572 ("ch57x").
  *
- * Raw registers + libISP only: this port includes CH572SFR.h and ISP572.h
- * and nothing else from the SDK (no CH57x_common.h, no driver .c files).
+ * Raw registers only: this port includes CH572SFR.h and nothing else from
+ * the SDK (no CH57x_common.h, no driver .c files, no vendor archive).
  */
 #ifndef OPENBOOT_PORT_CH57X_H
 #define OPENBOOT_PORT_CH57X_H
@@ -11,7 +11,6 @@
 #include "../../../protocol/openboot_protocol.h"
 
 #include "CH572SFR.h"
-#include "ISP572.h"
 
 /* injected per variant by the build; family values below depend on them */
 #ifndef OB_FLASH_APP_END

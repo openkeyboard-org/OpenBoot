@@ -21,8 +21,8 @@ uint32_t ob_slot_capacity(uint32_t slot);
 
 /* Returns only when staying in the bootloader; otherwise calls
  * ob_jump_app(). The RAM boot-request magic is read and cleared first, so it
- * is always consumed. Decision priority is then: strap pin (debounced), boot
- * request, then the newest bootable slot. */
+ * is always consumed. Decision priority is then: an armed boot request keeps
+ * the bootloader, otherwise the newest bootable slot is launched. */
 void ob_boot_decide(void);
 
 /* The slot the device should boot: the highest `generation` among slots whose
@@ -31,7 +31,7 @@ void ob_boot_decide(void);
  * one whose image is not bootable; COMMIT must outrank all such records. */
 uint32_t ob_boot_select(uint32_t *highest_generation);
 
-/* Record + image checks for ONE slot (no strap/bootreq, no side effects).
+/* Record + image checks for ONE slot (no boot-request, no side effects).
  * Sole caller: boot_record_trusted's OB_REC_INVALID branch (explicit BOOT
  * after this session invalidated the write slot), which must ask only the
  * untouched slot and so cannot go through ob_boot_select. */
@@ -48,21 +48,20 @@ int ob_record_load(uint32_t slot, ob_boot_record_t *rec);
  * other slot's record is still the newest valid one. */
 uint32_t ob_record_store(uint32_t slot, ob_boot_record_t *rec);
 
-/* Nonzero once timeout_ms has elapsed between two ob_uptime_ms() readings.
- * Lives here rather than in main.c so the host suite can reach it: main.c
- * needs a transport and is only syntax-checked.
+/* Nonzero once `timeout_ticks` have elapsed between two ob_now_ticks()
+ * readings. Lives here rather than in main.c so the host suite can reach it:
+ * main.c needs a transport and is only syntax-checked.
  *
- * Wrap-safe by unsigned subtraction, so it stays correct across the 2^32 ms
- * rollover. timeout_ms == 0 means "disabled" and never elapses — that is the
- * documented meaning of OB_IDLE_TIMEOUT_MS = 0, and it must not degenerate
- * into "expire immediately". */
-int ob_idle_elapsed(uint32_t start_ms, uint32_t now_ms, uint32_t timeout_ms);
-
-/* Fold delta_ticks of a free-running counter into a running millisecond
- * total, carrying the sub-millisecond remainder so no ticks are lost across
- * calls. Split out of the ports so this arithmetic exists once and the host
- * suite can test it; a port keeps only the register read and the state. */
-void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
-                      uint32_t delta_ticks, uint32_t ticks_per_ms);
+ * The unsigned (now - start) subtraction is wrap-correct, but that alone is
+ * NOT sufficient. The caller must also: (1) keep `timeout_ticks` below 2^32
+ * with margin, and (2) sample often enough that no gap between readings steps
+ * the delta past the whole [timeout_ticks, 2^32) window — otherwise the
+ * deadline is missed until the next full counter wrap. main.c satisfies both:
+ * it caps the deadline at 2^31 and reads every loop pass. timeout_ticks == 0
+ * means "disabled" and never elapses — the documented meaning of
+ * OB_IDLE_TIMEOUT_MS = 0, which must not degenerate into "expire
+ * immediately". */
+int ob_idle_elapsed(uint32_t start_ticks, uint32_t now_ticks,
+                    uint32_t timeout_ticks);
 
 #endif /* OB_BOOT_DECISION_H */

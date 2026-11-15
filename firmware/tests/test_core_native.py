@@ -1091,30 +1091,6 @@ def test_boot_decision_truth_table(dev):
     assert dev.get_bootreq() == 0x12345678                # left alone
 
 
-def test_bootpin_overrides_all(dev):
-    _setup_app(dev, True, False)
-    dev.set_bootpin(1)
-    assert dev.boot_decide() == 1
-    dev.set_bootpin(0)
-    assert dev.boot_decide() == 0
-
-
-def test_bootpin_consumes_a_pending_bootreq(dev):
-    """A strap-held reset must still consume the app's one-shot request.
-
-    Otherwise the magic survives in RAM, and the next BOOT — which now
-    always answers OK and resets — finds it and stays in the bootloader
-    instead of launching, so a successful BOOT silently fails to boot.
-    """
-    _setup_app(dev, True, False)
-    dev.set_bootreq(BOOTREQ_MAGIC)
-    dev.set_bootpin(1)
-    assert dev.boot_decide() == 1                  # strap wins, as before
-    assert dev.get_bootreq() == 0                  # ...and the request is spent
-    dev.set_bootpin(0)
-    assert dev.boot_decide() == 0                  # next reset launches the app
-
-
 # --- retry/reset reconciliation regressions ------------------------------
 
 def test_write_retry_idempotent_stream(dev):
@@ -1238,37 +1214,12 @@ def test_idle_elapses_exactly_at_the_deadline(dev):
     assert dev.idle_elapsed(1000, 11001, 10000)
 
 
-def test_idle_is_wrap_safe_across_the_millisecond_rollover(dev):
+def test_idle_is_wrap_safe_across_the_tick_rollover(dev):
     """start near 2^32 and now past the wrap: unsigned subtraction has to
-    give the true elapsed time, not a ~49-day answer."""
+    give the true elapsed ticks, not a whole-counter-period answer."""
     start = 0xFFFFF000
-    assert not dev.idle_elapsed(start, 0x00000FFF, 10000)   # 8191 ms elapsed
-    assert dev.idle_elapsed(start, 0x00001710, 10000)       # 10000 ms elapsed
-
-
-@pytest.mark.parametrize("ticks_per_ms", [6400, 60000, 100000])
-def test_ms_accumulate_loses_no_ticks_over_many_calls(dev, ticks_per_ms):
-    """Sub-millisecond remainders must carry across calls: the main loop
-    polls every few tens of microseconds, so most calls add no whole
-    millisecond at all and a truncating implementation would never advance."""
-    ms = rem = 0
-    delta = ticks_per_ms // 10 + 7          # ~0.1 ms, deliberately not a divisor
-    for _ in range(10000):
-        ms, rem = dev.ms_accumulate(ms, rem, delta, ticks_per_ms)
-
-    assert ms == (10000 * delta) // ticks_per_ms
-    assert rem == (10000 * delta) % ticks_per_ms
-
-
-@pytest.mark.parametrize("ticks_per_ms", [6400, 60000, 100000])
-def test_ms_accumulate_survives_a_huge_delta(dev, ticks_per_ms):
-    """A delta near 2^32 is what a missed counter wrap looks like. The
-    arithmetic must not overflow — adding the delta into the remainder
-    before dividing would."""
-    ms, rem = dev.ms_accumulate(0, ticks_per_ms - 1, 0xFFFFFFFF, ticks_per_ms)
-
-    assert ms == (0xFFFFFFFF + ticks_per_ms - 1) // ticks_per_ms
-    assert rem == (0xFFFFFFFF + ticks_per_ms - 1) % ticks_per_ms
+    assert not dev.idle_elapsed(start, 0x00000FFF, 10000)   # 8191 ticks elapsed
+    assert dev.idle_elapsed(start, 0x00001710, 10000)       # 10000 ticks elapsed
 
 
 # --- A/B slot selection --------------------------------------------------

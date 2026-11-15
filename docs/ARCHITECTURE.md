@@ -19,7 +19,7 @@ firmware interfaces are defined by
 | `firmware/app/` | Application companion API |
 | `firmware/tests/` | Host-native tests of the real core sources |
 | `tools/` | Rust host CLI |
-| `third_party/openwch/` | Pinned WCH headers and `libISP` archives |
+| `third_party/openwch/` | Pinned WCH register headers |
 
 `protocol/openboot_protocol.h` is the only hand-written source of protocol
 numbers. `protocol/gen_protocol.py` generates the Rust and Python mirrors and
@@ -46,8 +46,10 @@ The boundaries are deliberately narrow:
   parser; USB maps one frame to one 64-byte HID report.
 - Ports own all special-function-register access, flash operations, boot-record
   storage, chip identity, delays, jumps, and resets.
-- The firmware is polled. It enables no interrupts, timers, or DMA; the main
-  loop uses `OB_POLL_INTERVAL_US` as its time base.
+- The firmware is polled. It enables no interrupt handlers, timer interrupts,
+  or DMA; the main loop paces itself with `OB_POLL_INTERVAL_US` (also the
+  transports' poll-count timeout base), while the idle auto-boot deadline reads
+  a free-running SysTick counter (started at bring-up, no interrupt).
 
 There are no vtables or dynamic allocation. Selecting a port and transport at
 link time keeps the interfaces direct and the image small.
@@ -63,8 +65,12 @@ link time keeps the interfaces direct and the image small.
 | USB clock | 100 MHz | 60 MHz | 60 MHz |
 | Live XIP CRC | No (`OB_FEAT_CRC_LIVE` clear) | Yes | Yes |
 
-All builds use 4 KiB erase blocks, 256-byte write pages, 4-byte write
-alignment, and an application base of `0x2000`. UART builds stay at the
+Builds use 4 KiB erase blocks by default (256 B on page-erase-capable CH592F
+hardware built with `OB_FLASH_PAGE_ERASE=1` — the opcode hard-hangs a CH592A,
+so it is an opt-in the builder makes for a die verified to support it, see
+`docs/AB-UPDATE.md`; the value is advertised as HELLO `erase_block`),
+256-byte write pages, 4-byte write alignment, and an application base of
+`0x2000`. UART builds stay at the
 6.4 MHz reset clock. CH59x can remap UART1 to PB12/PB13 through a board
 setting.
 
@@ -73,14 +79,16 @@ SWD. See the recovery procedure in the
 [firmware README](../firmware/README.md#ch570ch572-usb-recovery) before
 flashing those images.
 
-No shipped board defines an OpenBoot stay-in-bootloader strap. Products may
-set `OB_BOOT_PIN_MASK`, but mask-ROM ISP remains the recovery mechanism.
+OpenBoot has no stay-in-bootloader strap; mask-ROM ISP is the recovery
+mechanism for a device that cannot request an update.
 
 ## Flash and update safety
 
-All flash access goes through the WCH ROM entry point exposed by `libISP572.a`
-or `libISP592.a`. The port wrappers do not range-check because the shared core
-does so before every operation.
+All flash access goes through `ports/flash_ch5xx.c`, an open driver for the
+CH5xx flash controller written from disassemblies of WCH's vendor archives and
+validated side-by-side against them on CH592 and CH570 silicon. The port
+wrappers do not range-check because the shared core does so before every
+operation.
 
 The core enforces four update invariants:
 
@@ -89,9 +97,11 @@ The core enforces four update invariants:
 3. The boot record is invalidated before the first mutation.
 4. COMMIT writes a new record only after the image CRC is verified.
 
-Consequently, an interrupted update returns to the bootloader rather than
-starting a partial image. OBP intentionally has no bootloader self-update
-command; bootloader recovery uses SWD or mask-ROM ISP.
+Consequently, an interrupted update leaves the *previous* application
+bootable (the update writes only the inactive slot, and its record is
+invalidated first, so the boot decision falls back to the still-valid active
+slot) rather than starting a partial image. OBP intentionally has no
+bootloader self-update command; bootloader recovery uses SWD or mask-ROM ISP.
 
 CH57x has an additional constraint: XIP reads may return stale data after a
 flash-controller write in the same power cycle. WRITE uses controller verify,
@@ -109,7 +119,7 @@ One linker script serves all variants. The build generates the family-specific
 RAM geometry and boot-request address. It also:
 
 - limits the bootloader flash region to 8 KiB;
-- places `libISP` and required clock code in RAM-backed `.highcode`;
+- places the flash driver and required clock code in RAM-backed `.highcode`;
 - reserves and checks a 2 KiB stack; and
 - excludes the top 16 bytes of RAM for the application-to-bootloader request.
 
@@ -118,21 +128,22 @@ Applications must use the matching layout described in
 
 ## Build and size controls
 
-The firmware Makefile builds this matrix:
+The firmware Makefile builds by **board**: product and bring-up board files
+select their chip (`ch570` or `ch592`), transport (`usb` or `uart`), and `-D`
+knobs, while the bare `generic` board pins neither (leaving `CHIP=`/`TRANSPORT=`
+as a dev escape hatch), so `make opendongle-ch592` builds that product. Only
+ch570 and ch592 are built —
+they carry the products — while the ch57x/ch59x ports and the host still cover
+CH572/CH591 silicon at runtime.
 
-```text
-CHIP={ch570,ch572,ch591,ch592} x TRANSPORT={usb,uart}
-```
-
-Each configuration has its own build directory. A non-default `BOARD=` adds
-the board name to that directory, preventing object reuse across variants.
-The generated `openboot_config.h` is force-included in every source file.
+Each board has its own `build/<board>/` directory, so several boards sharing a
+chip/transport never reuse each other's objects. The generated
+`openboot_config.h` is force-included in every source file.
 
 Every image must fit in 8192 bytes. The linker region and post-objcopy size
-check enforce the limit; `make check` from the repository root displays the
-current size of all eight images, applies the board-policy check, and runs both
-test suites. Exact sizes belong in that generated report rather than in
-documentation, where they quickly become stale.
+check enforce the limit; `make check` from the repository root displays every
+board's size and runs both test suites. Exact sizes belong in that generated
+report rather than in documentation, where they quickly become stale.
 
 ## Verification
 
@@ -149,8 +160,11 @@ checklist in the [firmware README](../firmware/README.md#hardware-bring-up).
 
 ## Non-goals
 
-- SDK driver sources; only register headers and `libISP` are used
+- SDK driver sources and binaries; only register headers are used
 - interrupts, timers, DMA, or dynamic allocation
 - dual-transport images
 - bootloader self-update
 - authentication, signing, encryption, or multi-image management
+- awareness of host-side transport intermediaries. A host may reach the UART
+  through something that forwards bytes transparently — the `openboot` tool's
+  QMK tunnel does exactly that — but the firmware neither knows nor needs to.

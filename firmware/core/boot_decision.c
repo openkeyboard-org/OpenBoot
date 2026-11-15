@@ -8,18 +8,25 @@ uint32_t ob_slot_base(uint32_t slot)
     return OB_SLOT_A_BASE + slot * OB_SLOT_SIZE;
 }
 
-/* Build-time image room in a slot: everything below its final erase block,
- * which the record owns outright.
+/* The record owns the top OB_RECORD_BLOCK (4 KiB) of every slot outright.
  *
  * The record needs a whole block, not just its 32 bytes, because rewriting it
- * means erasing it first - flash only clears bits - and erase granularity is
- * one 4096-byte block. If the image could reach into that block, re-committing
- * a slot would destroy image bytes. Giving the record its own block costs
- * 4 KiB per slot (1.8% on ch592, 3.6% on ch570) and makes every record
- * rewrite safe.
+ * means erasing it first - flash only clears bits. If the image could reach
+ * into that block, re-committing a slot would destroy image bytes. Giving the
+ * record its own block costs 4 KiB per slot (1.8% on ch592, 3.6% on ch570) and
+ * makes every record rewrite safe.
  *
- * Fixed by the build, because the application's linker has to agree with it. */
-#define OB_SLOT_IMAGE_MAX (OB_SLOT_SIZE - OB_FLASH_ERASE_BLOCK)
+ * OB_RECORD_BLOCK (defined in openboot_port.h with the slot-geometry asserts)
+ * is a FIXED 4 KiB, deliberately independent of the flash erase granularity
+ * (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B): the record
+ * address is what the application's linker agrees with and what the
+ * factory-bless path computes, so it must NOT move with a build knob. A
+ * page-erase and a sector-erase build of the same firmware therefore share an
+ * identical slot/record map — images and factory blessings stay compatible
+ * across the knob, and switching it does not strand an installed device's
+ * records. The 4 KiB reserve is erased one OB_FLASH_ERASE_BLOCK at a time (the
+ * record lives in the reserve's bottom block, which is all a rewrite clears). */
+#define OB_SLOT_IMAGE_MAX (OB_SLOT_SIZE - OB_RECORD_BLOCK)
 
 uint32_t ob_slot_record_addr(uint32_t slot)
 {
@@ -144,25 +151,12 @@ uint32_t ob_boot_select(uint32_t *highest_generation)
     return best;
 }
 
-int ob_idle_elapsed(uint32_t start_ms, uint32_t now_ms, uint32_t timeout_ms)
+int ob_idle_elapsed(uint32_t start_ticks, uint32_t now_ticks,
+                    uint32_t timeout_ticks)
 {
-    if (timeout_ms == 0u)
+    if (timeout_ticks == 0u)
         return 0;                       /* 0 disables idle auto-boot */
-    return (uint32_t)(now_ms - start_ms) >= timeout_ms;
-}
-
-void ob_ms_accumulate(uint32_t *ms, uint32_t *rem,
-                      uint32_t delta_ticks, uint32_t ticks_per_ms)
-{
-    /* Divide first and carry the remainder separately: adding delta_ticks
-     * into *rem before dividing would overflow uint32_t on a large delta.
-     * Both remainders are < ticks_per_ms, so their sum cannot. */
-    *ms  += delta_ticks / ticks_per_ms;
-    *rem += delta_ticks % ticks_per_ms;
-    if (*rem >= ticks_per_ms) {
-        *rem -= ticks_per_ms;
-        (*ms)++;
-    }
+    return (uint32_t)(now_ticks - start_ticks) >= timeout_ticks;
 }
 
 int ob_boot_app_valid(uint32_t slot)
@@ -177,28 +171,17 @@ int ob_boot_app_valid(uint32_t slot)
 void ob_boot_decide(void)
 {
     /* App-requested entry: magic word at reserved top-of-RAM. Read and clear
-     * it before evaluating any boot decision because the request is one-shot.
-     * A strap or invalid application may still keep us in the bootloader, but
-     * must not leave a stale request that swallows the next BOOT. */
+     * it before evaluating any boot decision because the request is one-shot —
+     * an invalid application still leaves the bootloader in control, but must
+     * not leave a stale request that swallows the next BOOT. */
     volatile uint32_t *req = (volatile uint32_t *)(uintptr_t)(OB_BOOTREQ_ADDR);
     int requested = (*req == OB_BOOTREQ_MAGIC);
     uint32_t slot;
 
-    if (requested)
+    if (requested) {
         *req = 0;
-
-    /* Strap pin: 10 ms + 5 ms double-read debounce. */
-    if (ob_bootpin_asserted()) {
-        ob_delay_us(10000);
-        if (ob_bootpin_asserted()) {
-            ob_delay_us(5000);
-            if (ob_bootpin_asserted())
-                return;
-        }
-    }
-
-    if (requested)
         return;
+    }
 
     slot = ob_boot_select(0);
     if (slot == OB_SLOT_NONE)

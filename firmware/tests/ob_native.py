@@ -60,6 +60,10 @@ PARAMS = {
                   family=OB_FAMILY_CH570, features=0),
     "ch59x": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
                   family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),
+    # Same core as ch59x but built with OB_FLASH_PAGE_ERASE=1 (256 B erase
+    # block); test_page_erase_core.py checks the geometry stays invariant.
+    "ch59x_pageerase": dict(app_end=0x70000, erased_word=0xF3F9BDA9,
+                            family=OB_FAMILY_CH592, features=OB_FEAT_CRC_LIVE),
     # Same core as ch57x with OB_BOOT_IMAGE_CRC=1, so the boot decision also
     # checks the image against the record it committed.
     "ch57x_imagecrc": dict(app_end=0x3C000, erased_word=0xF3F9BDA9,
@@ -137,8 +141,6 @@ class OpenBootNative:
         L.host_set_bootreq.argtypes = [c_uint32]
         L.host_set_bootreq.restype = None
         L.host_get_bootreq.restype = c_uint32
-        L.host_set_bootpin.argtypes = [c_int32]
-        L.host_set_bootpin.restype = None
         L.host_set_silicon_app_end.argtypes = [c_uint32]
         L.host_set_silicon_app_end.restype = None
         L.host_set_f26.argtypes = [c_int32]
@@ -146,25 +148,14 @@ class OpenBootNative:
         L.host_boot_decide_result.restype = c_int32
         L.ob_crc32.argtypes = [c_void_p, c_uint32]
         L.ob_crc32.restype = c_uint32
-        L.host_set_uptime_ms.argtypes = [c_uint32]
-        L.host_set_uptime_ms.restype = None
         L.ob_idle_elapsed.argtypes = [c_uint32, c_uint32, c_uint32]
         L.ob_idle_elapsed.restype = c_int32
-        L.ob_ms_accumulate.argtypes = [POINTER(c_uint32), POINTER(c_uint32),
-                                       c_uint32, c_uint32]
-        L.ob_ms_accumulate.restype = None
         self._lib = L
 
-    def idle_elapsed(self, start_ms: int, now_ms: int, timeout_ms: int) -> bool:
-        return bool(self._lib.ob_idle_elapsed(start_ms, now_ms, timeout_ms))
-
-    def ms_accumulate(self, ms: int, rem: int, delta_ticks: int,
-                      ticks_per_ms: int) -> tuple[int, int]:
-        """-> (ms, rem) after folding delta_ticks in."""
-        c_ms, c_rem = c_uint32(ms), c_uint32(rem)
-        self._lib.ob_ms_accumulate(byref(c_ms), byref(c_rem),
-                                   delta_ticks, ticks_per_ms)
-        return c_ms.value, c_rem.value
+    def idle_elapsed(self, start_ticks: int, now_ticks: int,
+                     timeout_ticks: int) -> bool:
+        return bool(self._lib.ob_idle_elapsed(start_ticks, now_ticks,
+                                              timeout_ticks))
 
     def reset(self):
         self._lib.host_reset()
@@ -232,8 +223,6 @@ class OpenBootNative:
     def get_bootreq(self) -> int:
         return self._lib.host_get_bootreq()
 
-    def set_bootpin(self, v: int):
-        self._lib.host_set_bootpin(v)
 
     def set_silicon_app_end(self, v: int):
         """Pretend the die has a different app end than the build assumed

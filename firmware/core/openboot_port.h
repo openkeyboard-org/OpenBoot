@@ -78,13 +78,27 @@
 #if (OB_SLOT_SIZE % OB_FLASH_ERASE_BLOCK) != 0
 #error "slot size must be a multiple of the erase block"
 #endif
-/* Strictly greater, not merely non-zero: the top block of every slot belongs
- * to its record, so a one-block slot has no room for an image at all. That
- * configuration builds, and every ERASE and WRITE then fails the range check
- * on a capacity of zero — a bootloader that cannot be flashed. It is
- * reachable from a board setting OB_APP_END barely above the app base. */
-#if OB_SLOT_SIZE <= OB_FLASH_ERASE_BLOCK
-#error "slot size must exceed one erase block: the record owns the top block"
+/* The A/B record reserves the top OB_RECORD_BLOCK of every slot. It is a FIXED
+ * 4 KiB, deliberately independent of the flash erase granularity
+ * (OB_FLASH_PAGE_ERASE may lower OB_FLASH_ERASE_BLOCK to 256 B): the record
+ * address is what the application's linker and the factory-bless path agree
+ * with, so it must not move with a build knob — a page-erase and a
+ * sector-erase build share one slot/record map. Must be a whole number of
+ * erase blocks so a record rewrite erases on a block boundary. See
+ * boot_decision.c, which owns OB_SLOT_IMAGE_MAX / ob_slot_record_addr. */
+#define OB_RECORD_BLOCK 4096u
+#if (OB_RECORD_BLOCK % OB_FLASH_ERASE_BLOCK) != 0
+#error "OB_RECORD_BLOCK must be a whole number of erase blocks"
+#endif
+/* Strictly greater, not merely non-zero: the top OB_RECORD_BLOCK of every slot
+ * belongs to its record, so a slot no larger than that has no room for an
+ * image at all. That configuration builds, and every ERASE and WRITE then
+ * fails the range check on a capacity of zero — a bootloader that cannot be
+ * flashed. It is reachable from a board setting OB_APP_END barely above the
+ * app base. Checked against the fixed record reserve, NOT the erase block, so
+ * a page-erase build rejects the same degenerate geometry a sector build does. */
+#if OB_SLOT_SIZE <= OB_RECORD_BLOCK
+#error "slot size must exceed the record block: the record owns the top 4 KiB"
 #endif
 #if OB_SLOT_A_BASE != OB_FLASH_APP_START
 #error "slot A must start at the app base"
@@ -110,10 +124,10 @@
  * the family PLL setting. Called once before transport init. */
 void ob_port_init(void);
 
-/* Thin wrappers over FLASH_EEPROM_CMD. Return 0 on success (ROM
- * convention). buf must be in RAM, 4-byte aligned; len multiple of 4.
+/* Thin wrappers over the open flash driver (ports/flash_ch5xx.c). Return 0
+ * on success. buf must be in RAM, 4-byte aligned; len multiple of 4.
  * These do NOT range-check — the core validates against the app region
- * before calling (the ROM API would happily write anywhere). */
+ * before calling (the flash driver would happily write anywhere). */
 uint32_t ob_flash_erase(uint32_t addr, uint32_t len);
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len);
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);
@@ -121,11 +135,6 @@ uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len);
 /* No boot-record hooks: each slot's record lives INSIDE that slot, in code
  * flash on both families, so it is read through XIP and written with the
  * flash hooks above like any other app byte. See docs/AB-UPDATE.md. */
-
-/* Boot strap pin, debounced by the caller. Returns nonzero when the
- * stay-in-bootloader strap is asserted. Compiled to `return 0` when the
- * board disables it (OB_BOOT_PIN_MASK undefined). */
-int ob_bootpin_asserted(void);
 
 /* Chip identity for HELLO. */
 uint8_t ob_chip_rev(void);          /* ROM config chip-id byte */
@@ -143,16 +152,18 @@ void    ob_read_uid(uint8_t uid[8]);
 
 void ob_delay_us(uint32_t us);
 
-/* Free-running milliseconds since ob_port_init(). Monotonic, wraps at 2^32
- * (~49 days). Backed by SysTick, which the port starts once the clock is
- * settled — this is the only real time source in the bootloader.
+/* Raw free-running SysTick tick count (low 32 bits), counting at OB_CPU_HZ
+ * since ob_port_init(). Monotonic, wraps at 2^32 ticks — ~43 s at the fastest
+ * supported clock (100 MHz), ~11 min at the 6.4 MHz boot clock. This is the
+ * only real time source in the bootloader.
  *
- * CONTRACT: the caller must poll this more often than the underlying tick
- * counter wraps, which is ~43 s at the fastest supported clock. The main
- * loop calls it every iteration (tens of microseconds), so the accumulator
- * cannot miss a wrap. Anything that blocks for tens of seconds without
- * calling it would lose time. */
-uint32_t ob_uptime_ms(void);
+ * CONTRACT: a deadline built on this must be shorter than one 2^32-tick wrap
+ * and must be checked before that much time elapses. The idle auto-boot is the
+ * only user; it anchors a start tick, compares tick deltas (ob_idle_elapsed),
+ * and its deadline is a few seconds — far inside one wrap — so a single
+ * unsigned subtraction is exact. There is no millisecond accumulator: nothing
+ * carries state across wraps, and nothing needs to. */
+uint32_t ob_now_ticks(void);
 
 /* Launch the application at `base` — the base of the slot the boot decision
  * chose, not a fixed address, because either slot may be active.

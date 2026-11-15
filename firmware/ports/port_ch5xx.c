@@ -2,6 +2,22 @@
 #include "openboot_port.h"
 #include "boot_decision.h"
 #include "port_ch5xx.h"
+#include "flash_ch5xx.h"
+
+/* The app->bootloader request word occupies the top 16 bytes of RAM. Its
+ * address is hand-written per family in the protocol header (OB_BOOTREQ_ADDR,
+ * used by the app companion at runtime); cross-check it against the Makefile's
+ * RAM geometry (OB_RAM_ORIGIN/OB_RAM_SIZE_KB) so the two can never drift. This
+ * replaces a build-time sed of the protocol header — the linker still derives
+ * _eusrstack from the same geometry, and this is the check that used to live in
+ * openboot.ld. It lives in a real port file (not the core) so it compiles only
+ * in the firmware build, where OB_BOOTREQ_ADDR is a genuine address constant. */
+#if !defined(OB_RAM_ORIGIN) || !defined(OB_RAM_SIZE_KB)
+#error "build must inject OB_RAM_ORIGIN and OB_RAM_SIZE_KB (RAM geometry; see firmware/Makefile)"
+#endif
+_Static_assert(OB_BOOTREQ_ADDR == OB_RAM_ORIGIN + (OB_RAM_SIZE_KB) * 1024u - 16u,
+               "OB_BOOTREQ_ADDR must be top-of-RAM minus 16; the protocol header "
+               "and the Makefile's RAM size have drifted apart");
 
 /* SysTick is the same block on both families. Its low count word sits at
  * +0x08 even though the full counter is 32-bit on CH57x and 64-bit on CH59x
@@ -26,8 +42,6 @@
 #error "port header must define OB_STK_CNT64 (0: 32-bit SysTick CNT, 1: 64-bit)"
 #endif
 
-static uint32_t up_ms, up_rem, up_last;
-
 /* Stop the counter, then clear the latched flag — in that order, so a tick
  * cannot re-latch CNTIF between the two stores — then zero the count so the
  * block is back in its reset state. CMP is deliberately not written: it is
@@ -47,7 +61,6 @@ static void ob_systick_stop(void)
 static void ob_time_init(void)
 {
     ob_systick_stop();
-    up_ms = up_rem = up_last = 0;
     OB_STK_CTLR = OB_STK_RUN;
 }
 
@@ -57,20 +70,20 @@ void ob_port_init(void)
     ob_time_init();
 }
 
-/* No range checks here: the core validates before calling the ROM API. */
+/* No range checks here: the core validates before calling the flash API. */
 uint32_t ob_flash_erase(uint32_t addr, uint32_t len)
 {
-    return FLASH_ROM_ERASE(addr, len);
+    return ob_ch5xx_flash_erase(addr, len);
 }
 
 uint32_t ob_flash_write(uint32_t addr, const void *buf, uint32_t len)
 {
-    return FLASH_ROM_WRITE(addr, (void *)(uintptr_t)buf, len);
+    return ob_ch5xx_flash_write(addr, buf, len);
 }
 
 uint32_t ob_flash_verify(uint32_t addr, const void *buf, uint32_t len)
 {
-    return FLASH_ROM_VERIFY(addr, (void *)(uintptr_t)buf, len);
+    return ob_ch5xx_flash_verify(addr, buf, len);
 }
 
 uint8_t ob_chip_rev(void)
@@ -89,18 +102,28 @@ void ob_read_uid(uint8_t uid[8])
         uid[i] = b[i];
 }
 
-uint32_t ob_uptime_ms(void)
+/* Raw free-running SysTick tick count (low 32 bits). The idle deadline
+ * compares tick deltas directly — the core derives the timeout in ticks from
+ * OB_CPU_HZ — so no millisecond conversion or accumulator state lives here.
+ * On ch59x the counter is 64-bit, but the low word at +0x08 serves both
+ * families and covers any deadline shorter than one 2^32-tick wrap (~43 s at
+ * the fastest supported clock). */
+uint32_t ob_now_ticks(void)
 {
-    uint32_t now = OB_STK_CNTL;
-
-    ob_ms_accumulate(&up_ms, &up_rem, now - up_last, OB_CPU_HZ / 1000u);
-    up_last = now;
-    return up_ms;
+    return OB_STK_CNTL;
 }
 
+/* Runs from RAM: the calibration below assumes ~4 cycles per spin, which
+ * only holds when the two-instruction loop is not refetched through XIP —
+ * CH570's flash fetch at the 6.4 MHz reset clock costs several times that,
+ * and an inflated poll interval is what starved the UART RX FIFO (see
+ * tr_rx_busy). RAM execution makes the constant honest on every chip. */
+/* noinline: LTO must never absorb this into a flash-resident
+ * caller — check_highcode --ram-symbol pins it. */
+__attribute__((section(".highcode"), noinline))
 void ob_delay_us(uint32_t us)
 {
-    /* Two-instruction loop (addi+bnez), approximately four XIP CPU cycles. */
+    /* Two-instruction loop (addi+bnez), approximately four CPU cycles. */
     uint32_t n = (us * (OB_CPU_HZ / 100000u)) / 40u;
 
     if (n == 0)

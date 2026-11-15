@@ -159,6 +159,11 @@ SOF bytes inside a payload are ordinary data. The length, frame CRC,
 strict ping-pong exchange, and inter-byte timeout provide resynchronization;
 there is no escaping.
 
+*Non-normative.* A host MAY reach this UART through an intermediary that
+forwards bytes transparently — for instance a keyboard tunnelling them over a
+vendor HID interface. Nothing in this section changes: the device still parses
+exactly the framing above and still reports `OB_TRANSPORT_ID_UART` in HELLO.
+
 ## 5. Session model
 
 The device has two states. In IDLE, only HELLO is accepted; other commands
@@ -229,7 +234,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
 | 12 | 4 | u32 | app_end | exclusive end of the app region |
-| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096) |
+| 16 | 4 | u32 | erase_block | erase granularity in bytes (4096 by default; 256 on a ch592 build with `OB_FLASH_PAGE_ERASE=1`) — a host must read this field, not assume 4096 |
 | 20 | 2 | u16 | write_page | flash write page in bytes (256, informational) |
 | 22 | 1 | u8 | write_align | WRITE address/data alignment (4) |
 | 23 | 1 | u8 | max_write_data | maximum data bytes per WRITE (48) |
@@ -283,7 +288,7 @@ Request payload (8 bytes):
 
 | Offset | Size | Type | Field | Constraint |
 |---|---|---|---|---|
-| 0 | 4 | u32 | addr | multiple of `erase_block` (4096) |
+| 0 | 4 | u32 | addr | multiple of the HELLO `erase_block` (4096 default; 256 on a ch592 page-erase build) |
 | 4 | 4 | u32 | len | multiple of `erase_block`, nonzero |
 
 `[addr, addr + len)` MUST lie entirely within
@@ -294,9 +299,10 @@ slot nor the write slot's own record block — see section 9.1.
 
 Behavior: if this is the session's first mutation, the boot record is
 invalidated first (section 8). The device then erases block by block in one
-4096-byte ROM call per block, marking each block in the erased-block bitmap
-as it succeeds. A ROM failure aborts the loop with `E_FLASH` (detail: low
-byte of the ROM return code); blocks erased before the failure remain
+`erase_block`-sized driver call per block, marking each block in the
+erased-block bitmap as it succeeds. A driver failure aborts the loop with `E_FLASH`
+(detail: low byte of the driver return code); blocks erased before the
+failure remain
 marked. ERASE is idempotent — the host recovers from `E_FLASH` or a lost
 response by simply re-issuing the same command.
 
@@ -308,8 +314,9 @@ first WRITE of the run.
 
 Success response: 1 byte, `[OB_OK]`.
 
-Host guidance: chunk large erases into requests of ≤ 32 KiB (8 blocks) for
-progress reporting and sane per-request timeouts.
+Host guidance: chunk large erases into requests of ≤ 32 KiB for progress
+reporting and sane per-request timeouts (that is 8 blocks at a 4096 B
+`erase_block`, 128 blocks in 256 B page mode).
 
 ### 6.3 WRITE (`0x03`)
 
@@ -327,18 +334,17 @@ Checks, in order:
 2. `[addr, addr + data_len)` within
    `[write_base, write_base + write_capacity)` and `addr` 4-aligned, else
    `E_ADDR`.
-3. **Every 4096-byte block the write touches MUST be marked in the
+3. **Every `erase_block`-sized block the write touches MUST be marked in the
    erased-block bitmap** (i.e. erased earlier in this same session), else
    `E_NOT_ERASED`. This is the structural fix for the vendor
    write-before-erase bug: no write can land anywhere an erase was not
    explicitly performed first, and the bootloader region can never be in
    the bitmap because ERASE refuses it.
 
-The device programs the data (`FLASH_ROM_WRITE`) and immediately verifies
-it through the flash controller (`FLASH_ROM_VERIFY` — a controller
-read-back, deliberately not an XIP read; see `FEAT_CRC_LIVE`). Either ROM
-call failing yields `E_FLASH` with the low byte of the ROM return code as
-detail.
+The device programs the data and immediately verifies it through the flash
+controller (a controller read-back, deliberately not an XIP read; see
+`FEAT_CRC_LIVE`). Either driver call failing yields `E_FLASH` with the low
+byte of the driver return code as detail (a diagnostic, not a stable API).
 
 Success response: 1 byte, `[OB_OK]`.
 
@@ -422,11 +428,12 @@ Attestation path:
   out-of-band (e.g. via SWD) without rewriting it.
 
 On match the device writes the write slot's boot record (section 8) and
-answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-ROM case
+answers `[OB_OK]`; a record storage failure is `E_FLASH`. One non-driver case
 shares that status: a stored generation never reaches `0xFFFFFFFF`, which the
 other slot could then never outrank, so a COMMIT that would need it is refused
 with `E_FLASH`, detail
-`0x00` — distinguishable because no ROM failure carries detail 0. Unreachable
+`0x00` — distinguishable because no driver failure carries detail 0 (driver
+return values keep a nonzero low byte by contract). Unreachable
 by wear (~2^32 commits against a flash endurance of ~10^4..10^5 cycles); a
 device can get there only via a hand-crafted record claiming the ceiling. On
 mismatch **no record is written** — the device never converts an unverified image into a
@@ -530,7 +537,7 @@ run for WRITE).
 | `OB_E_ARG` | `0x05` | bad magic, bad BOOT mode, or nonzero flags | `0x00` |
 | `OB_E_ADDR` | `0x06` | address/range violation | `OB_DET_ADDR_RANGE = 0x01` (outside the app region), `OB_DET_ADDR_ALIGN = 0x02` (misaligned) |
 | `OB_E_NOT_ERASED` | `0x07` | WRITE into a block not erased this session | `0x00` |
-| `OB_E_FLASH` | `0x08` | flash ROM API failure | low byte of the ROM return code |
+| `OB_E_FLASH` | `0x08` | flash driver failure | low byte of the driver return code — a diagnostic, not a stable API; the values changed when the vendor ROM archive was replaced by the open driver |
 | `OB_E_VERIFY` | `0x09` | attestation/record failure | `OB_DET_VERIFY_MISMATCH = 0x01`, `OB_DET_VERIFY_NONSEQ = 0x02`, `OB_DET_VERIFY_NORECORD = 0x03` |
 | `OB_E_PROTO` | `0x0A` | unsupported protocol major in HELLO | `0x00` |
 
@@ -553,9 +560,11 @@ invalid, malicious, or truncated by power loss — can brick the device.**
    slot the device is currently able to boot, whether by mistake, by a
    stale address, or deliberately.
 3. **Arming: the erased-block bitmap.** A RAM bitmap with one bit per
-   4 KiB erase block of the writable slot, indexed relative to the slot
-   base and sized from the slot geometry (CH592's 220 KiB slot needs
-   55 bits in 7 bytes), records which blocks this session has
+   `erase_block` of the whole slot, indexed relative to the slot base and
+   sized from `slot_size` (CH592's 220 KiB slot needs 55 bits in 7 bytes at a
+   4096 B block; 880 bits in 110 bytes in 256 B page mode — the top block(s)
+   covering the fixed 4 KiB record reserve are simply never armed, since the
+   write window stops one reserve short), records which blocks this session has
    successfully erased. WRITE refuses (`E_NOT_ERASED`) any block not
    armed. The bitmap is cleared at reset, on every HELLO, and at COMMIT
    when the writable slot flips.
@@ -619,12 +628,14 @@ A record is valid iff the magic matches, `rec_crc32` matches, the reserved
 bytes are zero, and `img_len` is a nonzero multiple of 4 that fits the
 slot's capacity.
 
-**Storage.** Each record lives in the final 4096-byte erase block of the
-slot it describes, at `slot_base + slot_size - 4096`. It owns that block
-outright, because rewriting a record means erasing it first — flash only
-clears bits — and erase granularity is one block; an image that could reach
-into it would be destroyed by its own re-commit. Usable image size is
-therefore `slot_size - 4096`.
+**Storage.** Each record lives in a **fixed 4 KiB record reserve** at the top of
+the slot it describes, at `slot_base + slot_size - 4096`. The reserve is a fixed
+4 KiB *regardless of the flash erase granularity* (which `OB_FLASH_PAGE_ERASE`
+may lower to 256 B) so the record address never moves with a build knob and
+images stay compatible across it. The record owns the reserve so that rewriting
+it — which means erasing first, since flash only clears bits — cannot reach an
+image byte; a rewrite erases just the record's own `erase_block` within the
+reserve. Usable image size is therefore `slot_size - 4096`.
 
 Nothing outside the slot being updated is written or erased at any point in
 an update, which is what lets an interrupted update leave the other slot
@@ -682,10 +693,9 @@ applications integrating with OpenBoot must reserve the same 16 bytes (see
 
 At reset the bootloader decides, in this exact order:
 
-1. Board boot strap asserted → stay in OpenBoot.
-2. RAM boot-request magic present → stay in OpenBoot.
-3. No slot is bootable → stay in OpenBoot.
-4. Otherwise → jump to the base of the bootable slot with the highest
+1. RAM boot-request magic present → stay in OpenBoot.
+2. No slot is bootable → stay in OpenBoot.
+3. Otherwise, jump to the base of the bootable slot with the highest
    `generation`.
 
 A slot is bootable when its record validates (section 9.1), its first word is
@@ -700,9 +710,7 @@ seen so far, so two valid slots claiming the SAME generation would resolve to
 the lower-numbered one — by position, not by recency. COMMIT is responsible
 for never creating that tie (section 6.5).
 
-The request word is always cleared after it is read, including when the strap
-wins, so it is one-shot. No shipped board defines the optional OpenBoot strap;
-products may set `OB_BOOT_PIN_MASK`. It is sampled only at reset.
+The request word is always cleared after it is read, so it is one-shot.
 
 With the build-time `OB_BOOT_IMAGE_CRC=1` setting, the device also checks the
 full image against the record before jumping. This is off by default because
@@ -721,10 +729,7 @@ anything that fits a slot.
 boot record anchors a deadline `OB_IDLE_TIMEOUT_MS` milliseconds ahead
 (default `10000`). If it passes while still in IDLE — no successful HELLO this
 power cycle — the device boots the app, so one that entered the bootloader by
-strap glitch or stray boot request recovers by itself.
-
-A held strap does not inhibit idle auto-boot because it is not sampled again;
-it provides a connection window, not permanent residency.
+a stray boot request recovers by itself.
 
 The first successful HELLO disables auto-boot until the next reset;
 **no traffic of any kind resets the deadline** — valid, rejected, malformed
@@ -772,7 +777,7 @@ Host retry/timeout guidance (matches the reference `openboot` tool):
 |---|---|
 | HELLO | 500 ms |
 | WRITE | 1 s |
-| ERASE | 200 ms + 30 ms per 4 KiB block |
+| ERASE | 200 ms + 30 ms per `erase_block` (the device-reported granularity, NOT per 4 KiB — a 256 B page-mode block still gets its own 30 ms budget) |
 | CRC / COMMIT | 3 s |
 
 At most 3 attempts per request, each with a fresh `seq`; responses with a
@@ -800,6 +805,11 @@ same pair. A host MUST therefore select on VID:PID **plus HID usage page
 A product doing this MUST keep its application off that usage. (OpenDongle
 uses `0xFFFF` and `0xFF60` for its vendor interfaces, so the two never
 collide.)
+
+This rule governs the **bootloader's own** HID interface and says nothing
+about an intermediary's. Something that tunnels the UART transport over HID
+(see section 4.2) MUST use a *different* usage pair: it is not a bootloader,
+and a host selecting on `0xFF00`/`0x01` must never land on it.
 
 Where a platform's HID backend does not report a usage, it yields `0x0000`
 for both fields. A host SHOULD treat that as **"cannot tell", not "matches"**,

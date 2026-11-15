@@ -1,23 +1,29 @@
-# OpenBoot build entry point: one Makefile, an eight-image matrix.
+# OpenBoot build entry point: one Makefile, boards as the build targets.
 #
 # OpenBoot is an 8 KiB IAP bootloader living in flash [0x0000, 0x2000) on WCH
-# CH570/CH572/CH591/CH592 parts; the application starts at 0x2000. One image
-# is built per CHIP x TRANSPORT combination:
+# CH570/CH592 parts (the ch57x/ch59x ports also cover CH572/CH591 silicon at
+# runtime, but only ch570/ch592 are built); the application starts at 0x2000.
+# A BOARD is the build unit — it selects the chip, transport, and -D knobs:
 #
-#   CHIP      = ch570 | ch572 | ch591 | ch592
-#   TRANSPORT = usb | uart        (exactly one transport is linked per image)
-#
-#   make                            image for the default CHIP/TRANSPORT
-#   make CHIP=ch570 TRANSPORT=usb   one specific image
-#   make ch570-usb                  the same image, as a convenience target
-#   make all                        the full 8-image matrix
-#   make matrix-report              the matrix plus a size table
-#   make flash                      write the current image via minichlink (SWD)
-#   make flash-isp                  write the current image via wchisp (ROM ISP)
+#   make opendongle-ch592           build that product (chip/transport implied)
+#   make                            the bare `generic` board (ch592/uart default)
+#   make all                        every board (products + generics)
+#   make matrix-report              every board plus a size table
+#   make flash BOARD=<board>        build + write it via minichlink (SWD)
+#   make flash-isp BOARD=<board>    build + write it via wchisp (ROM ISP)
+#   make factory BOARD=<board> APP=app.bin   whole-chip: bootloader + pad + app
 #   make test                       host-native core tests, no cross toolchain
 #   make check-deps                 verify pinned SDKs + toolchain
-#   make print-image-path           absolute path of the current .bin, nothing else
-#   make factory APP=app.bin        whole-chip image: bootloader + pad + app
+#   make print-image-path BOARD=<board>   absolute path of that .bin, nothing else
+#
+# `make <board>` is the build shorthand; flash / flash-isp / factory /
+# print-image-path are actions on a board and take it as BOARD=<board> (a
+# make goal cannot also set a variable for the other goals in the same run).
+#
+# The boards are boards/*.mk. Raw CHIP=/TRANSPORT= remain as an internal,
+# dev-only escape hatch on the bare `generic` board (`make CHIP=ch570
+# TRANSPORT=uart`); products pin them with `override` so a stray command-line
+# value can't repoint them.
 #
 # Every image must fit the 8 KiB bootloader region. That is enforced three
 # ways: the linker script's FLASH MEMORY length, the post-objcopy byte gate in
@@ -38,19 +44,49 @@ SHELL := /bin/sh
 .DELETE_ON_ERROR:
 
 # ---------------------------------------------------------------------------
-# The build matrix.
+# Chip and transport — selected by the board (included just below).
 #
 # CHIP selects the flash geometry (app end address) and the HELLO family id.
 # TRANSPORT selects the one transport .c linked into the image and the CPU
 # clock: UART images run entirely at the 6.4 MHz boot clock (115200 baud fits
-# with DL=7, -0.79% error, and libISP flash ops are proven to work there), so
+# with DL=7, -0.79% error, and the flash driver is bench-proven there), so
 # they need no clock init at all. USB images use the PLL: 100 MHz on ch57x
 # and 60 MHz on ch59x.
 #
-# The default is CH592 UART, which leaves the debugger enabled.
+# The bare `generic` board pins neither, so plain `make` defaults to CH592
+# UART (debugger enabled).
 # ---------------------------------------------------------------------------
-CHIPS := ch570 ch572 ch591 ch592
+CHIPS := ch570 ch592
 TRANSPORTS := usb uart
+
+# The set of build boards (each boards/*.mk is a `make <board>` target),
+# discovered by wildcard so a new board file needs no Makefile edit. ALL_BOARDS
+# drops the bare `generic` escape hatch (it pins no chip/transport), so it is
+# excluded from `all`/matrix-report. Defined here — before the include below and
+# TOOLCHAIN_GOALS later — so BOARD can be validated against it up front.
+BOARDS := $(patsubst boards/%.mk,%,$(wildcard boards/*.mk))
+ALL_BOARDS := $(filter-out generic,$(BOARDS))
+
+# Board selection comes FIRST: a board .mk `override`s CHIP/TRANSPORT and sets
+# its -D knobs, so BOARD is the primary build coordinate — `make opendongle-ch592`
+# builds that product with no CHIP=/TRANSPORT= needed. The bare `generic` board
+# pins nothing, so plain `make` (or a raw CHIP=/TRANSPORT= escape hatch, dev-only)
+# falls through to the defaults below. Included before every CHIP-derived value
+# because the board is what picks the chip. Validate BOARD against the discovered
+# set BEFORE interpolating it into the include, so a stray value cannot pull an
+# arbitrary makefile into the build. Both `filter` and `include` treat BOARD as
+# space-separated words, so a bare membership test is not enough: `BOARD=generic
+# ../evil` would match on `generic` yet expand `include boards/generic ../evil.mk`
+# — reading `../evil.mk` too. Require exactly one word, then reject any word that
+# is not an exact board name (a literal `filter-out` pattern also stops `%`).
+BOARD ?= generic
+ifneq ($(words $(BOARD)),1)
+  $(error BOARD must be a single board name {$(BOARDS)}, got "$(BOARD)")
+endif
+ifneq ($(filter-out $(BOARDS),$(BOARD)),)
+  $(error BOARD must name a boards/*.mk file {$(BOARDS)}, got "$(BOARD)")
+endif
+include boards/$(BOARD).mk
 
 CHIP ?= ch592
 TRANSPORT ?= uart
@@ -62,25 +98,48 @@ ifeq ($(filter $(TRANSPORT),$(TRANSPORTS)),)
   $(error TRANSPORT must be one of {$(TRANSPORTS)}, got "$(TRANSPORT)")
 endif
 
-# Chip -> port family. CH570/CH572 share the ch57x port, CH591/CH592 the
-# ch59x port; everything variant-specific below the family level is injected
-# as a -D (see DEFINES) so the port sources stay variant-agnostic.
+# `make <board>` is a BUILD shorthand only: a board name is a goal, not a
+# variable. Two footguns follow, both refused up front:
+#  1. A mutating action needs an explicit board. `make flash` / `make all flash`
+#     would otherwise program the DEFAULT `generic` build, not the product you
+#     built — so flash/flash-isp/factory require BOARD= set on the command line.
+#  2. Combining a board GOAL with an action goal (`make opendongle-ch592 flash`)
+#     would run the action in this top-level parse (BOARD=generic) — refuse it.
+# Overriding a knob alongside a board goal has the same split (the outer parse
+# validates it against `generic`, not the board), so use `make BOARD=<board>
+# KNOB=...` too.
+_BOARD_GOALS := $(filter $(BOARDS),$(MAKECMDGOALS))
+_ACTION_GOALS := $(filter flash flash-isp factory print-image-path,$(MAKECMDGOALS))
+_MUTATING := $(filter flash flash-isp factory,$(_ACTION_GOALS))
+ifneq ($(_MUTATING),)
+  ifeq ($(origin BOARD),file)
+    $(error a mutating action needs an explicit board: `make $(firstword $(_MUTATING)) BOARD=<board>` \
+            (bare `make $(firstword $(_MUTATING))` would program the default `generic` build))
+  endif
+endif
+ifneq ($(_BOARD_GOALS),)
+  ifneq ($(_ACTION_GOALS),)
+    $(error use `make $(firstword $(_ACTION_GOALS)) BOARD=$(firstword $(_BOARD_GOALS))`, \
+            not `make <board> <action>` — a board name is a build goal, not the BOARD variable)
+  endif
+endif
+
+# Chip -> port family. ch570 uses the ch57x port, ch592 the ch59x port (the
+# ports still serve their whole family — CH572/CH591 silicon runs a ch57x/ch59x
+# image with the runtime clamp — but only ch570/ch592 are built). Everything
+# variant-specific below the family level is injected as a -D (see DEFINES) so
+# the port sources stay variant-agnostic.
 PORT_ch570 := ch57x
-PORT_ch572 := ch57x
-PORT_ch591 := ch59x
 PORT_ch592 := ch59x
 PORT := $(PORT_$(CHIP))
 
 # Exclusive end of the application flash region, injected per VARIANT as
 # -DOB_FLASH_APP_END (openboot_port.h #errors if it is missing):
-#   ch570/ch572: 240 K part, app [0x2000, 0x3C000) -- all of CodeFlash, since
-#                records now live inside their slots rather than in a
-#                reserved block (see docs/AB-UPDATE.md)
-#   ch591:       192 K part, app [0x2000, 0x30000)
-#   ch592:       448 K part, app [0x2000, 0x70000)
+#   ch570: 240 K part, app [0x2000, 0x3C000) -- all of CodeFlash, since records
+#          now live inside their slots rather than in a reserved block (see
+#          docs/AB-UPDATE.md)
+#   ch592: 448 K part, app [0x2000, 0x70000)
 APP_END_ch570 := 0x0003C000
-APP_END_ch572 := 0x0003C000
-APP_END_ch591 := 0x00030000
 APP_END_ch592 := 0x00070000
 # `override` on both assignments: a variable set on the make COMMAND LINE
 # normally beats every assignment in the makefile, so without it
@@ -94,14 +153,15 @@ override APP_END := $(APP_END_$(CHIP))
 # headers #error on an empty or overlapping region) — this is only here to
 # say so in Make's voice, before a confusing compile error.
 APP_BASE_BYTES := 8192
-# Flash erase granularity, and therefore the alignment every region boundary
-# must respect. Mirrors OB_FLASH_ERASE_BLOCK in the port headers.
+# Slot/app REGION alignment granularity — the boundary every slot and the app
+# region must respect. This stays 4 KiB even under OB_FLASH_PAGE_ERASE (a
+# 4 KiB-aligned region is a valid subset of 256 B-aligned), so it is NOT the
+# same thing as the flash ERASE granularity (OB_FLASH_ERASE_BLOCK in the port
+# headers, which the page-erase knob may lower to 256).
 ERASE_BLOCK_BYTES := 4096
 
 # HELLO chip-family id (names from protocol/openboot_protocol.h).
 FAMILY_ch570 := OB_FAMILY_CH570
-FAMILY_ch572 := OB_FAMILY_CH572
-FAMILY_ch591 := OB_FAMILY_CH591
 FAMILY_ch592 := OB_FAMILY_CH592
 CHIP_FAMILY := $(FAMILY_$(CHIP))
 
@@ -119,20 +179,25 @@ CPU_HZ_uart_ch57x := 6400000
 CPU_HZ_uart_ch59x := 6400000
 CPU_HZ := $(CPU_HZ_$(TRANSPORT)_$(PORT))
 
-# RAM geometry for the linker. The Makefile owns the per-family RAM size
-# (it already owns the per-chip flash geometry above); the linker derives
-# _eusrstack (top of RAM minus the reserved 16 bytes) from it, and
-# openboot.ld ASSERTs that equals the family's hand-written boot-request
-# constant below — the one cross-check keeping RAM_SIZE and the protocol
-# header from drifting apart while the app companion still uses the
-# constant at runtime.
-RAM_SIZE_ch57x := 12K
-RAM_SIZE_ch59x := 26K
-RAM_SIZE := $(RAM_SIZE_$(PORT))
-BOOTREQ_NAME_ch57x := OB_BOOTREQ_ADDR_CH57X
-BOOTREQ_NAME_ch59x := OB_BOOTREQ_ADDR_CH59X
-BOOTREQ_NAME := $(BOOTREQ_NAME_$(PORT))
-PROTOCOL_H := $(abspath ../protocol/openboot_protocol.h)
+# RAM geometry. RAM_SIZE_KB is the single per-family source (the Makefile
+# already owns the per-chip flash geometry above); it is emitted two ways — as
+# a linker LENGTH for the MEMORY block, and as OB_RAM_ORIGIN/OB_RAM_SIZE_KB in
+# the generated config header. The linker derives _eusrstack (top of RAM minus
+# the reserved 16 bytes) from the MEMORY block, and a _Static_assert in
+# port_ch5xx.c cross-checks that same top-of-RAM against the protocol
+# header's hand-written OB_BOOTREQ_ADDR (which the app companion uses at
+# runtime) — the one guard keeping the RAM size and the protocol constant from
+# drifting apart. That replaced a build-time sed of the protocol header.
+#
+# OB_RAM_ORIGIN is a fixed hardware fact (both families base RAM at 0x20000000),
+# so it is `override` — no command line can move it, which would otherwise let a
+# paired override slide the RAM region while keeping top-of-RAM at the asserted
+# address. RAM_SIZE_KB is the only real per-family knob; overriding it flows to
+# both the linker LENGTH and the assert, so a wrong value trips the build.
+override OB_RAM_ORIGIN := 0x20000000
+RAM_SIZE_KB_ch57x := 12
+RAM_SIZE_KB_ch59x := 26
+RAM_SIZE_KB := $(RAM_SIZE_KB_$(PORT))
 # Per-family microarchitecture CSRs injected into startup_ch5xx.S; the
 # values are the WCH EVT startup files' (startup_CH572.S / startup_CH592.S):
 # 0xbc0 corecfgr (pipeline/prefetch) is 0x25 on ch57x, 0x1f on ch59x, and
@@ -145,37 +210,51 @@ STARTUP_WRITE_BC1_ch59x := 0
 REPO_ROOT := $(abspath ..)
 
 # Pinned openwch EVT trees (git submodules; check-deps verifies the pins).
-# Only headers and libISP come from here -- no SDK driver .c is compiled.
+# Only register headers come from here -- no SDK driver .c is compiled and
+# no SDK binary is linked. Flash access is ports/flash_ch5xx.c, an open
+# reimplementation validated side-by-side against the vendor libISP
+# archives on CH592 and CH570 silicon before those were dropped.
 SDK_ch57x := $(abspath ../third_party/openwch/ch570/EVT/EXAM)
 SDK_ch59x := $(abspath ../third_party/openwch/ch592/EVT/EXAM)
 SDK ?= $(SDK_$(PORT))
 
-# The ROM flash API archive. This is the ONLY code linked from the SDK.
-ISPLIB_ch57x := ISP572
-ISPLIB_ch59x := ISP592
-ISPLIB := $(ISPLIB_$(PORT))
-ISPLIB_A := $(SDK)/SRC/StdPeriphDriver/lib$(ISPLIB).a
-
 # ---------------------------------------------------------------------------
-# Board configuration. A board .mk provides the boot-strap pin and the idle
-# auto-boot timeout; BOARD is overridable so real hardware can ship its own
-# file without touching this Makefile:  make BOARD=myboard CHIP=ch592 ...
+# Board knob fallbacks. The board .mk was included above (before the CHIP
+# derivations, since it picks the chip); these `?=` fallbacks apply only when
+# the board — e.g. the bare `generic` — leaves a knob unset.
 # ---------------------------------------------------------------------------
-BOARD ?= generic-$(PORT)
-include boards/$(BOARD).mk
 # Fallback if a board file omits the timeout; 0 disables idle auto-boot.
 OB_IDLE_TIMEOUT_MS ?= 10000
-# A board that defines only a strap mask selects port A by default.
-OB_BOOT_PIN_PORT_B ?= 0
 OB_UART1_REMAP ?= 0
+OB_UART1_ALT_PINS_HIZ ?= 0
 OB_BOOT_IMAGE_CRC ?= 0
+# 256 B page erase (0x81) instead of 4 KiB sector erase. Opt-in, CHIP=ch592
+# only, and only on a die that supports it: 0x81 hard-hangs CH592A (§4.4),
+# and CHIP=ch592 cannot distinguish the A and F dies — the builder asserts it.
+OB_FLASH_PAGE_ERASE ?= 0
 
 # Boolean knobs must be exactly the single word 0 or 1. A bare membership
 # $(filter) is not enough: its pattern list is word-split, so a mangled
 # value like '0 1' would pass — the $(words) term closes that hole.
-$(foreach knob,OB_BOOT_PIN_PORT_B OB_UART1_REMAP OB_BOOT_IMAGE_CRC,\
+BOOLEAN_KNOBS := OB_UART1_REMAP OB_UART1_ALT_PINS_HIZ \
+                 OB_BOOT_IMAGE_CRC OB_FLASH_PAGE_ERASE
+$(foreach knob,$(BOOLEAN_KNOBS),\
   $(if $(filter-out 0 1,$($(knob)))$(filter-out 1,$(words $($(knob)))),\
     $(error $(knob) must be 0 or 1 (got '$($(knob))'))))
+
+# Page erase is restricted to CHIP=ch592, the only silicon it is PROVEN on
+# (CH592F, firmware/tests/silicon/). ch570 — the only other build target — has
+# no page-erase command at all. Key on CHIP (the primary build input) so a
+# stray PORT= override cannot slip another chip past this. $(strip) both sides: a trailing space (e.g. 'OB_FLASH_PAGE_ERASE=1 '
+# or a board assignment before a comment) otherwise makes the ifeq compare
+# unequal and silently skip the guard. The driver's #if OB_CHIP_FAMILY !=
+# OB_FAMILY_CH592 family guard is the hard C-side backstop regardless.
+ifeq ($(strip $(OB_FLASH_PAGE_ERASE)),1)
+  ifneq ($(strip $(CHIP)),ch592)
+    $(error OB_FLASH_PAGE_ERASE=1 is CH592-only, and only on a die proven to \
+            support page erase e.g. CH592F (got CHIP=$(CHIP)))
+  endif
+endif
 
 # A board may pin the clock the bootloader runs at — and therefore hands to
 # the application (see ob_jump_app's CONTRACT in core/openboot_port.h).
@@ -199,8 +278,9 @@ endif
 # set here also holds on larger silicon.
 #
 # Bounded rather than trusted: must be 4096-aligned (the erase granularity)
-# and inside (app base, silicon end]. Board files are included above, after
-# the per-chip default is assigned, which is what makes the override land.
+# and inside (app base, silicon end]. The board set OB_APP_END at include time
+# (above); the per-chip APP_END default was assigned after that; this block then
+# re-assigns APP_END from OB_APP_END, which is what makes the board's clamp land.
 ifneq ($(strip $(OB_APP_END)),)
   # Arithmetic expansion rather than printf '%d': POSIX requires $(( )) to
   # accept C integer constants including 0x hex, but does NOT require printf
@@ -234,9 +314,8 @@ endif
 # is left unused at the top rather than making the slots unequal, which the
 # per-slot link addresses could not express anyway.
 #
-#   ch570/ch572 (0x3C000): A [0x02000,0x1F000)  B [0x1F000,0x3C000)  116 KiB
+#   ch570       (0x3C000): A [0x02000,0x1F000)  B [0x1F000,0x3C000)  116 KiB
 #   ch570 clamped 0x3A000: A [0x02000,0x1E000)  B [0x1E000,0x3A000)  112 KiB
-#   ch591       (0x30000): A [0x02000,0x19000)  B [0x19000,0x30000)   92 KiB
 #   ch592       (0x70000): A [0x02000,0x39000)  B [0x39000,0x70000)  220 KiB
 # ---------------------------------------------------------------------------
 SLOT_GEOM := $(shell \
@@ -268,9 +347,8 @@ MRS_TOOLCHAIN ?=
 # Host-native tests and clean do not need the cross-toolchain. All public
 # firmware targets do, including the default goal and matrix convenience
 # targets, so fail at parse time with one actionable message.
-TOOLCHAIN_GOALS := image all matrix-report board-policy check-deps flash flash-isp \
-                   factory \
-                   $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
+TOOLCHAIN_GOALS := image all matrix-report check-deps flash flash-isp \
+                   factory $(BOARDS)
 ifeq ($(strip $(MAKECMDGOALS)),)
   NEEDS_TOOLCHAIN := 1
 else ifneq ($(strip $(filter $(TOOLCHAIN_GOALS),$(MAKECMDGOALS))),)
@@ -318,6 +396,7 @@ LD := $(CC)
 OBJCOPY := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objcopy
 SIZE := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)size
 NM := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)nm
+OBJDUMP := $(MRS_TOOLCHAIN)/$(TOOL_PREFIX)objdump
 
 MINICHLINK ?= minichlink
 WCHLINK_SERIAL ?=
@@ -328,18 +407,13 @@ PYTHON ?= /usr/bin/python3 -I
 HOST_PYTHON ?= python3
 
 # ---------------------------------------------------------------------------
-# Artifact names: build/<chip>-<transport>/openboot-<chip>-<transport>.{elf,
-# bin,hex,map}. Each matrix cell gets its own directory, so the whole matrix
-# can coexist (and `make -j all` can build it in parallel).
+# Artifact names: build/<board>/openboot-<board>.{elf,bin,hex,map}. The board
+# is the build unit now, so each board gets its own directory — several boards
+# share a chip/transport (opencontroller/mk65mx/bench are all ch592/uart) and
+# must not reuse each other's objects. `make -j all` builds them in parallel.
 # ---------------------------------------------------------------------------
-# $(call build_dir,<chip>,<transport>,<board>) — the ONE place that knows the
-# artifact layout. A non-default board gets its own directory so it can never
-# reuse the default board's objects; the default keeps the documented
-# build/<chip>-<transport> path unchanged.
-build_dir = build/$(1)-$(2)$(if $(filter-out generic-$(PORT_$(1)),$(3)),+$(3))
-
-TARGET := openboot-$(CHIP)-$(TRANSPORT)
-BUILD := $(call build_dir,$(CHIP),$(TRANSPORT),$(BOARD))
+BUILD := build/$(BOARD)
+TARGET := openboot-$(BOARD)
 MAX_IMAGE_BYTES := 8192
 
 # ---------------------------------------------------------------------------
@@ -347,7 +421,7 @@ MAX_IMAGE_BYTES := 8192
 # one transport are compiled per image.
 # ---------------------------------------------------------------------------
 CORE_SRC := core/main.c core/crc32.c core/boot_core.c core/boot_decision.c
-PORT_SRC := ports/port_ch5xx.c ports/$(PORT)/port_$(PORT).c
+PORT_SRC := ports/port_ch5xx.c ports/flash_ch5xx.c ports/$(PORT)/port_$(PORT).c
 TRANSPORT_SRC := transports/$(TRANSPORT)_transport.c
 C_SRCS := $(CORE_SRC) $(PORT_SRC) $(TRANSPORT_SRC)
 S_SRCS := ports/startup_ch5xx.S
@@ -378,16 +452,19 @@ ARCH_ch59x := -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
               -msmall-data-limit=8 -msave-restore
 ARCH := $(ARCH_$(PORT))
 
-# NO -flto, deliberately: the image links against the binary-only libISP
-# archives from the EVT tree, which were not built for LTO. Mixing LTO
-# objects with opaque archives risks symbol and section surprises in the
-# .highcode flash primitives that must run from RAM.
-CFLAGS := $(ARCH) -Os -g -std=gnu99
+# LTO on everything EXCEPT the flash driver (its per-file -fno-lto is with
+# its other flags below): the RAM-resident driver keeps the exact codegen
+# that was hardware-validated, the object-level self-containment check stays
+# meaningful (an LTO object holds only .gnu.lto_* bytecode), and LTO can
+# never inline driver code into flash-resident callers. The remaining
+# .highcode functions (ob_delay_us, ob_family_clock_init) are noinline and
+# check_highcode.py --ram-symbol pins their RAM residency on the linked ELF.
+CFLAGS := $(ARCH) -Os -g -std=gnu99 -flto
 CFLAGS += -Wall -Wextra -Werror
 CFLAGS += -ffunction-sections -fdata-sections -fno-common
 
 INCLUDES := -I core -I ports/$(PORT)
-# SFR + ISP headers only; no SDK driver sources are ever compiled.
+# SFR register headers only; no SDK driver sources are ever compiled.
 INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 
 # The configuration contract (see core/openboot_port.h, which #errors when
@@ -400,27 +477,30 @@ INCLUDES += -I $(SDK)/SRC/StdPeriphDriver/inc
 #   OB_CPU_HZ        per transport (boot clock vs PLL).
 #   OB_CHIP_FAMILY   HELLO family id for this variant.
 #   OB_TRANSPORT_ID  HELLO transport id for this image.
-# The Boolean board knobs (OB_BOOT_PIN_PORT_B, OB_UART1_REMAP,
-# OB_BOOT_IMAGE_CRC) are normalized to a literal 0 or 1 above, always
-# emitted, and consumed with #if — never #ifdef, where defined-but-zero
-# would read as enabled. Knobs that may be legitimately absent
-# (OB_HSE_CAP_LOAD, OB_BOOT_PIN_MASK, the USB identity) still emit no
-# line when unset, and their consumers #ifdef-test them.
+# The Boolean board knobs (OB_UART1_REMAP, OB_UART1_ALT_PINS_HIZ,
+# OB_BOOT_IMAGE_CRC, OB_FLASH_PAGE_ERASE) are normalized to a literal 0 or 1
+# above, always emitted, and consumed with #if — never #ifdef, where
+# defined-but-zero would read as enabled. Knobs that may be legitimately absent
+# (OB_HSE_CAP_LOAD, the USB identity) still emit no line when unset, and their
+# consumers #ifdef-test them.
 CONFIG_H := $(BUILD)/openboot_config.h
 
 CONFIG_LINES := \
   '/* Generated by firmware/Makefile for $(CHIP)-$(TRANSPORT), board $(BOARD). DO NOT EDIT. */' \
   '\#define OB_PORT_HEADER "port_$(PORT).h"' \
   '\#define OB_FLASH_APP_END $(APP_END)' \
+  '\#define OB_RAM_ORIGIN $(OB_RAM_ORIGIN)u' \
+  '\#define OB_RAM_SIZE_KB $(RAM_SIZE_KB)' \
   '\#define OB_CPU_HZ $(CPU_HZ)' \
   '\#define OB_CHIP_FAMILY $(CHIP_FAMILY)' \
   '\#define OB_TRANSPORT_ID $(TRANSPORT_ID)' \
   '\#define OB_STARTUP_CORECFGR $(STARTUP_CORECFGR_$(PORT))' \
   '\#define OB_STARTUP_WRITE_BC1 $(STARTUP_WRITE_BC1_$(PORT))' \
   '\#define OB_IDLE_TIMEOUT_MS $(OB_IDLE_TIMEOUT_MS)' \
-  '\#define OB_BOOT_PIN_PORT_B $(OB_BOOT_PIN_PORT_B)' \
   '\#define OB_UART1_REMAP $(OB_UART1_REMAP)' \
+  '\#define OB_UART1_ALT_PINS_HIZ $(OB_UART1_ALT_PINS_HIZ)' \
   '\#define OB_BOOT_IMAGE_CRC $(OB_BOOT_IMAGE_CRC)' \
+  '\#define OB_FLASH_PAGE_ERASE $(OB_FLASH_PAGE_ERASE)' \
   '\#define OB_SLOT_SIZE $(OB_SLOT_SIZE)' \
   '\#define OB_SLOT_A_BASE $(OB_SLOT_A_BASE)' \
   '\#define OB_SLOT_B_BASE $(OB_SLOT_B_BASE)'
@@ -437,11 +517,6 @@ ifeq ($(filter 0 1 2 3 4 5 6 7,$(strip $(OB_HSE_CAP_LOAD))),)
 $(error OB_HSE_CAP_LOAD must be one value from 0 to 7)
 endif
 CONFIG_LINES += '\#define OB_HSE_CAP_LOAD $(OB_HSE_CAP_LOAD)'
-endif
-# A board that wants no strap leaves OB_BOOT_PIN_MASK unset and the port
-# compiles ob_bootpin_asserted() to `return 0`.
-ifneq ($(strip $(OB_BOOT_PIN_MASK)),)
-CONFIG_LINES += '\#define OB_BOOT_PIN_MASK $(OB_BOOT_PIN_MASK)'
 endif
 # USB identity. Absent leaves the pid.codes test allocation compiled into
 # usb_transport.c. A product sets both so its bootloader enumerates under the
@@ -465,29 +540,33 @@ endif
 # after CONFIG_H is defined.
 CFLAGS += -include $(CONFIG_H)
 
-LDFLAGS := $(ARCH) -T ports/openboot.ld -nostartfiles
+# -flto -Os at link: link-time codegen takes its optimization level from the
+# LINK command line, not the per-object flags.
+LDFLAGS := $(ARCH) -flto -Os -T ports/openboot.ld -nostartfiles
 LDFLAGS += --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 LDFLAGS += -Wl,-Map=$(BUILD)/$(TARGET).map
 LDFLAGS += -L $(BUILD)          # INCLUDE memory.ld
-LDFLAGS += -L $(SDK)/SRC/StdPeriphDriver
-LDLIBS := -l$(ISPLIB)
+# No -L into the SDK and no vendor archive: the link touching nothing closed
+# is the proof the image depends on nothing closed.
+LDLIBS :=
 
 # ---------------------------------------------------------------------------
 # Targets.
 # ---------------------------------------------------------------------------
 .DEFAULT_GOAL := image
-MATRIX := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),$(c)-$(t)))
-.PHONY: board-policy image all matrix-report clean check-deps test flash flash-isp \
-        print-image-path factory $(MATRIX)
+# BOARDS/ALL_BOARDS are defined up top (TOOLCHAIN_GOALS needs them). Each board
+# .mk is a `make <board>` target; the recursive rule is below.
+.PHONY: image all matrix-report clean check-deps test flash flash-isp \
+        print-image-path factory $(BOARDS)
 
 image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
        $(BUILD)/$(TARGET).manifest
 
-# Where the current CHIP/TRANSPORT/BOARD image lands, for consumers that
-# package the bootloader (a superproject composing a factory image, say).
-# The build_dir template above is the only definition of that layout, and a
-# consumer hardcoding it breaks silently the day the template changes.
+# Where the current board's image lands, for consumers that package the
+# bootloader (a superproject composing a factory image, say). BUILD/TARGET above
+# are the only definition of that layout, and a consumer hardcoding it breaks
+# silently the day the layout changes.
 #
 # Contract: prints one absolute path and NOTHING else, builds nothing, and is
 # deliberately absent from TOOLCHAIN_GOALS so it answers without
@@ -497,50 +576,32 @@ image: check-deps $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex \
 print-image-path:
 	@echo "$(abspath $(BUILD)/$(TARGET).bin)"
 
-# The full matrix, one recursive make per cell so each gets its own CHIP/
-# TRANSPORT (and thus its own flag set and build directory). The `+` marks
-# the recursion for the jobserver, so `make -j8 all` parallelizes across
-# cells and `make -n all` dry-runs into them.
-all: $(MATRIX)
+# Each board builds via a recursive make that sets BOARD, so it gets its own
+# knob set and build directory. The `+` marks the recursion for the jobserver
+# and keeps `make -n all` a dry-run. (A high -j across all boards can trip
+# GCC's LTO under load — pre-existing, the same recursion as before; a plain
+# `make all` is reliable.)
+$(BOARDS):
+	+$(MAKE) --no-print-directory BOARD=$@ MRS_TOOLCHAIN="$(MRS_TOOLCHAIN)" image
 
-$(MATRIX):
-	+$(MAKE) --no-print-directory \
-	    CHIP=$(firstword $(subst -, ,$@)) \
-	    TRANSPORT=$(lastword $(subst -, ,$@)) \
-	    MRS_TOOLCHAIN="$(MRS_TOOLCHAIN)" image
+all: $(ALL_BOARDS)
 
-# Size table over the whole matrix -- the third leg of the size gate, and
-# the number to watch while the USB transport grows. Paths come from the
-# same build_dir template the per-cell builds use, so the layout is defined
-# in exactly one place.
-# A BOARD= given on the command line reaches the recursive per-cell makes
-# through MAKEFLAGS, so those cells build into build/<chip>-<transport>+<board>.
-# The report has to look where the build actually went, or it reads whatever
-# stale default-board binaries happen to be lying around and reports sizes for
-# images it did not just build.
-matrix_board = $(if $(filter command line,$(origin BOARD)),$(BOARD),generic-$(PORT_$(1)))
-MATRIX_BINS := $(foreach c,$(CHIPS),$(foreach t,$(TRANSPORTS),\
-  $(call build_dir,$(c),$(t),$(call matrix_board,$(c)))/openboot-$(c)-$(t).bin))
+# Size table over every board -- the third leg of the size gate, and the number
+# to watch while the USB transport grows. Each board's artifact lands under its
+# own build/<board>/ (BUILD above), so the report looks exactly where each
+# recursive build wrote, never at a stale default lying around.
+MATRIX_BINS := $(foreach b,$(ALL_BOARDS),build/$(b)/openboot-$(b).bin)
 
-# No family ships a stay-in-bootloader strap — the mask-ROM ISP entry pin is
-# the recovery mechanism (PA1, also USB D+, on ch57x; PB22 on ch59x). Getting
-# that wrong is silent on the bench: a strap on a pin the package does not
-# bond just reads its own pull-up and never asserts. So it is checked in the
-# built artifact rather than the board file, right where the whole matrix is
-# already in hand.
-board-policy: all
-	@$(HOST_PYTHON) check_board_policy.py --nm "$(NM)" --build build --board "$(BOARD)"
-
-matrix-report: all board-policy
+matrix-report: all
 	@echo; \
-	 printf '%-22s %s\n' "image" "bytes / limit"; \
-	 printf '%s\n' "-------------------------------------"; \
+	 printf '%-24s %s\n' "board" "bytes / limit"; \
+	 printf '%s\n' "-----------------------------------------"; \
 	 for b in $(MATRIX_BINS); do \
 	   n="$$(basename "$$b" .bin)"; n="$${n#openboot-}"; \
 	   if [ -f "$$b" ]; then \
-	     printf '%-22s %5s / $(MAX_IMAGE_BYTES)\n' "$$n" "$$(wc -c < "$$b")"; \
+	     printf '%-24s %5s / $(MAX_IMAGE_BYTES)\n' "$$n" "$$(wc -c < "$$b")"; \
 	   else \
-	     printf '%-22s %s\n' "$$n" "missing"; \
+	     printf '%-24s %s\n' "$$n" "missing"; \
 	   fi; \
 	 done
 
@@ -571,37 +632,33 @@ $(CONFIG_H): FORCE | $(BUILD)
 	@printf '%s\n' $(CONFIG_LINES) > "$@.tmp"
 	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
 
-# The linker's half of the generated configuration: the MEMORY block plus
-# OB_BOOTREQ_ADDR, extracted from the protocol header (anchored sed, hard
-# failure if the define ever moves or is renamed). openboot.ld computes
-# _eusrstack from the MEMORY block and ASSERTs it equals this extracted
-# address — the one cross-check tying RAM_SIZE to the protocol constant the
-# runtime and the app companion use. FORCE + cmp for the same reason as the
-# config header: the content depends on make variables (RAM_SIZE,
-# BOOTREQ_NAME) as well as on files, and only regenerating unconditionally
-# then comparing catches a variable override.
+# The linker's half of the generated configuration: just the MEMORY block.
+# openboot.ld computes _eusrstack from it; the RAM-size/protocol-constant
+# cross-check now lives as a _Static_assert in port_ch5xx.c (see the RAM
+# geometry note above) rather than as a sed of the protocol header, so nothing
+# is parsed here. FORCE + cmp for the same reason as the config header: the
+# content depends on make variables (RAM_SIZE_KB) as well as on files, and only
+# regenerating unconditionally then comparing catches a variable override.
 MEMORY_LD := $(BUILD)/memory.ld
 
 $(MEMORY_LD): FORCE | $(BUILD)
-	@addrs=$$(sed -n 's/^#define $(BOOTREQ_NAME)[[:space:]]\{1,\}\(0x[0-9A-Fa-f]\{1,\}\)[uU]\{0,1\}[[:space:]]*\(\/\*.*\)\{0,1\}$$/\1/p' "$(PROTOCOL_H)"); \
-	 n=$$(printf '%s\n' "$$addrs" | grep -c . || true); \
-	 if [ "$$n" != 1 ]; then \
-	   echo "expected exactly one '#define $(BOOTREQ_NAME) 0x...' in $(PROTOCOL_H), found $$n" >&2; \
-	   echo "(a second match usually means an old definition was left behind, commented out or inside an #if — sed cannot tell those from the live one, so refuse rather than guess)" >&2; \
-	   exit 1; \
-	 fi; \
-	 addr=$$addrs; \
-	 { echo "/* Generated by firmware/Makefile for $(CHIP). DO NOT EDIT. */"; \
+	@{ echo "/* Generated by firmware/Makefile for $(CHIP). DO NOT EDIT. */"; \
 	   echo "MEMORY"; \
 	   echo "{"; \
 	   echo "    FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 8K"; \
-	   echo "    RAM   (xrw) : ORIGIN = 0x20000000, LENGTH = $(RAM_SIZE)"; \
+	   echo "    RAM   (xrw) : ORIGIN = $(OB_RAM_ORIGIN), LENGTH = $(RAM_SIZE_KB)K"; \
 	   echo "}"; \
-	   echo "OB_BOOTREQ_ADDR = $$addr;"; \
 	 } > "$@.tmp"
 	@if cmp -s "$@.tmp" "$@"; then rm -f "$@.tmp"; else mv -f "$@.tmp" "$@"; fi
 
 $(OBJS): Makefile $(CONFIG_H)
+
+# The open flash driver must be RAM-self-contained: -msave-restore would emit
+# calls into libgcc millicode in flash .text and a switch could emit a
+# .rodata jump table, either of which is dead XIP mid-operation.
+# check_highcode.py asserts the result on the linked ELF. -fno-lto keeps the
+# driver out of link-time codegen entirely (rationale at the CFLAGS -flto).
+$(BUILD)/flash_ch5xx.o: CFLAGS += -mno-save-restore -fno-jump-tables -fno-lto
 
 $(BUILD)/%.o: %.c | $(BUILD)
 	"$(CC)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
@@ -609,9 +666,12 @@ $(BUILD)/%.o: %.c | $(BUILD)
 $(BUILD)/%.o: %.S | $(BUILD)
 	"$(AS)" $(CFLAGS) $(INCLUDES) -MMD -MP -MF "$(@:.o=.d)" -MT "$@" -c "$<" -o "$@"
 
-$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD) $(ISPLIB_A)
+$(BUILD)/$(TARGET).elf: $(OBJS) ports/openboot.ld $(MEMORY_LD)
 	"$(LD)" $(LDFLAGS) $(OBJS) $(LDLIBS) -o "$@"
 	"$(SIZE)" "$@"
+	$(HOST_PYTHON) check_highcode.py --objdump "$(OBJDUMP)" --nm "$(NM)" \
+	    --object "$(BUILD)/flash_ch5xx.o" --elf "$@" \
+	    --ram-symbol ob_delay_us --ram-symbol ob_family_clock_init
 
 # objcopy, then the HARD size gate. The linker MEMORY region already bounds
 # the image, but a linker-script regression must not be the only line of
@@ -663,7 +723,7 @@ $(BUILD)/$(TARGET).manifest: $(BUILD)/$(TARGET).bin FORCE
 # caller's application, and slot A's boot record. One file to write at flash 0
 # on a blank part, which then boots the application on its own.
 #
-#   make factory APP=/path/to/app.bin CHIP=ch592 TRANSPORT=usb
+#   make factory BOARD=opendongle-ch592 APP=/path/to/app.bin
 #
 # The application must be the SLOT A build: the record describes slot A, and
 # an application only runs at the base it was linked for.

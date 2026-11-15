@@ -23,7 +23,7 @@ handle_reset:
     /* Top 16 bytes of RAM hold the application-to-bootloader request. */
     la      sp, _eusrstack
 
-    /* Copy RAM-resident libISP and family clock setup. */
+    /* Copy the RAM-resident flash driver and family clock setup. */
     la      a0, _highcode_lma
     la      a1, _highcode_vma_start
     la      a2, _highcode_vma_end

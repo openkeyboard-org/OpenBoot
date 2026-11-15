@@ -213,7 +213,7 @@ pub fn describe_status(status: u8, detail: Option<u8>) -> String {
         },
         OB_E_NOT_ERASED => "write into a block not erased this session (E_NOT_ERASED)".to_string(),
         OB_E_FLASH => format!(
-            "flash operation failed; ROM API returned 0x{:02X} (E_FLASH)",
+            "flash operation failed; flash driver returned 0x{:02X} (E_FLASH)",
             detail.unwrap_or(0)
         ),
         OB_E_VERIFY => match detail {

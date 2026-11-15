@@ -3,11 +3,14 @@
  */
 #include "openboot_port.h"
 #include "../port_ch5xx.h"
+#include "../flash_ch5xx.h"
 
 /* ---- clock ------------------------------------------------------------ */
 /* Runs from RAM: reconfigures flash timing (R8_FLASH_CFG/R8_FLASH_SCK)
  * while XIP would otherwise be fetching this very code. */
-__attribute__((section(".highcode")))
+/* noinline: LTO must never absorb this into a flash-resident
+ * caller — check_highcode --ram-symbol pins it. */
+__attribute__((section(".highcode"), noinline))
 void ob_family_clock_init(void)
 {
 #if OB_CPU_HZ == 100000000
@@ -22,9 +25,9 @@ void ob_family_clock_init(void)
      * multiplies the 32 MHz crystal, and USB's 48 MHz is derived from the
      * same PLL, so crystal pulling lands directly on a bus whose full-speed
      * tolerance is +/-0.25%. Every CH570 EVT example that brings up the PLL
-     * calls HSECFG_Capacitance(HSECap_18p) first; we cannot call it (the
-     * StdPeriphDriver is not linked, only libISP), so OB_HSE_CAP_INIT()
-     * reproduces it register-for-register. */
+     * calls HSECFG_Capacitance(HSECap_18p) first; we cannot call it (no
+     * SDK code is linked), so OB_HSE_CAP_INIT() reproduces it
+     * register-for-register. */
     OB_HSE_CAP_INIT();
 
     sys_safe_access_enable();
@@ -48,25 +51,6 @@ void ob_family_clock_init(void)
     /* boot clock (32 MHz XT / 5); 115200 baud works without any init */
 #else
 #error "OB_CPU_HZ must be 6400000 or 100000000 on ch57x"
-#endif
-}
-
-/* ---- boot strap pin (active low) -------------------------------------- */
-#if defined(OB_BOOT_PIN_MASK) && OB_BOOT_PIN_PORT_B
-#error "ch57x has no GPIO port B"
-#endif
-
-int ob_bootpin_asserted(void)
-{
-#ifndef OB_BOOT_PIN_MASK
-    return 0;
-#else
-    /* input + pull-up; pull-down/drive bit must be off for the pull-up to
-     * win; caller debounces (repeat calls with delay) */
-    R32_PA_PD_DRV &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_PU    |= (uint32_t)OB_BOOT_PIN_MASK;
-    R32_PA_DIR   &= ~(uint32_t)OB_BOOT_PIN_MASK;
-    return (R32_PA_PIN & (uint32_t)OB_BOOT_PIN_MASK) == 0;
 #endif
 }
 
@@ -94,14 +78,17 @@ uint32_t ob_app_end(void)
     return silicon < OB_FLASH_APP_END ? silicon : OB_FLASH_APP_END;
 }
 
-/* CH570 returns zero for GET_UNIQUE_ID, so use the ROM MAC fallback there. */
+/* CH570 returns zero for the 0x4B unique id, so use the MAC fallback there. */
+/* The MAC window in the info flash (the vendor SDK's ROM_CFG_MAC_ADDR). */
+#define OB_ROM_CFG_MAC_ADDR 0x3F018u
+
 void ob_family_read_uid(uint32_t buf[4])
 {
-    FLASH_EEPROM_CMD(CMD_GET_UNIQUE_ID, 0, buf, 0);
+    ob_ch5xx_flash_uid_read(buf);
     if ((buf[0] | buf[1]) == 0) {
-        /* CH570 silicon returns all zeros for CMD_GET_UNIQUE_ID (bench,
+        /* CH570 silicon returns all zeros for the 0x4B unique id (bench,
          * 2026-07-28). Fall back to the ROM MAC + 2-byte checksum — the
-         * SDK's own unique-ID source (ISP572.h GetMACAddress). */
-        FLASH_EEPROM_CMD(CMD_GET_ROM_INFO, ROM_CFG_MAC_ADDR, buf, 0);
+         * vendor SDK's own unique-ID source for this part. */
+        ob_ch5xx_flash_rom_info_read(OB_ROM_CFG_MAC_ADDR, buf);
     }
 }
