@@ -134,17 +134,27 @@ static void usb_ep_reset(void)
 
 static void ep0_setup(void)
 {
-    uint8_t        bm   = ep0_buf[0];
-    uint8_t        rq   = ep0_buf[1];
-    uint8_t        vl   = ep0_buf[2];   /* wValue low  */
-    uint8_t        vh   = ep0_buf[3];   /* wValue high */
-    uint8_t        ixl  = ep0_buf[4];   /* wIndex low  */
-    uint16_t       wlen = (uint16_t)(ep0_buf[6] | (ep0_buf[7] << 8));
+    uint8_t        bm, rq, vl, vh, ixl;
+    uint16_t       wlen;
     const uint8_t *p    = 0;
     uint32_t       len  = 0;
     uint8_t        err  = 0;
 
-    R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_ACK | UEP_T_RES_NAK;
+    /* Closed in both directions before the request is even read, and until
+     * its reply has been copied into the buffer it arrived in. With a lone
+     * SETUP the engine NAKs anyway until RB_UIF_TRANSFER is cleared; after
+     * a transfer was retired in front of it (usb_process) that is not
+     * documented to hold. Every path below ends by writing the whole
+     * register. This cannot keep a second SETUP out: the engine takes one
+     * whatever the endpoint is set to answer. */
+    R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_NAK | UEP_T_RES_NAK;
+
+    bm   = ep0_buf[0];
+    rq   = ep0_buf[1];
+    vl   = ep0_buf[2];                      /* wValue low  */
+    vh   = ep0_buf[3];                      /* wValue high */
+    ixl  = ep0_buf[4];                      /* wIndex low  */
+    wlen = (uint16_t)(ep0_buf[6] | (ep0_buf[7] << 8));
     setup_req = rq;
 
     if ((bm & 0x60) == 0x20) {              /* class (HID) */
@@ -217,20 +227,60 @@ static void usb_process(void)
     uint8_t intflag = R8_USB_INT_FG;
 
     if (intflag & RB_UIF_TRANSFER) {
-        /* A SETUP transaction must fall through to ep0_setup() WITHOUT
-         * clearing RB_UIF_TRANSFER first. RB_UC_INT_BUSY (set in tr_init)
-         * makes the engine auto-NAK while that flag is set, and that is the
-         * only thing holding the 8-byte setup packet still in the EP0 DMA
-         * buffer: clear the flag early and the next transaction may land on
-         * top of the request ep0_setup() is about to parse. The host sees
-         * the resulting garbage or STALL as a failed "device descriptor
-         * read/64" (EPIPE) during enumeration.
+        /* One sample of the status decides everything below.
          *
-         * A SETUP token reads as MASK_UIS_TOKEN in the token field, which is
-         * the same guard CH57x_usbdev.c uses. */
-        if ((R8_USB_INT_ST & MASK_UIS_TOKEN) != UIS_TOKEN_SETUP &&
-            !(intflag & RB_U_IS_NAK)) {
-            switch (R8_USB_INT_ST & (MASK_UIS_TOKEN | MASK_UIS_ENDP)) {
+         * The token field reads 11b (the SDK names that value
+         * UIS_TOKEN_SETUP) when it is IDLE. A SETUP is reported by
+         * RB_UIS_SETUP_ACT alone and does not touch the token, endpoint,
+         * toggle or length fields (datasheet, R8_USB_INT_ST). So this poll
+         * can find three things: a transfer (token not idle), a SETUP
+         * (SETUP_ACT with the token idle), or BOTH, when a SETUP was taken
+         * before the transfer in front of it had been serviced.
+         *
+         * For both together the datasheet gives the order, and it is two
+         * clears: handle the transfer, clear RB_UIF_TRANSFER to retire it,
+         * handle the SETUP, clear again. This code used to handle both and
+         * clear once. What the registers then hold is not documented. If
+         * the SETUP stays flagged, the next poll runs ep0_setup() a second
+         * time, over a buffer that by then holds the reply to the first:
+         * the serial string's first bytes (22 03) parse as a class request
+         * that is not SET_IDLE and get a STALL; the report descriptor's
+         * (06 00) parse as GET_STATUS and the other strings' (12 03) as
+         * SET_FEATURE, each answered with an empty packet in place of the
+         * descriptor. That would account for a host behind one make of hub
+         * getting no serial number and no report descriptor while a root
+         * port worked, which is what prompted this; it has not been
+         * captured on the wire.
+         *
+         * A lone SETUP still reaches ep0_setup() with RB_UIF_TRANSFER set:
+         * RB_UC_INT_BUSY (tr_init) makes the engine NAK while the flag is
+         * set, which keeps the next transaction off the request being
+         * parsed. Whether that still holds after the first of two clears is
+         * not documented either, so EP0 is closed by hand before it and
+         * ep0_setup() opens it again with its last write.
+         *
+         * EP1 is held at NAK across the same span, for the second clear's
+         * sake: a transfer on EP1 that completed while ep0_setup() ran
+         * would be retired by that clear without having been seen. Its
+         * answers are put back afterwards as they stood, with whatever
+         * toggles the request left (a CLEAR_FEATURE on EP1 resets one).
+         * Both writes to EP1 are made while it cannot complete a transfer,
+         * the first under the pending flag and the second under the hold,
+         * so neither can write back a toggle the engine has just moved.
+         *
+         * A SETUP that arrives after the sample below and before the first
+         * clear is found by the re-read and handled like any other:
+         * ep0_setup() closes EP0 before it reads the request. EP1 is not
+         * held for that one, because nothing then guarantees it is quiet
+         * while its register is rewritten. */
+        uint8_t st       = R8_USB_INT_ST;
+        uint8_t setup    = st & RB_UIS_SETUP_ACT;
+        uint8_t transfer = (st & MASK_UIS_TOKEN) != UIS_TOKEN_SETUP;
+        uint8_t ep1_res  = 0;
+        uint8_t ep1_held = 0;
+
+        if (transfer && !(intflag & RB_U_IS_NAK)) {
+            switch (st & (MASK_UIS_TOKEN | MASK_UIS_ENDP)) {
             case UIS_TOKEN_IN | 1:          /* EP1 IN drained by host */
                 R8_UEP1_CTRL = (R8_UEP1_CTRL & ~MASK_UEP_T_RES) | UEP_T_RES_NAK;
                 tx_busy = 0;
@@ -240,7 +290,7 @@ static void usb_process(void)
                  * zero-padded frame per report). A short packet would
                  * leave the tail of the previous report in the DMA
                  * buffer — replayable as a stale-but-CRC-valid frame. */
-                if ((R8_USB_INT_ST & RB_UIS_TOG_OK) &&
+                if ((st & RB_UIS_TOG_OK) &&
                     R8_USB_RX_LEN == OB_MAX_FRAME) {
                     R8_UEP1_CTRL = (R8_UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_NAK;
                     rx_state = 1;
@@ -259,9 +309,29 @@ static void usb_process(void)
                 break;
             }
         }
-        if (R8_USB_INT_ST & RB_UIS_SETUP_ACT)
+        if (transfer) {
+            if (setup) {
+                R8_UEP0_CTRL = UEP_R_RES_NAK | UEP_T_RES_NAK;
+                ep1_res = R8_UEP1_CTRL & (MASK_UEP_R_RES | MASK_UEP_T_RES);
+                R8_UEP1_CTRL = (R8_UEP1_CTRL & ~(MASK_UEP_R_RES | MASK_UEP_T_RES))
+                               | UEP_R_RES_NAK | UEP_T_RES_NAK;
+                ep1_held = 1;
+            }
+            R8_USB_INT_FG = RB_UIF_TRANSFER;        /* retires the transfer */
+            /* One that arrived while the transfer was being handled is not
+             * in st. Whether the clear above left it flagged is not
+             * documented, so look again, as the SDK's handlers do. */
+            setup |= R8_USB_INT_ST & RB_UIS_SETUP_ACT;
+        }
+        if (setup) {
             ep0_setup();
-        R8_USB_INT_FG = RB_UIF_TRANSFER;
+            R8_USB_INT_FG = RB_UIF_TRANSFER;        /* retires the SETUP */
+            if (ep1_held)
+                R8_UEP1_CTRL = (R8_UEP1_CTRL & ~(MASK_UEP_R_RES | MASK_UEP_T_RES))
+                               | ep1_res;
+        } else if (!transfer) {
+            R8_USB_INT_FG = RB_UIF_TRANSFER;        /* neither: just clear */
+        }
     } else if (intflag & RB_UIF_BUS_RST) {
         R8_USB_DEV_AD = 0;
         usb_ep_reset();
@@ -357,8 +427,35 @@ void tr_send(const uint8_t *frame, uint32_t len)
     }
 }
 
+/* How long the device stays attached after the last reply, before the
+ * pull-up goes. A workaround for what looks like a race between the detach
+ * and the host getting that reply. tr_send() returns when the IN report has
+ * been ACKed (or its wait has run out), and behind a high-speed hub the ACK
+ * comes from the hub's transaction translator: the host collects the report
+ * from the hub in a later microframe. With the detach following at once,
+ * the host tool behind a Genesys Logic hub (05E3:0610) saw the device vanish
+ * with its last answer unread, the one to BOOT, every time, and reported an
+ * update that had succeeded as failed; a root port and another hub
+ * delivered it. What exactly loses the race (the hub's handling of the
+ * disconnect, or the host cancelling the read) has not been captured.
+ *
+ * Without this the margin is an accident of how fast the poll loop runs.
+ * Where ob_delay_us() executes from flash every poll takes longer, the
+ * detach comes later after the ACK, and the same hub got its answer each
+ * time it was tried; with the delay loop in RAM it lost it every time.
+ * Forty microframes is ample for a complete-split. */
+#define USB_DETACH_SETTLE_US 5000u
+
 void tr_deinit(void)
 {
+    /* Nothing is pumped in this window, so nothing can re-open EP1 OUT (a
+     * bus reset or a CLEAR_FEATURE would) and a report cannot be ACKed on
+     * the wire and then dropped. The hub and the host need nothing more
+     * from this side to finish; a SETUP that arrives now goes unanswered
+     * until the detach ends it. */
+    R8_UEP1_CTRL = (R8_UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_NAK;
+    ob_delay_us(USB_DETACH_SETTLE_US);
+
     R8_USB_CTRL = RB_UC_RESET_SIE;
     OB_USB_PHY_DETACH();
     ob_delay_us(10000);
