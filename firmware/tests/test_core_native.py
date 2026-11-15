@@ -215,7 +215,7 @@ def test_golden_hello(dev):
     assert pl[3] == 9                                     # chip_rev
     # Deliberate literal: a version bump must be acknowledged here, not
     # inherited silently. Bump alongside boot_core.h's OB_BL_VERSION.
-    assert int.from_bytes(pl[4:6], "little") == 0x000B    # bl_version v0.11
+    assert int.from_bytes(pl[4:6], "little") == 0x000C    # bl_version v0.12
     assert pl[6] == dev.family_id
     assert pl[7] == 1                                     # transport USB
     assert int.from_bytes(pl[8:12], "little") == APP_START
