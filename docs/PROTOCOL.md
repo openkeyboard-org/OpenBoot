@@ -229,7 +229,7 @@ MUST send at least this much, the host MUST tolerate more — section 11):
 | 1 | 1 | u8 | proto_major | `0x00` |
 | 2 | 1 | u8 | proto_minor | `0x02` |
 | 3 | 1 | u8 | chip_rev | ROM configuration chip-id byte |
-| 4 | 2 | u16 | bl_version | bootloader version (mirrored in USB `bcdDevice`) |
+| 4 | 2 | u16 | bl_version | bootloader version, binary: major in the high byte, minor in the low (USB `bcdDevice` carries the same version in BCD) |
 | 6 | 1 | u8 | chip_family | `OB_FAMILY_*`, table below |
 | 7 | 1 | u8 | transport | `0x01` USB, `0x02` UART |
 | 8 | 4 | u32 | app_start | first writable flash address (`0x00002000` on all supported chips) |
@@ -793,7 +793,7 @@ section 6.5. **BOOT is never retried** (section 6.6).
 | Report descriptor | vendor usage page `0xFF00`; 64-byte input and output reports; **no report IDs** |
 | Endpoints | EP1 IN + EP1 OUT, interrupt, 64 bytes |
 | `iSerial` | the 64-bit ROM UID as 16 hex digits, most-significant nibble first (`printf "%016X"` of the u64 reported in HELLO) — used by the host `--serial` selector |
-| `bcdDevice` | the bootloader version (= HELLO `bl_version`) |
+| `bcdDevice` | the bootloader version in binary-coded decimal, as USB requires: v0.13 is `0x0013`, where HELLO `bl_version` is the binary `0x000D`. Up to v0.12 the descriptor carried the binary word, which is not valid BCD for v0.10 to v0.12 |
 
 **Finding the device.** A product may build the bootloader with its
 *application's* VID:PID, so that a user sees one device changing mode rather

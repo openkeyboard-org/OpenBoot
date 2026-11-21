@@ -57,6 +57,18 @@
 _Static_assert(OB_USB_VID <= 0xFFFFu, "OB_USB_VID must fit in 16 bits");
 _Static_assert(OB_USB_PID <= 0xFFFFu, "OB_USB_PID must fit in 16 bits");
 
+/* bcdDevice is binary-coded decimal; OB_BL_VERSION is binary, major in the
+ * high byte and minor in the low. Each byte is converted on its own, so
+ * v0.13 (0x000D) is announced as 0x0013 and reads "0.13" to a host. The
+ * descriptor used to carry the binary word, which is not BCD at all for a
+ * minor of 10 to 15 (Windows printed REV_000; for v0.12) and would have
+ * read as the wrong version from 16 on (0x0010 is BCD for 0.10). */
+#define OB_BL_MAJOR  ((OB_BL_VERSION >> 8) & 0xFFu)
+#define OB_BL_MINOR  (OB_BL_VERSION & 0xFFu)
+#define OB_BCD8(x)   ((uint8_t)((((x) / 10u) << 4) | ((x) % 10u)))
+_Static_assert(OB_BL_MAJOR < 100u && OB_BL_MINOR < 100u,
+               "OB_BL_VERSION: each byte must be under 100 to fit bcdDevice");
+
 static const uint8_t dev_desc[18] = {
     18,   0x01,             /* bLength, DEVICE                       */
     0x10, 0x01,             /* bcdUSB 1.10                           */
@@ -64,8 +76,8 @@ static const uint8_t dev_desc[18] = {
     64,                     /* bMaxPacketSize0                       */
     (uint8_t)OB_USB_VID, (uint8_t)(OB_USB_VID >> 8),
     (uint8_t)OB_USB_PID, (uint8_t)(OB_USB_PID >> 8),
-    (uint8_t)OB_BL_VERSION,
-    (uint8_t)(OB_BL_VERSION >> 8), /* bcdDevice = bootloader version */
+    OB_BCD8(OB_BL_MINOR),
+    OB_BCD8(OB_BL_MAJOR),   /* bcdDevice = bootloader version, in BCD */
     1, 2, 3,                /* iManufacturer, iProduct, iSerialNumber */
     1,                      /* bNumConfigurations                    */
 };
@@ -180,6 +192,13 @@ static void ep0_setup(void)
         len = 1;
     } else if (rq == RQ_SET_CONFIGURATION) {
         dev_config = vl;
+        /* A host starts both of EP1's data sequences from DATA0 again when
+         * it sets a configuration (USB 2.0, 9.1.1.5), reset or no reset in
+         * front of it. A toggle left at DATA1 would have the next report
+         * out ACKed and dropped as a repeat, or the next one in dropped by
+         * the host. EP1's answers stay as they are: see CLEAR_FEATURE
+         * below. */
+        R8_UEP1_CTRL = R8_UEP1_CTRL & ~(RB_UEP_R_TOG | RB_UEP_T_TOG);
     } else if (rq == RQ_GET_INTERFACE) {
         ep0_buf[0] = 0;
         len = 1;
@@ -189,10 +208,22 @@ static void ep0_setup(void)
         len = 2;
     } else if (rq == RQ_CLEAR_FEATURE) {
         if ((bm & 0x1F) == 0x02) {          /* endpoint recipient */
+            /* EP1 is never halted, so there is no halt to clear: all the
+             * request has to do here is restart the data sequence. What
+             * EP1 answers is not this request's to decide. Apart from the
+             * hold across a SETUP in usb_process() and the shutdown in
+             * tr_deinit(), OUT is at NAK only from a report's arrival until
+             * the tr_poll() after the one that handed it to the core, which
+             * reads it in place; opening it here would let the next one
+             * overwrite it. IN is at ACK only while a reply is armed, and
+             * closing it here would strand that reply until tr_send() gave
+             * up on it. tr_poll() and tr_send() own both. A host sends this
+             * after transfer errors on a pipe, not only after a STALL, so
+             * it does arrive. */
             if (ixl == 0x81)
-                R8_UEP1_CTRL = (R8_UEP1_CTRL & ~(RB_UEP_T_TOG | MASK_UEP_T_RES)) | UEP_T_RES_NAK;
+                R8_UEP1_CTRL = R8_UEP1_CTRL & ~RB_UEP_T_TOG;
             else if (ixl == 0x01)
-                R8_UEP1_CTRL = (R8_UEP1_CTRL & ~(RB_UEP_R_TOG | MASK_UEP_R_RES)) | UEP_R_RES_ACK;
+                R8_UEP1_CTRL = R8_UEP1_CTRL & ~RB_UEP_R_TOG;
             else
                 err = 1;
         }                                   /* device recipient: zero-len ack */
@@ -272,7 +303,14 @@ static void usb_process(void)
          * clear is found by the re-read and handled like any other:
          * ep0_setup() closes EP0 before it reads the request. EP1 is not
          * held for that one, because nothing then guarantees it is quiet
-         * while its register is rewritten. */
+         * while its register is rewritten. That leaves the late SETUP
+         * relying on timing: ep0_setup() has to finish before a 64-byte
+         * report that follows the SETUP can complete, 48.7 us at the least,
+         * and the path is some 340 instructions at worst, run from flash at
+         * a speed that has not been measured. Holding EP1 on every transfer
+         * would cover it without the assumption. That was written and ran
+         * on hardware with no fault traced to it, and was left out to keep
+         * this loop the code that has been tested. */
         uint8_t st       = R8_USB_INT_ST;
         uint8_t setup    = st & RB_UIS_SETUP_ACT;
         uint8_t transfer = (st & MASK_UIS_TOKEN) != UIS_TOKEN_SETUP;
@@ -449,8 +487,10 @@ void tr_send(const uint8_t *frame, uint32_t len)
 void tr_deinit(void)
 {
     /* Nothing is pumped in this window, so nothing can re-open EP1 OUT (a
-     * bus reset or a CLEAR_FEATURE would) and a report cannot be ACKed on
-     * the wire and then dropped. The hub and the host need nothing more
+     * bus reset would) and from here on no report is ACKed on the wire only
+     * to be dropped. One that was ACKed after the last poll and before this
+     * write goes down with the detach, as it always did; the host tool
+     * sends nothing after BOOT. The hub and the host need nothing more
      * from this side to finish; a SETUP that arrives now goes unanswered
      * until the detach ends it. */
     R8_UEP1_CTRL = (R8_UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_NAK;
