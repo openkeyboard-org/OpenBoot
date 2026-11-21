@@ -60,8 +60,21 @@ int main(void)
 
     ob_port_init();
     ob_boot_decide();                    /* may not return */
-    tr_init();
+
+    /* The core before the transport, not after. ob_core_init() works out
+     * the active slot, and with OB_BOOT_IMAGE_CRC that means a CRC over a
+     * whole image: over two when slot B holds the newer one, because slot A
+     * is checked first. tr_init() attaches the device, and nothing answers
+     * the host until the loop below is polling. In the other order a host
+     * that started enumerating at once met a device that was on the bus but
+     * silent for as long as those CRCs took. Behind a Genesys Logic hub
+     * (05E3:0610) Windows saw a CH592 bootloader 1.6 s after the entry
+     * request when slot A was the newer and 6.8 s after it when slot B was,
+     * every time; in this order it is 1.6 s for both. A root port and
+     * another hub did not care. The price is that the device attaches
+     * later by the time the checks take. */
     ob_core_init();
+    tr_init();
 
     /* Anchor after bring-up, so a slow boot-time image CRC does not eat
      * into the connection window the board asked for. */
