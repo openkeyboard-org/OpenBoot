@@ -1,11 +1,15 @@
 //! High-level flows over any `Transport`: probe, flash, verify, erase,
 //! boot, bless. Command encoding, timeouts, and the retry policy live one
-//! layer down in [`crate::client`]; this module owns planning, progress
-//! reporting, region checks, and the CRC-mismatch exit-code contract.
+//! layer down in [`crate::client`]; this module owns planning, region checks,
+//! and the CRC-mismatch contract.
+//!
+//! Nothing here prints. A flow reports each step to an [`Observer`] as it
+//! happens and returns what it found, so the same code serves the CLI (which
+//! renders the events as text, see [`crate::console`]) and a caller that
+//! wants to draw them some other way. Pass `&mut ()` to observe nothing.
 
 use std::fmt;
-use std::io::Write as _;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
@@ -19,7 +23,7 @@ use crate::transport::Transport;
 /// ERASE is chunked so progress ticks and per-request timeouts stay small.
 pub const ERASE_CHUNK: u32 = 32 * 1024;
 
-/// CRC comparison failure. `main` maps this (via downcast) to exit code 2.
+/// CRC comparison failure. The CLI maps this (via downcast) to exit code 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifyMismatch {
     pub local_crc: u32,
@@ -47,120 +51,168 @@ impl fmt::Display for VerifyMismatch {
 
 impl std::error::Error for VerifyMismatch {}
 
-/* --- progress ----------------------------------------------------------- */
+/* --- observing a flow --------------------------------------------------- */
 
-/// `\r`-style percent progress on stderr, printed only when the percent
-/// changes so large images do not flood the terminal.
-struct Progress {
-    label: &'static str,
-    total: usize,
-    last: Option<usize>,
+/// The two stretches of a flow that take long enough to show progress for,
+/// and the only ones an observer can stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Erase,
+    Write,
 }
 
-impl Progress {
-    fn new(label: &'static str, total: usize) -> Progress {
-        Progress {
-            label,
-            total,
-            last: None,
-        }
-    }
+/// Which flow stopped at its plan for want of `force`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mutation {
+    Flash,
+    Erase,
+}
 
-    fn update(&mut self, done: usize) {
-        let pct = (done * 100).checked_div(self.total).unwrap_or(100);
-        if self.last != Some(pct) {
-            eprint!("\r{}: {pct:3}% ({done}/{} B)", self.label, self.total);
-            let _ = std::io::stderr().flush();
-            self.last = Some(pct);
-        }
-    }
+/// How a flashed image was checked.
+///
+/// `CommitOnly` is not a weaker choice but a device property: without
+/// FEAT_CRC_LIVE a post-write CRC read may be served from a stale XIP view
+/// (CH57x F26), so COMMIT's stream attestation is the authoritative check and
+/// no cross-check was attempted. Callers must not present the three as one
+/// "verified".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verification {
+    /// The caller asked for no cross-check; COMMIT still attested the image.
+    Skipped,
+    CommitOnly,
+    /// COMMIT attested the image and a live CRC read of flash agreed.
+    LiveCrc {
+        device_crc: u32,
+    },
+}
 
-    fn finish(self) {
-        if self.last.is_some() {
-            eprintln!();
-        }
+/// What `flash` did about booting once the image was committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashBoot {
+    /// BOOT was sent; the device is starting the application.
+    Started,
+    /// Not asked to boot, and the transport holds the device in the bootloader.
+    Skipped,
+    /// Not asked to boot over a transport that cannot hold the device (the QMK
+    /// tunnel): it was reset into the bootloader, whose idle timer then
+    /// returns it to the application on its own.
+    Parked,
+}
+
+/// A device CRC read next to the local image's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrcCheck {
+    pub base: u32,
+    pub len: usize,
+    pub local: u32,
+    pub device: u32,
+}
+
+/// One step of a flow, reported as it happens.
+#[derive(Debug, Clone, Copy)]
+pub enum Event<'a> {
+    /// HELLO answered. Every later event in the flow is about this device.
+    Device(&'a DeviceInfo),
+    /// What `flash` will do — or, on a dry run, would have done.
+    FlashPlanned(&'a FlashPlan),
+    /// What `erase` will do — or, on a dry run, would have done.
+    ErasePlanned {
+        start: u32,
+        end: u64,
+        blocks: u32,
+        block: u32,
+    },
+    /// The flow stopped at its plan; nothing was erased or written.
+    DryRun(Mutation),
+    /// `done` of `total` bytes. Sent once at zero, then after every request.
+    Progress {
+        phase: Phase,
+        done: usize,
+        total: usize,
+    },
+    /// Every WRITE was acknowledged.
+    Written {
+        bytes: usize,
+        elapsed: Duration,
+    },
+    /// COMMIT accepted: the device attested the image and wrote its record.
+    Committed {
+        len: usize,
+        crc: u32,
+    },
+    Verified(Verification),
+    FlashBoot(FlashBoot),
+    /// `verify` is about to read a CRC the device does not vouch for: with no
+    /// FEAT_CRC_LIVE, flash written this power cycle may read back stale.
+    CrcMayBeStale,
+    /// `verify` read the device CRC. Sent before the comparison, so it is seen
+    /// on a mismatch too.
+    CrcRead(CrcCheck),
+    Erased {
+        blocks: u32,
+    },
+    /// `boot` sent BOOT: the device is resetting, into the application or
+    /// (`stay`) back into the bootloader.
+    Reset {
+        stay: bool,
+    },
+    /// `bless` is about to COMMIT an image already in flash.
+    Attesting {
+        base: u32,
+        len: usize,
+        crc: u32,
+    },
+    Blessed,
+}
+
+/// Receives a flow's events, and may stop it.
+pub trait Observer {
+    fn event(&mut self, event: Event<'_>);
+
+    /// Asked before every ERASE and WRITE request and once more before
+    /// COMMIT. Returning true ends the flow there with [`Cancelled`].
+    ///
+    /// It is not asked from COMMIT onwards: a committed image is finished
+    /// work, and BOOT is never something to abandon half-way. Stopping does
+    /// not reset the device — its session stays open and it stays in the
+    /// bootloader, so the caller decides whether to boot it back.
+    fn cancelled(&mut self) -> bool {
+        false
     }
+}
+
+/// Observes nothing and never cancels.
+impl Observer for () {
+    fn event(&mut self, _event: Event<'_>) {}
+}
+
+/// The observer stopped the flow. No COMMIT was sent, so the slot being
+/// written holds a partial image the device will not boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled {
+    pub phase: Phase,
+}
+
+impl fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let during = match self.phase {
+            Phase::Erase => "erasing",
+            Phase::Write => "writing",
+        };
+        write!(f, "cancelled while {during}; no COMMIT was sent")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+fn check_cancelled(observer: &mut dyn Observer, phase: Phase) -> Result<()> {
+    if observer.cancelled() {
+        return Err(Cancelled { phase }.into());
+    }
+    Ok(())
 }
 
 /* --- shared helpers ----------------------------------------------------- */
-
-fn print_device_info(info: &DeviceInfo) {
-    let region_kib = (u64::from(info.app_end) - u64::from(info.app_start)) / 1024;
-    println!("device:");
-    println!(
-        "  protocol        OBP {}.{}",
-        info.proto_major, info.proto_minor
-    );
-    println!(
-        "  bootloader      v{}.{} (0x{:04X})",
-        info.bl_version >> 8,
-        info.bl_version & 0xFF,
-        info.bl_version
-    );
-    println!(
-        "  chip            {} (rev 0x{:02X})",
-        info.family_name(),
-        info.chip_rev
-    );
-    println!("  transport       {}", info.transport_name());
-    println!(
-        "  app region      0x{:08X}..0x{:08X} ({region_kib} KiB)",
-        info.app_start, info.app_end
-    );
-    println!("  erase block     {} B", info.erase_block);
-    println!(
-        "  write           page {} B, align {}, max {} B/frame",
-        info.write_page, info.write_align, info.max_write_data
-    );
-    println!("  features        {}", info.feature_names());
-    println!("  uid             {}", info.uid_hex());
-    println!(
-        "  slots           {} (active {}, writing {})",
-        info.slot_count,
-        DeviceInfo::slot_name(info.active_slot),
-        DeviceInfo::slot_name(info.write_slot)
-    );
-    if info.write_capacity == 0 {
-        println!("  write window    none — this slot does not fit the silicon");
-    } else {
-        println!(
-            "  write window    0x{:08X}..0x{:08X} ({} KiB)",
-            info.write_base,
-            u64::from(info.write_base) + u64::from(info.write_capacity),
-            info.write_capacity / 1024
-        );
-    }
-    if let Some(w) = info.variant_mismatch() {
-        eprintln!("WARNING: {w}");
-    }
-}
-
-fn print_device_brief(info: &DeviceInfo) {
-    println!(
-        "device: {} rev 0x{:02X}, bootloader v{}.{}, uid {}",
-        info.family_name(),
-        info.chip_rev,
-        info.bl_version >> 8,
-        info.bl_version & 0xFF,
-        info.uid_hex()
-    );
-    println!(
-        "        app 0x{:08X}..0x{:08X}, erase block {} B, features {}",
-        info.app_start,
-        info.app_end,
-        info.erase_block,
-        info.feature_names()
-    );
-    println!(
-        "        active slot {}, writing slot {} at 0x{:08X}",
-        DeviceInfo::slot_name(info.active_slot),
-        DeviceInfo::slot_name(info.write_slot),
-        info.write_base
-    );
-    if let Some(w) = info.variant_mismatch() {
-        eprintln!("WARNING: {w}");
-    }
-}
 
 /// `[base, base+len)` must lie inside the device-reported app region.
 fn check_in_region(info: &DeviceInfo, base: u32, len: usize) -> Result<()> {
@@ -241,13 +293,24 @@ fn write_chunk_len(info: &DeviceInfo) -> usize {
     usize::from(info.max_write_data)
 }
 
-fn erase_region(client: &mut BootClient, start: u32, total: u32, block: u32) -> Result<()> {
+fn erase_region(
+    client: &mut BootClient,
+    start: u32,
+    total: u32,
+    block: u32,
+    observer: &mut dyn Observer,
+) -> Result<()> {
     let blocks_per_chunk = (ERASE_CHUNK / block).max(1);
     let chunk_len = blocks_per_chunk * block;
-    let mut progress = Progress::new("erase", total as usize);
+    let progress = |done: u32| Event::Progress {
+        phase: Phase::Erase,
+        done: done as usize,
+        total: total as usize,
+    };
     let mut done = 0u32;
-    progress.update(0);
+    observer.event(progress(0));
     while done < total {
+        check_cancelled(observer, Phase::Erase)?;
         let addr = start + done;
         let len = chunk_len.min(total - done);
         let blocks = len.div_ceil(block);
@@ -255,9 +318,8 @@ fn erase_region(client: &mut BootClient, start: u32, total: u32, block: u32) -> 
             .erase(addr, len, blocks)
             .with_context(|| format!("ERASE @ 0x{addr:08X} (+{len} B)"))?;
         done += len;
-        progress.update(done as usize);
+        observer.event(progress(done));
     }
-    progress.finish();
     Ok(())
 }
 
@@ -266,10 +328,10 @@ fn read_device_crc(client: &mut BootClient, addr: u32, len: u32) -> Result<u32> 
 }
 
 /// COMMIT rejections with E_VERIFY:mismatch mean "flash content does not
-/// match the attested CRC" — surface them as a VerifyMismatch, which
-/// `main` maps to exit code 2. VerifyMismatch must remain the anyhow error
-/// OBJECT (not a `#[source]` of one): anyhow's downcast sees through
-/// .context() layers but not through a nested source chain.
+/// match the attested CRC" — surface them as a VerifyMismatch, which the CLI
+/// maps to exit code 2. VerifyMismatch must remain the anyhow error OBJECT
+/// (not a `#[source]` of one): anyhow's downcast sees through .context()
+/// layers but not through a nested source chain.
 fn map_commit_mismatch(e: ClientError, local_crc: u32) -> anyhow::Error {
     match &e {
         ClientError::Device { source, .. }
@@ -296,16 +358,14 @@ fn boot_device(client: &mut BootClient, mode: BootMode) -> Result<()> {
 
 /* --- flows --------------------------------------------------------------- */
 
-/// HELLO and pretty-print the device info.
-pub fn probe(transport: &mut dyn Transport) -> Result<()> {
+/// HELLO, and what the device said about itself.
+pub fn probe(transport: &mut dyn Transport) -> Result<DeviceInfo> {
     let mut client = BootClient::new(transport);
-    let info = client.hello()?;
-    print_device_info(&info);
-    Ok(())
+    Ok(client.hello()?)
 }
 
 pub struct FlashOpts {
-    /// Actually erase/write; without it, print the plan and stop (dry run).
+    /// Actually erase/write; without it, stop at the plan (dry run).
     pub force: bool,
     /// Post-COMMIT CRC cross-check (skipped where not FEAT_CRC_LIVE).
     pub verify: bool,
@@ -314,27 +374,28 @@ pub struct FlashOpts {
 }
 
 /// What `flash` intends to do, computed once from the image and the
-/// device's HELLO. Printing it and executing it then read from the same
+/// device's HELLO. Showing it and executing it then read from the same
 /// values — the dry run cannot describe a different operation than the
 /// real run performs.
-struct FlashPlan {
-    len: usize,
-    block: u32,
-    blocks: u32,
-    erase_len: u32,
-    crc: u32,
-    chunk: usize,
-    writes: usize,
-    verify: VerifyPlan,
-    boot: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlashPlan {
+    /// Where the image starts: the device's write base.
+    pub base: u32,
+    pub len: usize,
+    pub block: u32,
+    pub blocks: u32,
+    pub erase_len: u32,
+    pub crc: u32,
+    pub chunk: usize,
+    pub writes: usize,
+    pub verify: VerifyPlan,
+    pub boot: bool,
 }
 
-/// How the flashed image will be checked. `CommitOnly` is not a weaker
-/// choice but a device property: without FEAT_CRC_LIVE a post-write CRC
-/// read may be served from a stale XIP view (CH57x F26), so COMMIT's
-/// stream attestation is the authoritative check.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum VerifyPlan {
+/// How the flashed image will be checked; see [`Verification`] for why
+/// `CommitOnly` is a property of the device and not a shortcut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyPlan {
     Skipped,
     CommitOnly,
     CommitPlusLiveCrc,
@@ -350,6 +411,7 @@ fn plan_flash(info: &DeviceInfo, image: &Image, opts: &FlashOpts) -> Result<Flas
         .context("erase span (image rounded up to whole blocks)")?;
     let chunk = write_chunk_len(info);
     Ok(FlashPlan {
+        base: image.base,
         len,
         block,
         blocks,
@@ -368,75 +430,109 @@ fn plan_flash(info: &DeviceInfo, image: &Image, opts: &FlashOpts) -> Result<Flas
     })
 }
 
-fn print_flash_plan(image: &Image, p: &FlashPlan) {
-    let (len, block, blocks, chunk, writes, crc) =
-        (p.len, p.block, p.blocks, p.chunk, p.writes, p.crc);
-    println!("plan:");
-    println!("  base address    0x{:08X}", image.base);
-    println!("  image length    {len} bytes (0x{len:X}), padded to 4 B");
-    println!(
-        "  erase           {blocks} block{} x {block} B = {} bytes",
-        if blocks == 1 { "" } else { "s" },
-        p.erase_len
-    );
-    println!(
-        "  write           {writes} frame{} x <={chunk} B",
-        if writes == 1 { "" } else { "s" }
-    );
-    println!("  image crc32     0x{crc:08X}");
-    println!(
-        "  verify          {}",
-        match p.verify {
-            VerifyPlan::Skipped => "NO (--no-verify)",
-            VerifyPlan::CommitPlusLiveCrc => "COMMIT attestation + live CRC cross-check",
-            VerifyPlan::CommitOnly => "COMMIT attestation only (no FEAT_CRC_LIVE on this chip)",
-        }
-    );
-    println!(
-        "  boot after      {}",
-        if p.boot { "yes" } else { "NO (--no-boot)" }
-    );
+/// A flash that has been checked against a live device and not yet started:
+/// the device that answered, the image chosen for the slot it offered, and
+/// the plan derived from the two. [`execute_flash`] runs exactly this.
+#[derive(Debug, Clone)]
+pub struct FlashJob<'s> {
+    pub info: DeviceInfo,
+    pub image: &'s Image,
+    pub plan: FlashPlan,
 }
 
-fn execute_flash(
+/// What a completed flash did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlashDone {
+    pub verification: Verification,
+    pub boot: FlashBoot,
+}
+
+/// The result of [`flash`]. `done` is `None` on a dry run.
+#[derive(Debug, Clone)]
+pub struct FlashReport {
+    pub info: DeviceInfo,
+    pub plan: FlashPlan,
+    pub done: Option<FlashDone>,
+}
+
+/// HELLO, choose the image for the slot the device offers, and check that it
+/// fits. Erases and writes nothing — but a successful HELLO does open a
+/// session, which stops the bootloader's idle auto-boot until the device is
+/// booted or reset.
+///
+/// `client` must be the one later handed to [`execute_flash`]: a second HELLO
+/// in between would restart the device's session.
+pub fn prepare_flash<'s>(
     client: &mut BootClient,
-    info: &DeviceInfo,
-    image: &Image,
-    p: &FlashPlan,
-) -> Result<()> {
+    source: &'s Source,
+    opts: &FlashOpts,
+    observer: &mut dyn Observer,
+) -> Result<FlashJob<'s>> {
+    let info = client.hello()?;
+    observer.event(Event::Device(&info));
+
+    // Which build to send is the device's answer, not the operator's: it
+    // names the slot it will write, and an application only runs at the base
+    // it was linked for.
+    source.check_family(info.chip_family, &info.family_name())?;
+    let image = source.for_base(info.write_base, "device write")?;
+
+    let plan = plan_flash(&info, image, opts)?;
+    observer.event(Event::FlashPlanned(&plan));
+    Ok(FlashJob { info, image, plan })
+}
+
+/// Chunked ERASE -> sequential WRITEs -> COMMIT -> optional CRC cross-check
+/// -> BOOT, exactly as `job` planned it.
+pub fn execute_flash(
+    client: &mut BootClient,
+    job: &FlashJob,
+    observer: &mut dyn Observer,
+) -> Result<FlashDone> {
+    let (image, p) = (job.image, &job.plan);
+
     // ERASE. The device invalidates the boot record before the session's
     // first mutation, so an interrupted update stays in the bootloader.
-    erase_region(client, image.base, p.erase_len, p.block)?;
+    erase_region(client, image.base, p.erase_len, p.block, observer)?;
 
     // WRITE, sequentially from base (required for the CH57x stream CRC).
     let started = Instant::now();
-    let mut progress = Progress::new("write", p.len);
-    progress.update(0);
+    let progress = |done: usize| Event::Progress {
+        phase: Phase::Write,
+        done,
+        total: p.len,
+    };
+    observer.event(progress(0));
     let mut off = 0usize;
     while off < p.len {
+        check_cancelled(observer, Phase::Write)?;
         let end = (off + p.chunk).min(p.len);
         let addr = image.base + off as u32;
         client
             .write(addr, &image.bytes[off..end])
             .with_context(|| format!("WRITE @ 0x{addr:08X}"))?;
         off = end;
-        progress.update(off);
+        observer.event(progress(off));
     }
-    progress.finish();
-    println!(
-        "wrote {} bytes in {:.2} s",
-        p.len,
-        started.elapsed().as_secs_f64()
-    );
+    observer.event(Event::Written {
+        bytes: p.len,
+        elapsed: started.elapsed(),
+    });
+
+    // The last point at which stopping leaves nothing committed.
+    check_cancelled(observer, Phase::Write)?;
 
     // COMMIT: the device checks the image CRC (stream CRC on CH57x, direct
     // flash CRC on CH59x) and writes the boot record on match.
     if let Err(e) = client.commit(p.len as u32, p.crc) {
         return Err(map_commit_mismatch(e, p.crc));
     }
-    println!("commit OK (len {}, crc32 0x{:08X})", p.len, p.crc);
+    observer.event(Event::Committed {
+        len: p.len,
+        crc: p.crc,
+    });
 
-    match p.verify {
+    let verification = match p.verify {
         VerifyPlan::CommitPlusLiveCrc => {
             let device_crc = read_device_crc(client, image.base, p.len as u32)?;
             if device_crc != p.crc {
@@ -446,63 +542,65 @@ fn execute_flash(
                 }
                 .into());
             }
-            println!("verify OK (device crc32 0x{device_crc:08X})");
+            Verification::LiveCrc { device_crc }
         }
-        VerifyPlan::CommitOnly => println!(
-            "verify: no live CRC on {} (XIP may serve stale data this \
-             power cycle); COMMIT already attested the streamed image CRC",
-            info.family_name()
-        ),
-        VerifyPlan::Skipped => {}
-    }
+        VerifyPlan::CommitOnly => Verification::CommitOnly,
+        VerifyPlan::Skipped => Verification::Skipped,
+    };
+    observer.event(Event::Verified(verification));
 
-    if p.boot {
+    let boot = if p.boot {
         boot_device(client, BootMode::App)?;
-        println!("boot: device is starting the application");
+        FlashBoot::Started
     } else if client.holds_in_bootloader() {
-        println!("boot: skipped (--no-boot); device stays in the bootloader");
+        FlashBoot::Skipped
     } else {
         // The tunnel holds the session by disabling the module's idle auto-boot,
         // so leaving it un-booted would strand the keyboard off air. Reset it
         // into the bootloader instead (BOOT --stay): that re-arms its own idle
         // timer, so it comes back on its own, and the app is never launched here.
         boot_device(client, BootMode::Stay)?;
-        println!(
-            "boot: --no-boot over the QMK tunnel resets the module into the \
-             bootloader; it re-arms auto-boot and returns on its own"
-        );
-    }
-    Ok(())
+        FlashBoot::Parked
+    };
+    observer.event(Event::FlashBoot(boot));
+
+    Ok(FlashDone { verification, boot })
 }
 
 /// Full flash flow: HELLO -> bounds check -> plan (dry run unless forced)
 /// -> chunked ERASE -> sequential WRITEs -> COMMIT -> optional CRC
 /// cross-check -> BOOT.
-pub fn flash(transport: &mut dyn Transport, source: &Source, opts: &FlashOpts) -> Result<()> {
+pub fn flash(
+    transport: &mut dyn Transport,
+    source: &Source,
+    opts: &FlashOpts,
+    observer: &mut dyn Observer,
+) -> Result<FlashReport> {
     let mut client = BootClient::new(transport);
-    let info = client.hello()?;
-    print_device_brief(&info);
-
-    // Which build to send is the device's answer, not the operator's: it
-    // names the slot it will write, and an application only runs at the base
-    // it was linked for.
-    source.check_family(info.chip_family, &info.family_name())?;
-    let image = source.for_base(info.write_base, "device write")?;
-
-    let plan = plan_flash(&info, image, opts)?;
-    print_flash_plan(image, &plan);
-    if !opts.force {
-        println!("\n(dry run — pass --force to actually erase and write)");
-        return Ok(());
-    }
-    execute_flash(&mut client, &info, image, &plan)
+    let job = prepare_flash(&mut client, source, opts, observer)?;
+    let done = if opts.force {
+        Some(execute_flash(&mut client, &job, observer)?)
+    } else {
+        observer.event(Event::DryRun(Mutation::Flash));
+        None
+    };
+    Ok(FlashReport {
+        info: job.info,
+        plan: job.plan,
+        done,
+    })
 }
 
 /// Read-only comparison: device CRC over `[base, base+len)` vs local image.
-pub fn verify(transport: &mut dyn Transport, source: &Source) -> Result<()> {
+/// A difference is an `Err` carrying [`VerifyMismatch`].
+pub fn verify(
+    transport: &mut dyn Transport,
+    source: &Source,
+    observer: &mut dyn Observer,
+) -> Result<CrcCheck> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
-    print_device_brief(&info);
+    observer.event(Event::Device(&info));
     source.check_family(info.chip_family, &info.family_name())?;
     // Verify checks what the device is RUNNING, which is never the slot it
     // offers to write.
@@ -510,21 +608,18 @@ pub fn verify(transport: &mut dyn Transport, source: &Source) -> Result<()> {
     check_in_region(&info, image.base, image.bytes.len())?;
 
     if !info.crc_live() {
-        eprintln!(
-            "note: {} has no FEAT_CRC_LIVE — CRC over flash written this \
-             power cycle may read stale data (F26); the result is \
-             authoritative after a power cycle",
-            info.family_name()
-        );
+        observer.event(Event::CrcMayBeStale);
     }
     let len = image.bytes.len();
     let local = image.crc32();
     let device = read_device_crc(&mut client, image.base, len as u32)?;
-    println!(
-        "local  crc32 0x{local:08X} ({len} B @ 0x{:08X})",
-        image.base
-    );
-    println!("device crc32 0x{device:08X}");
+    let check = CrcCheck {
+        base: image.base,
+        len,
+        local,
+        device,
+    };
+    observer.event(Event::CrcRead(check));
     if device != local {
         return Err(VerifyMismatch {
             local_crc: local,
@@ -532,11 +627,19 @@ pub fn verify(transport: &mut dyn Transport, source: &Source) -> Result<()> {
         }
         .into());
     }
-    println!("verify OK");
-    Ok(())
+    Ok(check)
 }
 
-/// Erase `--all` (whole app region) or an explicit block-aligned range.
+/// What [`erase`] covered. `erased` is false on a dry run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EraseReport {
+    pub start: u32,
+    pub len: u32,
+    pub blocks: u32,
+    pub erased: bool,
+}
+
+/// Erase `all` (the whole writable slot) or an explicit block-aligned range.
 /// Dry run unless forced.
 pub fn erase(
     transport: &mut dyn Transport,
@@ -544,10 +647,11 @@ pub fn erase(
     start: Option<u32>,
     length: Option<u32>,
     force: bool,
-) -> Result<()> {
+    observer: &mut dyn Observer,
+) -> Result<EraseReport> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
-    print_device_brief(&info);
+    observer.event(Event::Device(&info));
 
     let (start, len) = if all {
         let (wbase, wend) = write_window(&info)?;
@@ -579,44 +683,47 @@ pub fn erase(
     }
 
     let blocks = len / block;
-    println!("plan:");
-    println!(
-        "  erase           0x{start:08X}..0x{end:08X} ({blocks} block{} x {block} B)",
-        if blocks == 1 { "" } else { "s" }
-    );
-    println!(
-        "  note: the first erase invalidates the boot record; the device \
-         stays in the bootloader until a new image is committed"
-    );
+    observer.event(Event::ErasePlanned {
+        start,
+        end,
+        blocks,
+        block,
+    });
+    let report = |erased| EraseReport {
+        start,
+        len,
+        blocks,
+        erased,
+    };
     if !force {
-        println!("\n(dry run — pass --force to actually erase)");
-        return Ok(());
+        observer.event(Event::DryRun(Mutation::Erase));
+        return Ok(report(false));
     }
-    erase_region(&mut client, start, len, block)?;
-    println!("erase OK ({blocks} blocks)");
-    Ok(())
+    erase_region(&mut client, start, len, block, observer)?;
+    observer.event(Event::Erased { blocks });
+    Ok(report(true))
 }
 
-/// BOOT the app (mode 0) or reset staying in the bootloader (`--stay`).
-pub fn boot(transport: &mut dyn Transport, stay: bool) -> Result<()> {
+/// BOOT the app (mode 0) or reset staying in the bootloader (`stay`).
+pub fn boot(transport: &mut dyn Transport, stay: bool, observer: &mut dyn Observer) -> Result<()> {
     let mut client = BootClient::new(transport);
     let _info = client.hello()?; // BOOT requires a session (E_STATE otherwise)
     let mode = if stay { BootMode::Stay } else { BootMode::App };
     boot_device(&mut client, mode)?;
-    if stay {
-        println!("device is resetting and staying in the bootloader");
-    } else {
-        println!("device is booting the application");
-    }
+    observer.event(Event::Reset { stay });
     Ok(())
 }
 
 /// Zero-write COMMIT for images already in flash (e.g. SWD-flashed dev
 /// builds): the device CRCs flash directly and writes the boot record.
-pub fn bless(transport: &mut dyn Transport, source: &Source) -> Result<()> {
+pub fn bless(
+    transport: &mut dyn Transport,
+    source: &Source,
+    observer: &mut dyn Observer,
+) -> Result<()> {
     let mut client = BootClient::new(transport);
     let info = client.hello()?;
-    print_device_brief(&info);
+    observer.event(Event::Device(&info));
     source.check_family(info.chip_family, &info.family_name())?;
     // Bless attests an image already in flash at the base COMMIT will read
     // from, which is the write slot - same selection rule as flash.
@@ -625,14 +732,15 @@ pub fn bless(transport: &mut dyn Transport, source: &Source) -> Result<()> {
 
     let len = image.bytes.len();
     let crc = image.crc32();
-    println!(
-        "bless: attesting {len} B @ 0x{:08X}, crc32 0x{crc:08X} (no erase/write)",
-        image.base
-    );
+    observer.event(Event::Attesting {
+        base: image.base,
+        len,
+        crc,
+    });
     if let Err(e) = client.commit(len as u32, crc) {
         return Err(map_commit_mismatch(e, crc));
     }
-    println!("bless OK — boot record written");
+    observer.event(Event::Blessed);
     Ok(())
 }
 

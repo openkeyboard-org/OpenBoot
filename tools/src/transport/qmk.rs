@@ -9,9 +9,11 @@
 //!
 //! Report layout, both directions, 64 bytes:
 //!
-//!     byte 0   tag   0x00 control, 0x01 byte stream
-//!     byte 1   len   payload length, 0..62
-//!     byte 2.. payload
+//! ```text
+//! byte 0   tag   0x00 control, 0x01 byte stream
+//! byte 1   len   payload length, 0..62
+//! byte 2.. payload
+//! ```
 //!
 //! The tag byte is what lets a control response interleave into the stream on
 //! the same endpoint without in-band escaping.
@@ -113,6 +115,9 @@ pub struct QmkOpts {
     /// How long the keyboard has to answer ENTER and reach settling.
     pub enter_ack_timeout: Duration,
     pub status_poll: Duration,
+    /// Told what the handshake is doing when that is worth a line to the
+    /// operator and is not an error. Silent by default; the CLI prints it.
+    pub notice: fn(&str),
 }
 
 impl Default for QmkOpts {
@@ -125,6 +130,7 @@ impl Default for QmkOpts {
             enter_deadline: Duration::from_millis(7000),
             enter_ack_timeout: Duration::from_millis(1500),
             status_poll: Duration::from_millis(50),
+            notice: |_| {},
         }
     }
 }
@@ -349,9 +355,9 @@ impl QmkTransport {
             match self.enter(false, opts) {
                 Ok(t) => t,
                 Err(EnterError::NoAck) => {
-                    eprintln!(
+                    (opts.notice)(
                         "the module did not acknowledge; retrying on the \
-                         assumption that it is already in the bootloader"
+                         assumption that it is already in the bootloader",
                     );
                     self.enter(true, opts).map_err(|e| match e {
                         EnterError::NoAck => anyhow!(
@@ -522,37 +528,103 @@ impl Transport for QmkTransport {
     fn recv_frame(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>> {
         framing::recv_sof_frame(self, deadline)
     }
+
+    fn close(&mut self) -> Result<()> {
+        self.teardown()
+    }
 }
 
-impl Drop for QmkTransport {
+/// What a reply to BOOT says went wrong, if it is a reply to BOOT and says
+/// so. Anything else — nothing, noise from a module mid-reset, an answer to
+/// some earlier request — is not a refusal.
+fn boot_refusal(frame: &[u8]) -> Option<String> {
+    let reply = Frame::decode(frame).ok()?;
+    if reply.cmd != OB_CMD_BOOT | proto::consts::OB_CMD_RESP_BIT {
+        return None;
+    }
+    let status = *reply.payload.first()?;
+    (status != proto::consts::OB_OK)
+        .then(|| proto::describe_status(status, reply.payload.get(1).copied()))
+}
+
+impl QmkTransport {
+    /// Put the module back and hand the keyboard back, once. Both steps are
+    /// always attempted; the first failure is what is returned.
+    ///
     /// Opening this transport takes the keyboard off air, and a successful
     /// HELLO has by then disabled the bootloader's ten second auto-boot. So
     /// every exit path — including a read-only probe, a refused dry run, or an
     /// error anywhere in a flow — has to put the module back.
-    fn drop(&mut self) {
-        // Never opened the tunnel: nothing was taken off air, nothing to undo.
+    fn teardown(&mut self) -> Result<()> {
+        // Never opened the tunnel, or already closed: nothing was taken off
+        // air that is still ours to undo.
         if !self.passthrough {
-            return;
+            return Ok(());
         }
+        self.passthrough = false;
 
         // Launch the app only when a HELLO confirmed the module is in the
         // bootloader with its idle auto-boot disabled — then it will not return
         // on its own. If the probe never landed (entered == false) the module
         // still has a live idle timer, so leave it: OP_EXIT below hands the
         // keyboard back, and the module auto-boots itself.
+        let mut boot = Ok(());
         if self.entered && !self.booted {
             let frame = Frame::new(OB_CMD_BOOT, 0xF0, proto::boot_req_payload(OB_BOOT_APP));
-            let _ = self.send_frame(&frame.encode());
+            boot = self
+                .send_frame(&frame.encode())
+                .context("could not send BOOT to relaunch the module's application");
             // BOOT's answer may legitimately never arrive: the device resets.
-            let _ = self.recv_frame(Instant::now() + Duration::from_millis(400));
+            // One that does arrive and says no is different. The bootloader
+            // refuses when it has nothing it can start, and then it has NOT
+            // reset: the module is still in its bootloader, and reporting a
+            // clean close would say the keyboard is back on the air.
+            let reply = self.recv_frame(Instant::now() + Duration::from_millis(400));
+            if boot.is_ok() {
+                if let Some(refusal) = reply.ok().flatten().and_then(|f| boot_refusal(&f)) {
+                    boot = Err(anyhow!(
+                        "the module refused to start its application: {refusal};                          it is still in its bootloader"
+                    ));
+                }
+            }
         }
 
         // The keyboard answers this from its own state machine, so it does not
         // depend on a module that is mid-reset and emitting noise. Reaching it
         // on every passthrough exit — success or a failed probe — is what keeps
         // the keyboard from waiting out the bridge's watchdog to come back.
-        let _ = self.write_control(OP_EXIT, &[]);
-        let _ = self.read_control(Instant::now() + Duration::from_millis(200));
+        let exit = self.exit_passthrough();
+        boot.and(exit)
+    }
+
+    fn exit_passthrough(&mut self) -> Result<()> {
+        self.write_control(OP_EXIT, &[])
+            .context("could not tell the keyboard to leave the tunnel")?;
+        let until = Instant::now() + Duration::from_millis(200);
+        while let Some(payload) = self.read_control(until)? {
+            if payload[0] != OP_EXIT {
+                continue; // a late answer to something else
+            }
+            return match payload.get(1) {
+                None | Some(&OBB_OK) => Ok(()),
+                Some(&status) => Err(anyhow!(
+                    "the keyboard refused to leave the tunnel: {}",
+                    describe_bridge_status(status)
+                )),
+            };
+        }
+        bail!(
+            "the keyboard did not confirm leaving the tunnel; it comes back \
+             on its own once the bridge's watchdog fires, about ten seconds on"
+        )
+    }
+}
+
+impl Drop for QmkTransport {
+    /// The fallback for a transport nobody closed: the same teardown, with
+    /// nowhere to report a failure. Call [`Transport::close`] to learn of one.
+    fn drop(&mut self) {
+        let _ = self.teardown();
     }
 }
 
@@ -573,6 +645,7 @@ mod tests {
             enter_deadline: Duration::from_millis(300),
             enter_ack_timeout: Duration::from_millis(300),
             status_poll: Duration::from_millis(1),
+            notice: |_| {},
         }
     }
 
@@ -1078,6 +1151,104 @@ mod tests {
             .map(|f| f[4])
             .collect();
         assert_eq!(boots, vec![1], "the teardown must not add a second BOOT");
+    }
+
+    /// `close` is the same teardown with its outcome reported, and it leaves
+    /// nothing for `Drop` to repeat.
+    #[test]
+    fn closing_tears_down_once_and_reports_success() {
+        let link = happy_link(ST_IDLE);
+        let mut t = open(&link).expect("handshake should succeed");
+        t.close()
+            .expect("a keyboard that acknowledges EXIT closes cleanly");
+
+        let after_close = link.written().len();
+        let boots = link
+            .sent_frames()
+            .iter()
+            .filter(|f| f[0] == OB_CMD_BOOT)
+            .count();
+        assert_eq!(boots, 1, "close should send exactly one BOOT");
+        assert_eq!(*link.control_ops().last().unwrap(), OP_EXIT);
+
+        t.close().expect("a second close is a no-op");
+        drop(t);
+        assert_eq!(
+            link.written().len(),
+            after_close,
+            "nothing may be sent after the first close"
+        );
+    }
+
+    /// A module with nothing it can start refuses BOOT and stays in its
+    /// bootloader. The keyboard still acknowledges EXIT, so without reading
+    /// BOOT's reply the close would look clean.
+    #[test]
+    fn closing_reports_a_module_that_refused_to_boot() {
+        let link = happy_link(ST_IDLE);
+        let mut t = open(&link).expect("handshake should succeed");
+        link.on_write(|report| {
+            if report[0] == TAG_CONTROL {
+                return match report[2] {
+                    OP_EXIT => vec![control(OP_EXIT, &[OBB_OK])],
+                    _ => vec![],
+                };
+            }
+            let frame = &report[2..2 + usize::from(report[1])];
+            if frame.len() > 4 && frame[2] == OB_CMD_BOOT {
+                let refusal = Frame::new(
+                    OB_CMD_BOOT | OB_CMD_RESP_BIT,
+                    frame[3],
+                    vec![crate::proto::consts::OB_E_VERIFY, 0],
+                );
+                return stream_reports(&framing::encode_sof(&refusal.encode()));
+            }
+            vec![]
+        });
+
+        let err = t.close().expect_err("a refused BOOT is not a clean close");
+        assert!(
+            format!("{err:#}").contains("refused to start its application"),
+            "unhelpful error: {err:#}"
+        );
+        assert_eq!(
+            *link.control_ops().last().unwrap(),
+            OP_EXIT,
+            "the keyboard is handed back all the same"
+        );
+    }
+
+    /// An acknowledged BOOT, or any other frame turning up in its place, is
+    /// not a refusal.
+    #[test]
+    fn only_a_reply_to_boot_that_says_no_counts_as_a_refusal() {
+        let reply = |cmd, payload: Vec<u8>| Frame::new(cmd, 0xF0, payload).encode();
+        let boot = OB_CMD_BOOT | OB_CMD_RESP_BIT;
+        assert!(boot_refusal(&reply(boot, vec![OB_OK])).is_none());
+        assert!(boot_refusal(&reply(OB_CMD_HELLO | OB_CMD_RESP_BIT, vec![0x09, 0])).is_none());
+        assert!(boot_refusal(&[0xFF, 0x00]).is_none(), "noise");
+        assert!(boot_refusal(&reply(boot, vec![])).is_none());
+        let said = boot_refusal(&reply(boot, vec![crate::proto::consts::OB_E_VERIFY, 0])).unwrap();
+        assert!(said.contains("E_VERIFY"), "{said}");
+    }
+
+    /// A keyboard that never acknowledges EXIT may still be off air; `close`
+    /// has to say so, where `Drop` could only stay silent.
+    #[test]
+    fn closing_reports_a_keyboard_that_never_confirms() {
+        let link = happy_link(ST_IDLE);
+        let mut t = open(&link).expect("handshake should succeed");
+        link.on_write(|_| vec![]); // from here the keyboard answers nothing
+
+        let err = t.close().expect_err("an unconfirmed EXIT is a failure");
+        assert!(
+            format!("{err:#}").contains("did not confirm"),
+            "unhelpful error: {err:#}"
+        );
+        assert!(
+            link.control_ops().contains(&OP_EXIT),
+            "EXIT must still have been sent"
+        );
     }
 
     #[test]

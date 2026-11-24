@@ -55,6 +55,7 @@ fn happy_flash_flow() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap();
 
@@ -91,6 +92,7 @@ fn dry_run_sends_only_hello() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap();
     assert_eq!(mock.log.len(), 1);
@@ -113,6 +115,7 @@ fn e_not_erased_propagates_without_retry() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(
@@ -138,7 +141,7 @@ fn verify_mismatch_error_downcasts_for_exit_code_2() {
         vec![ok_resp(req, p)]
     });
 
-    let err = verify(&mut mock, &Source::Single(image.clone())).unwrap_err();
+    let err = verify(&mut mock, &Source::Single(image.clone()), &mut ()).unwrap_err();
     let mismatch = err
         .downcast_ref::<VerifyMismatch>()
         .expect("verify mismatch must downcast for the exit-code-2 path");
@@ -153,7 +156,7 @@ fn commit_mismatch_maps_to_verify_mismatch() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     mock.expect(|req| vec![status_err(req, OB_E_VERIFY, OB_DET_VERIFY_MISMATCH)]);
 
-    let err = bless(&mut mock, &Source::Single(image.clone())).unwrap_err();
+    let err = bless(&mut mock, &Source::Single(image.clone()), &mut ()).unwrap_err();
     let mismatch = err.downcast_ref::<VerifyMismatch>().expect("must downcast");
     assert_eq!(mismatch.device_crc, None);
     assert_eq!(mismatch.local_crc, image.crc32());
@@ -165,7 +168,7 @@ fn boot_is_never_retried() {
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
     mock.expect(|_req| Vec::new()); // BOOT: no response
 
-    let err = boot(&mut mock, false).unwrap_err();
+    let err = boot(&mut mock, false, &mut ()).unwrap_err();
     assert_eq!(
         mock.sent(OB_CMD_BOOT).len(),
         1,
@@ -193,6 +196,7 @@ fn oversize_image_rejected_before_any_mutation() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(
@@ -221,6 +225,7 @@ fn oversized_device_write_limit_rejected_before_any_mutation() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(format!("{err:#}").contains("protocol maximum"), "{err:#}");
@@ -243,6 +248,7 @@ fn offset_base_rejected_for_flash() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(format!("{err:#}").contains("write base"), "got: {err:#}");
@@ -263,7 +269,7 @@ fn verify_allows_offset_base_within_region() {
         p.extend_from_slice(&crc.to_le_bytes());
         vec![ok_resp(req, p)]
     });
-    verify(&mut mock, &Source::Single(image.clone())).unwrap();
+    verify(&mut mock, &Source::Single(image.clone()), &mut ()).unwrap();
 }
 
 #[test]
@@ -282,7 +288,7 @@ fn erase_all_is_chunked_at_32_kib() {
             vec![status_ok(req)]
         });
     }
-    erase(&mut mock, true, None, None, true).unwrap();
+    erase(&mut mock, true, None, None, true, &mut ()).unwrap();
 
     let erases = mock.sent(OB_CMD_ERASE);
     assert_eq!(erases.len(), 7);
@@ -292,7 +298,7 @@ fn erase_all_is_chunked_at_32_kib() {
 fn erase_requires_force() {
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
-    erase(&mut mock, true, None, None, false).unwrap();
+    erase(&mut mock, true, None, None, false, &mut ()).unwrap();
     assert_eq!(mock.log.len(), 1, "dry run must not send ERASE");
 }
 
@@ -301,14 +307,14 @@ fn erase_range_validation() {
     // Misaligned start.
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
-    let err = erase(&mut mock, false, Some(0x1800), Some(0x1000), true).unwrap_err();
+    let err = erase(&mut mock, false, Some(0x1800), Some(0x1000), true, &mut ()).unwrap_err();
     assert!(format!("{err:#}").contains("aligned"), "got: {err:#}");
 
     // Inside the app region but past the writable slot: the active slot is
     // not addressable, which is the point of bounding erase by the slot.
     let mut mock = MockTransport::new();
     expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
-    let err = erase(&mut mock, false, Some(0x39000), Some(0x2000), true).unwrap_err();
+    let err = erase(&mut mock, false, Some(0x39000), Some(0x2000), true, &mut ()).unwrap_err();
     assert!(
         format!("{err:#}").contains("outside the device's writable slot A"),
         "got: {err:#}"
@@ -338,6 +344,7 @@ fn flash_skips_live_crc_when_feature_clear() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap();
     assert!(
@@ -395,6 +402,7 @@ fn flash_targets_the_slot_the_device_names() {
             verify: true,
             boot: true,
         },
+        &mut (),
     )
     .unwrap();
 }
@@ -418,6 +426,7 @@ fn an_image_for_the_running_slot_is_rejected() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -449,6 +458,7 @@ fn a_slot_that_does_not_fit_the_silicon_is_named_as_such() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(
@@ -519,6 +529,7 @@ fn a_bundle_flashes_the_variant_the_device_asks_for() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap();
 }
@@ -547,6 +558,7 @@ fn the_same_bundle_flashes_slot_a_when_that_is_the_target() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap();
 }
@@ -563,6 +575,7 @@ fn a_bundle_for_another_part_never_reaches_the_wire() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap_err();
     assert!(
@@ -596,6 +609,7 @@ fn a_bundle_missing_the_target_slot_says_what_it_has() {
             verify: false,
             boot: false,
         },
+        &mut (),
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -616,5 +630,231 @@ fn verify_checks_the_running_slot_not_the_write_target() {
         p.extend_from_slice(&crc32fast::hash(&[0xAAu8; 48]).to_le_bytes());
         vec![ok_resp(req, p)]
     });
-    verify(&mut mock, &bundle_ab(OB_FAMILY_CH592)).unwrap();
+    verify(&mut mock, &bundle_ab(OB_FAMILY_CH592), &mut ()).unwrap();
+}
+
+/* --- observing and cancelling ------------------------------------------- */
+
+/// Records what a flow reports, and asks it to stop once `stop_when` says so.
+struct Recorder<F: FnMut(&[String]) -> bool> {
+    seen: Vec<String>,
+    stop_when: F,
+}
+
+impl<F: FnMut(&[String]) -> bool> Recorder<F> {
+    fn new(stop_when: F) -> Self {
+        Recorder {
+            seen: Vec::new(),
+            stop_when,
+        }
+    }
+}
+
+impl<F: FnMut(&[String]) -> bool> Observer for Recorder<F> {
+    fn event(&mut self, event: Event<'_>) {
+        self.seen.push(match event {
+            Event::Device(_) => "device".to_string(),
+            Event::FlashPlanned(_) => "plan".to_string(),
+            Event::Progress { phase, done, total } => format!("{phase:?} {done}/{total}"),
+            Event::Written { bytes, .. } => format!("written {bytes}"),
+            Event::Committed { .. } => "committed".to_string(),
+            other => format!("{other:?}"),
+        });
+    }
+
+    fn cancelled(&mut self) -> bool {
+        (self.stop_when)(&self.seen)
+    }
+}
+
+/// HELLO, then OK to an ERASE and `writes` WRITE frames, and nothing further
+/// scripted: any request past those panics the mock.
+fn device_accepting(writes: usize) -> MockTransport {
+    let mut mock = MockTransport::new();
+    expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
+    for _ in 0..1 + writes {
+        mock.expect(|req| vec![status_ok(req)]);
+    }
+    mock
+}
+
+const FORCED: FlashOpts = FlashOpts {
+    force: true,
+    verify: true,
+    boot: true,
+};
+
+#[test]
+fn a_flash_reports_each_step_in_order_and_what_it_did() {
+    let image = test_image(100);
+    let crc = image.crc32();
+    let mut mock = device_accepting(3);
+    mock.expect(|req| vec![status_ok(req)]); // COMMIT
+    mock.expect(move |req| {
+        let mut p = vec![OB_OK];
+        p.extend_from_slice(&crc.to_le_bytes());
+        vec![ok_resp(req, p)]
+    });
+    mock.expect(|req| vec![status_ok(req)]); // BOOT
+
+    let mut rec = Recorder::new(|_| false);
+    let report = flash(&mut mock, &Source::Single(image), &FORCED, &mut rec).unwrap();
+
+    assert_eq!(
+        rec.seen,
+        vec![
+            "device",
+            "plan",
+            "Erase 0/4096",
+            "Erase 4096/4096",
+            "Write 0/100",
+            "Write 48/100",
+            "Write 96/100",
+            "Write 100/100",
+            "written 100",
+            "committed",
+            &format!("Verified(LiveCrc {{ device_crc: {crc} }})"),
+            "FlashBoot(Started)",
+        ]
+    );
+    assert_eq!(report.plan.base, 0x2000);
+    assert_eq!(report.plan.writes, 3);
+    assert_eq!(report.info.uid, 0x0123_4567_89AB_CDEF);
+    assert_eq!(
+        report.done,
+        Some(FlashDone {
+            verification: Verification::LiveCrc { device_crc: crc },
+            boot: FlashBoot::Started,
+        })
+    );
+}
+
+#[test]
+fn a_dry_run_reports_the_plan_and_that_nothing_was_done() {
+    let mut mock = MockTransport::new();
+    expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
+    let mut rec = Recorder::new(|_| false);
+    let opts = FlashOpts {
+        force: false,
+        ..FORCED
+    };
+    let report = flash(&mut mock, &Source::Single(test_image(100)), &opts, &mut rec).unwrap();
+    assert_eq!(rec.seen, vec!["device", "plan", "DryRun(Flash)"]);
+    assert_eq!(report.done, None);
+}
+
+#[test]
+fn a_device_without_live_crc_is_reported_as_commit_only_not_as_verified() {
+    let mut mock = MockTransport::new();
+    expect_hello(&mut mock, 0, 0x3B000);
+    for _ in 0..4 {
+        mock.expect(|req| vec![status_ok(req)]); // ERASE, WRITE, COMMIT, BOOT
+    }
+    let report = flash(&mut mock, &Source::Single(test_image(16)), &FORCED, &mut ()).unwrap();
+    assert_eq!(report.plan.verify, VerifyPlan::CommitOnly);
+    assert_eq!(report.done.unwrap().verification, Verification::CommitOnly);
+}
+
+#[test]
+fn cancelling_before_the_first_erase_sends_nothing_after_hello() {
+    let mut mock = MockTransport::new();
+    expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
+    let mut rec = Recorder::new(|_| true);
+    let err = flash(
+        &mut mock,
+        &Source::Single(test_image(100)),
+        &FORCED,
+        &mut rec,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<Cancelled>(),
+        Some(&Cancelled {
+            phase: Phase::Erase
+        })
+    );
+    assert_eq!(mock.log.len(), 1, "only HELLO may have been sent");
+}
+
+#[test]
+fn cancelling_mid_write_stops_there_and_never_commits() {
+    let mut mock = device_accepting(1);
+    let mut rec = Recorder::new(|seen| seen.iter().any(|e| e == "Write 48/100"));
+    let err = flash(
+        &mut mock,
+        &Source::Single(test_image(100)),
+        &FORCED,
+        &mut rec,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<Cancelled>(),
+        Some(&Cancelled {
+            phase: Phase::Write
+        })
+    );
+    assert_eq!(mock.sent(OB_CMD_WRITE).len(), 1);
+    assert!(
+        mock.sent(OB_CMD_COMMIT).is_empty(),
+        "COMMIT must not be sent"
+    );
+    assert!(mock.sent(OB_CMD_BOOT).is_empty(), "BOOT must not be sent");
+    assert!(format!("{err:#}").contains("no COMMIT was sent"), "{err:#}");
+}
+
+#[test]
+fn cancelling_after_the_last_write_still_stops_before_commit() {
+    let mut mock = device_accepting(3);
+    let mut rec = Recorder::new(|seen| seen.iter().any(|e| e == "written 100"));
+    let err = flash(
+        &mut mock,
+        &Source::Single(test_image(100)),
+        &FORCED,
+        &mut rec,
+    )
+    .unwrap_err();
+    assert!(err.downcast_ref::<Cancelled>().is_some());
+    assert_eq!(mock.sent(OB_CMD_WRITE).len(), 3);
+    assert!(
+        mock.sent(OB_CMD_COMMIT).is_empty(),
+        "COMMIT must not be sent"
+    );
+}
+
+#[test]
+fn a_cancel_that_arrives_after_commit_is_too_late_to_stop_anything() {
+    // Once the image is committed the flow runs to the end: abandoning it
+    // before BOOT would only leave a finished update sitting in the bootloader.
+    let image = test_image(100);
+    let crc = image.crc32();
+    let mut mock = device_accepting(3);
+    mock.expect(|req| vec![status_ok(req)]); // COMMIT
+    mock.expect(move |req| {
+        let mut p = vec![OB_OK];
+        p.extend_from_slice(&crc.to_le_bytes());
+        vec![ok_resp(req, p)]
+    });
+    mock.expect(|req| vec![status_ok(req)]); // BOOT
+
+    let mut rec = Recorder::new(|seen| seen.iter().any(|e| e == "committed"));
+    let report = flash(&mut mock, &Source::Single(image), &FORCED, &mut rec).unwrap();
+    assert_eq!(report.done.unwrap().boot, FlashBoot::Started);
+    assert_eq!(mock.sent(OB_CMD_BOOT).len(), 1);
+}
+
+#[test]
+fn cancelling_an_erase_stops_between_chunks() {
+    let mut mock = MockTransport::new();
+    expect_hello(&mut mock, OB_FEAT_CRC_LIVE, 0x70000);
+    mock.expect(|req| vec![status_ok(req)]);
+    mock.expect(|req| vec![status_ok(req)]);
+    let mut rec = Recorder::new(|seen| seen.iter().any(|e| e.starts_with("Erase 65536/")));
+    let err = erase(&mut mock, true, None, None, true, &mut rec).unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<Cancelled>(),
+        Some(&Cancelled {
+            phase: Phase::Erase
+        })
+    );
+    assert_eq!(mock.sent(OB_CMD_ERASE).len(), 2);
 }

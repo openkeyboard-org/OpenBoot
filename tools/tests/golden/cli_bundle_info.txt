@@ -1,0 +1,9 @@
+--- stdout ---
+app.obb: 144 bytes
+  chip            CH592
+  variants        2
+    base 0x00002000       48 B  crc32 0x5CB889D8
+    base 0x00039000       48 B  crc32 0x7BCDF026
+--- stderr ---
+--- outcome ---
+exit 0

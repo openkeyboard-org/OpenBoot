@@ -46,6 +46,18 @@ pub trait Transport {
         true
     }
 
+    /// Finish with the device and report whether that worked.
+    ///
+    /// A direct link has nothing to finish, so the default does nothing. The
+    /// QMK tunnel does: it has to relaunch the module and hand the keyboard
+    /// back, and if that fails the keyboard may still be off air. Dropping a
+    /// transport performs the same steps but cannot report the outcome, so
+    /// call this first wherever a failure should reach the user. Safe to call
+    /// more than once.
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn xfer(&mut self, req: &Frame, timeout: Duration) -> Result<Frame, TransportError> {
         let deadline = Instant::now() + timeout;
         self.send_frame(&req.encode())?;

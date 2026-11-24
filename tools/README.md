@@ -171,6 +171,8 @@ USB while it works, and restores the previous setting afterwards.
 is exactly what disables the bootloader's ten second idle auto-boot. So the
 tool boots the application back itself when it closes the tunnel, on every exit
 path including errors — but expect a few seconds of downtime even from `probe`.
+If that hand-back fails, or the keyboard does not confirm it, the tool prints a
+`WARNING` saying so; the exit status still reflects the command itself.
 
 `--no-boot` and `boot --stay` ask to leave the module in the bootloader. Over
 this transport that does not persist: they reset the module into the
@@ -214,5 +216,50 @@ same power cycle. They clear `OB_FEAT_CRC_LIVE`, so `flash` relies on COMMIT's
 stream CRC and skips the live post-COMMIT CRC check. Run `verify` after a power
 cycle for an authoritative result. CH59x reports live CRC support.
 
+## Using it as a library
+
+The crate is a library with the CLI as a thin front end, so another program
+can drive a bootloader with the same code. Turn the `cli` feature off to leave
+out the argument parser:
+
+```toml
+openboot = { git = "https://github.com/openkeyboard-org/OpenBoot", default-features = false }
+```
+
+- `flows` holds probe, flash, verify, erase, boot and bless. They print
+  nothing: each reports its steps to a `flows::Observer` and returns what it
+  found. `console` is the CLI's rendering of those events as text.
+- `flows::prepare_flash` and `flows::execute_flash` split a flash at the point
+  where the plan is known and nothing has been changed, for a caller that
+  shows the plan before going on.
+- An observer can stop a flash or an erase between requests, up to and not
+  including COMMIT. The flow then returns `flows::Cancelled`; the device stays
+  in the bootloader with its session open, and booting it is the caller's
+  decision.
+- `flows::Verification` says how a flashed image was checked. On a device
+  without `FEAT_CRC_LIVE` that is `CommitOnly`, which is not the same claim as
+  a live CRC cross-check and should not be shown as one.
+- `Transport::close` hands the device back and reports whether that worked.
+  Dropping a transport does the same but cannot report a failure.
+- `HidTransport::list` and `HidTransport::open_path` enumerate bootloader
+  interfaces and open one by path. A path selects an interface, not a physical
+  device: after a re-enumeration it may belong to a different unit. The
+  `serial` each listed interface carries is the bootloader's UID, the same
+  value HELLO reports, so compare the two before changing anything.
+
+## Tests
+
 The tests require no hardware. They cover protocol synchronization and golden
-frames, image parsing, retry rules, command flows, and verification errors.
+frames, image parsing, retry rules, command flows, cancellation, and
+verification errors.
+
+The CLI's text is pinned as well, in `tests/golden/`: one transcript per case
+of everything a flow prints against a scripted device, plus the built binary's
+output for the commands that need no device. A deliberate change is accepted
+with
+
+```sh
+UPDATE_GOLDEN=1 cargo test
+```
+
+and reviewed as a diff of that directory.

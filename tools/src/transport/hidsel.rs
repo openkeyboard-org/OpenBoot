@@ -55,6 +55,125 @@ pub fn narrow<T: Copy>(filter: UsageFilter, candidates: &[(u16, u16, T)]) -> Vec
         .collect()
 }
 
+/// One HID interface a selector matched, as enumeration reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HidCandidate {
+    /// The platform's path for the interface. Good for opening it now; NOT an
+    /// identity — a device that re-enumerates may come back under another
+    /// path, and another device may take this one.
+    pub path: String,
+    pub serial: Option<String>,
+    pub product: Option<String>,
+    /// -1 where the platform does not report one.
+    pub interface_number: i32,
+    pub usage_page: u16,
+    pub usage: u16,
+}
+
+/// The interfaces [`open_hid`] would choose between for this VID/PID and
+/// usage, without opening any of them. Each path appears once.
+///
+/// The same narrowing applies: if anything reports the exact usage only those
+/// are returned, and interfaces whose usage the platform could not read
+/// (`0/0`) are returned only when nothing does. A caller that gets several of
+/// the latter cannot tell them apart and must not guess.
+pub fn list_hid(vid: u16, pid: u16, filter: UsageFilter) -> Result<Vec<HidCandidate>> {
+    let api = HidApi::new().context("initialize hidapi")?;
+    let by_id: Vec<_> = api
+        .device_list()
+        .filter(|d| d.vendor_id() == vid && d.product_id() == pid)
+        .collect();
+    let keyed: Vec<(u16, u16, &_)> = by_id
+        .iter()
+        .map(|d| (d.usage_page(), d.usage(), d))
+        .collect();
+    let mut seen = BTreeSet::new();
+    Ok(narrow(filter, &keyed)
+        .into_iter()
+        .filter(|d| seen.insert(d.path()))
+        .map(|d| HidCandidate {
+            path: d.path().to_string_lossy().into_owned(),
+            serial: d.serial_number().map(str::to_string),
+            product: d.product_string().map(str::to_string),
+            interface_number: d.interface_number(),
+            usage_page: d.usage_page(),
+            usage: d.usage(),
+        })
+        .collect())
+}
+
+/// Whether `path` may be opened as the interface `filter` describes, given
+/// every interface on its VID:PID as `(usage page, usage, path)`.
+///
+/// Naming a path does not excuse it from the usage check — that check is what
+/// keeps flash frames out of a keyboard interface. So the path must survive
+/// the same narrowing as discovery, and where the platform could not read the
+/// usages it is accepted only if it is the sole candidate: with several
+/// unreadable interfaces nothing distinguishes the right one from the rest.
+fn check_path(filter: UsageFilter, candidates: &[(u16, u16, &str)], path: &str) -> Result<()> {
+    let keyed: Vec<(u16, u16, (u16, u16, &str))> =
+        candidates.iter().map(|c| (c.0, c.1, *c)).collect();
+    let mut seen = BTreeSet::new();
+    let mut found = narrow(filter, &keyed);
+    found.retain(|c| seen.insert(c.2));
+    let Some(&(page, usage, _)) = found.iter().find(|c| c.2 == path) else {
+        bail!(
+            "{path} is not an interface on usage page 0x{:04X} usage 0x{:04X} \
+             (it may have re-enumerated under another path)",
+            filter.page,
+            filter.usage
+        );
+    };
+    if usage_unknown(page, usage) && found.len() > 1 {
+        bail!(
+            "{path} cannot be told apart from {} other interface(s): this \
+             platform does not report HID usages",
+            found.len() - 1
+        );
+    }
+    Ok(())
+}
+
+/// Open exactly `path`, provided enumeration shows it — now — as the
+/// interface `filter` describes on this VID/PID. `what` names the thing being
+/// opened in diagnostics.
+///
+/// This selects an interface, not a physical device. A path observed earlier
+/// can be reused by something else after a re-enumeration, so a caller that
+/// needs a particular unit must still confirm its identity (the UID in HELLO)
+/// before changing anything on it.
+pub fn open_hid_path(
+    vid: u16,
+    pid: u16,
+    filter: UsageFilter,
+    path: &str,
+    what: &str,
+) -> Result<(HidDevice, String)> {
+    let api = HidApi::new().context("initialize hidapi")?;
+    let by_id: Vec<_> = api
+        .device_list()
+        .filter(|d| d.vendor_id() == vid && d.product_id() == pid)
+        .collect();
+    let paths: Vec<String> = by_id
+        .iter()
+        .map(|d| d.path().to_string_lossy().into_owned())
+        .collect();
+    let candidates: Vec<(u16, u16, &str)> = by_id
+        .iter()
+        .zip(&paths)
+        .map(|(d, p)| (d.usage_page(), d.usage(), p.as_str()))
+        .collect();
+    check_path(filter, &candidates, path)
+        .with_context(|| format!("no {what} at that path for VID=0x{vid:04X} PID=0x{pid:04X}"))?;
+    let info = by_id
+        .iter()
+        .zip(&paths)
+        .find(|(_, p)| p.as_str() == path)
+        .map(|(d, _)| *d)
+        .expect("check_path accepted a path that is in the list");
+    open_and_drain(&api, info)
+}
+
 /// Find and open one interface by VID/PID and usage, optionally filtered by
 /// the USB serial number. `what` names the thing being looked for in
 /// diagnostics. Stale input reports are drained so the first exchange sees a
@@ -125,9 +244,13 @@ pub fn open_hid(
         );
     }
 
+    open_and_drain(&api, info)
+}
+
+fn open_and_drain(api: &HidApi, info: &hidapi::DeviceInfo) -> Result<(HidDevice, String)> {
     let path = info.path().to_string_lossy().into_owned();
     let dev = info
-        .open_device(&api)
+        .open_device(api)
         .with_context(|| format!("open HID device {path}"))?;
 
     // Drain any buffered input reports left over from an earlier session.
@@ -242,6 +365,53 @@ mod tests {
         with_bootloader.push(BOOTLOADER);
         assert_eq!(narrow(BOOT, &with_bootloader), vec!["bootloader"]);
         assert_eq!(narrow(TUNNEL, &with_bootloader), vec!["tunnel"]);
+    }
+
+    /* --- opening a named path ------------------------------------------- */
+
+    #[test]
+    fn a_named_path_must_be_the_interface_the_filter_describes() {
+        let mut set = APP_IFACES.to_vec();
+        set.push(BOOTLOADER);
+
+        assert!(check_path(BOOT, &set, "bootloader").is_ok());
+        // Naming the keyboard does not make it a bootloader.
+        let err = check_path(BOOT, &set, "keyboard").unwrap_err();
+        assert!(format!("{err:#}").contains("not an interface"), "{err:#}");
+        // Nor does naming something that is not there at all.
+        assert!(check_path(BOOT, &set, "gone").is_err());
+    }
+
+    #[test]
+    fn a_named_path_is_refused_when_no_bootloader_is_present() {
+        // The application is running: nothing on this VID:PID is OpenBoot, so
+        // no path among its interfaces may be opened as one.
+        for (_, _, path) in APP_IFACES {
+            assert!(check_path(BOOT, &APP_IFACES, path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_named_path_with_an_unreadable_usage_must_be_the_only_candidate() {
+        // One interface the platform could not describe: there is nothing to
+        // confuse it with, so the caller's choice stands.
+        assert!(check_path(BOOT, &[UNKNOWN_A], "unknown-a").is_ok());
+
+        // Several: the path names one, but nothing says it is the right one.
+        let err = check_path(BOOT, &[UNKNOWN_A, UNKNOWN_B], "unknown-a").unwrap_err();
+        assert!(format!("{err:#}").contains("told apart"), "{err:#}");
+
+        // A real usage elsewhere excludes the unreadable ones entirely.
+        let set = vec![UNKNOWN_A, BOOTLOADER];
+        assert!(check_path(BOOT, &set, "unknown-a").is_err());
+        assert!(check_path(BOOT, &set, "bootloader").is_ok());
+    }
+
+    #[test]
+    fn a_path_listed_twice_is_one_candidate() {
+        // Some backends report an interface once per top-level collection.
+        let set = vec![UNKNOWN_A, UNKNOWN_A];
+        assert!(check_path(BOOT, &set, "unknown-a").is_ok());
     }
 
     /// The tunnel's page is deliberately not VIA's, and deliberately not the

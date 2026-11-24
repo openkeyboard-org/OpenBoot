@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: a.bin: a .bin carries no link base, so give it as PATH@BASE — the base it was LINKED for, not where you would like it
+--- outcome ---
+exit 1

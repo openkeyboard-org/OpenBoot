@@ -1,0 +1,20 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+plan:
+  base address    0x00039000
+  image length    48 bytes (0x30), padded to 4 B
+  erase           1 block x 4096 B = 4096 bytes
+  write           1 frame x <=48 B
+  image crc32     0x7BCDF026
+  verify          NO (--no-verify)
+  boot after      yes
+wrote 48 bytes in <elapsed> s
+commit OK (len 48, crc32 0x7BCDF026)
+boot: device is starting the application
+--- stderr ---
+<CR>erase:   0% (0/4096 B)<CR>erase: 100% (4096/4096 B)
+<CR>write:   0% (0/48 B)<CR>write: 100% (48/48 B)
+--- outcome ---
+exit 0

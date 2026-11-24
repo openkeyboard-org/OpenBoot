@@ -2,7 +2,7 @@
 //!
 //! * [`HexRecord::parse_line`] — one line of text to one typed record. It
 //!   owns syntax, exact length, and the record checksum, and NOTHING else.
-//! * [`Accumulator`] — addressing (segment/linear bases), the EOF policy,
+//! * `Accumulator` — addressing (segment/linear bases), the EOF policy,
 //!   overlap detection, the span guard, and the final gap-filled image.
 //!
 //! Ported from OpenDongle `tools/src/hex.rs`, minus that project's

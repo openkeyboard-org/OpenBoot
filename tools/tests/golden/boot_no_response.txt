@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+--- outcome ---
+ERROR: BOOT is never retried (a lost response is indistinguishable from a successful boot); re-run `openboot probe` to check the device state: BOOT failed: no response before the deadline
+exit 1

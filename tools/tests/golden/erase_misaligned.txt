@@ -1,0 +1,8 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+--- stderr ---
+--- outcome ---
+ERROR: erase range 0x00039800+0x1000 is not aligned to the 4096-byte erase block
+exit 1

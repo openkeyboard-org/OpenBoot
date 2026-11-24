@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: parse a.bin: not a bundle: bad magic
+--- outcome ---
+exit 1

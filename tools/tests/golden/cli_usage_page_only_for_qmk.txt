@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: --usage-page/--usage apply only to --transport qmk
+--- outcome ---
+exit 1

@@ -4,16 +4,6 @@
 //! Safe by default: `probe` (the default subcommand) is read-only, and
 //! `flash`/`erase` print a plan and stop unless `--force` is given.
 
-mod bundle;
-mod client;
-mod flows;
-mod hex;
-mod image;
-mod proto;
-#[cfg(test)]
-mod testutil;
-mod transport;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -21,15 +11,16 @@ use anyhow::{bail, Context, Result};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand, ValueEnum};
 
-use bundle::{load_source, Bundle};
-use flows::{FlashOpts, VerifyMismatch};
-use image::load_image;
-use proto::consts::OB_UART_BAUD;
-use transport::hid::{HidTransport, DEFAULT_PID, DEFAULT_VID};
-use transport::hidsel::UsageFilter;
-use transport::qmk::{QmkOpts, QmkTransport, TUNNEL_USAGE, TUNNEL_USAGE_PAGE};
-use transport::uart::UartTransport;
-use transport::Transport;
+use openboot::bundle::{self, load_source, Bundle};
+use openboot::console::{self, Console};
+use openboot::flows::FlashOpts;
+use openboot::image::load_image;
+use openboot::proto::consts::OB_UART_BAUD;
+use openboot::transport::hid::{HidTransport, DEFAULT_PID, DEFAULT_VID};
+use openboot::transport::hidsel::UsageFilter;
+use openboot::transport::qmk::{QmkOpts, QmkTransport, TUNNEL_USAGE, TUNNEL_USAGE_PAGE};
+use openboot::transport::uart::UartTransport;
+use openboot::transport::Transport;
 
 /// Parse an integer the way Python's `int(s, 0)` does: 0x/0o/0b prefixes
 /// select the radix, otherwise decimal.
@@ -423,8 +414,16 @@ fn open_transport(cli: &Cli) -> Result<Box<dyn Transport>> {
                 "entering the bootloader through the QMK tunnel — the keyboard \
                  goes off air until this finishes"
             );
-            let t =
-                QmkTransport::open(vid, pid, cli.serial.as_deref(), filter, &QmkOpts::default())?;
+            let t = QmkTransport::open(
+                vid,
+                pid,
+                cli.serial.as_deref(),
+                filter,
+                &QmkOpts {
+                    notice: |line| eprintln!("{line}"),
+                    ..QmkOpts::default()
+                },
+            )?;
             eprintln!(
                 "opened QMK tunnel {} (VID=0x{vid:04X} PID=0x{pid:04X}); the \
                  bootloader answered {:.1} s after the module reset",
@@ -452,13 +451,26 @@ fn warn_if_parking_over_the_tunnel(cli: &Cli) {
     );
 }
 
+/// Open the transport, run one command over it, and hand the device back.
+///
+/// The hand-back is explicit so that a failure is seen: over the QMK tunnel it
+/// relaunches the module and returns the keyboard, and a transport that is
+/// merely dropped cannot say that did not work. It does not change the exit
+/// status — the command's own result decides that.
+fn with_device(cli: &Cli, command: impl FnOnce(&mut dyn Transport) -> Result<()>) -> Result<()> {
+    let mut t = open_transport(cli)?;
+    let result = command(t.as_mut());
+    if let Err(e) = t.close() {
+        eprintln!("WARNING: {e:#}");
+    }
+    result
+}
+
 fn run(mut cli: Cli) -> Result<()> {
     let cmd = cli.cmd.take().unwrap_or(Cmd::Probe);
+    let mut con = Console::stdio();
     match cmd {
-        Cmd::Probe => {
-            let mut t = open_transport(&cli)?;
-            flows::probe(t.as_mut())
-        }
+        Cmd::Probe => with_device(&cli, |t| console::probe(t, &mut con)),
         Cmd::Flash {
             image,
             base,
@@ -471,21 +483,22 @@ fn run(mut cli: Cli) -> Result<()> {
             if no_boot {
                 warn_if_parking_over_the_tunnel(&cli);
             }
-            let mut t = open_transport(&cli)?;
-            flows::flash(
-                t.as_mut(),
-                &src,
-                &FlashOpts {
-                    force,
-                    verify: !no_verify,
-                    boot: !no_boot,
-                },
-            )
+            with_device(&cli, |t| {
+                console::flash(
+                    t,
+                    &src,
+                    &FlashOpts {
+                        force,
+                        verify: !no_verify,
+                        boot: !no_boot,
+                    },
+                    &mut con,
+                )
+            })
         }
         Cmd::Verify { image, base } => {
             let src = load_source(&image, base)?;
-            let mut t = open_transport(&cli)?;
-            flows::verify(t.as_mut(), &src)
+            with_device(&cli, |t| console::verify(t, &src, &mut con))
         }
         Cmd::Erase {
             all,
@@ -496,33 +509,23 @@ fn run(mut cli: Cli) -> Result<()> {
             if !all && start.is_none() {
                 bail!("erase needs --all, or both --start and --length");
             }
-            let mut t = open_transport(&cli)?;
-            flows::erase(t.as_mut(), all, start, length, force)
+            with_device(&cli, |t| {
+                console::erase(t, all, start, length, force, &mut con)
+            })
         }
         Cmd::Boot { stay } => {
             if stay {
                 warn_if_parking_over_the_tunnel(&cli);
             }
-            let mut t = open_transport(&cli)?;
-            flows::boot(t.as_mut(), stay)
+            with_device(&cli, |t| console::boot(t, stay, &mut con))
         }
         Cmd::Bundle(cmd) => run_bundle(cmd),
 
         Cmd::Bless { image, base } => {
             let src = load_source(&image, base)?;
             println!("loaded {}: {}", image.display(), src.describe());
-            let mut t = open_transport(&cli)?;
-            flows::bless(t.as_mut(), &src)
+            with_device(&cli, |t| console::bless(t, &src, &mut con))
         }
-    }
-}
-
-/// Exit codes: 0 ok, 1 device/IO/usage, 2 verify mismatch.
-fn exit_code_for(e: &anyhow::Error) -> u8 {
-    if e.downcast_ref::<VerifyMismatch>().is_some() {
-        2
-    } else {
-        1
     }
 }
 
@@ -545,7 +548,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ERROR: {e:#}");
-            ExitCode::from(exit_code_for(&e))
+            ExitCode::from(console::exit_code(&e))
         }
     }
 }
@@ -638,26 +641,5 @@ mod tests {
             "openboot", "erase", "--start", "0x1000", "--length", "0x1000"
         ])
         .is_ok());
-    }
-
-    #[test]
-    fn exit_codes() {
-        let mismatch: anyhow::Error = VerifyMismatch {
-            local_crc: 1,
-            device_crc: Some(2),
-        }
-        .into();
-        assert_eq!(exit_code_for(&mismatch), 2);
-        // Context wrapping must not hide the mismatch.
-        let wrapped = mismatch.context("while flashing");
-        assert_eq!(exit_code_for(&wrapped), 2);
-
-        assert_eq!(exit_code_for(&anyhow::anyhow!("io error")), 1);
-        let dev: anyhow::Error = proto::DeviceError {
-            status: 7,
-            detail: None,
-        }
-        .into();
-        assert_eq!(exit_code_for(&dev), 1);
     }
 }
