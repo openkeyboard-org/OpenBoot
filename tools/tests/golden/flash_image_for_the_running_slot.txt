@@ -1,0 +1,8 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+--- stderr ---
+--- outcome ---
+ERROR: image base 0x00002000 != device write base 0x00039000 (slot B); COMMIT attests images starting at the write base, so flash and bless need an image linked for that slot
+exit 1

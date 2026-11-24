@@ -1,0 +1,10 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+local  crc32 0x5CB889D8 (48 B @ 0x00002000)
+device crc32 0x5CB889D8
+verify OK
+--- stderr ---
+--- outcome ---
+exit 0

@@ -1,0 +1,5 @@
+--- stdout ---
+device is resetting and staying in the bootloader
+--- stderr ---
+--- outcome ---
+exit 0

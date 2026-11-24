@@ -1,0 +1,16 @@
+--- stdout ---
+device:
+  protocol        OBP 0.2
+  bootloader      v0.11 (0x000B)
+  chip            CH592 (rev 0x92)
+  transport       usb
+  app region      0x00002000..0x00070000 (440 KiB)
+  erase block     4096 B
+  write           page 256 B, align 4, max 48 B/frame
+  features        CRC_LIVE
+  uid             0123456789ABCDEF
+  slots           2 (active A, writing B)
+  write window    0x00039000..0x0006F000 (216 KiB)
+--- stderr ---
+--- outcome ---
+exit 0

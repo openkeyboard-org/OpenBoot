@@ -1,0 +1,9 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+bless: attesting 100 B @ 0x00039000, crc32 0x58C932F5 (no erase/write)
+--- stderr ---
+--- outcome ---
+ERROR: verify mismatch: device rejected the committed image CRC 0x58C932F5
+exit 2

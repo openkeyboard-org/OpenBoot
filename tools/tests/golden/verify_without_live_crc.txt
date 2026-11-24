@@ -1,0 +1,11 @@
+--- stdout ---
+device: CH570 rev 0x70, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x0003B000, erase block 4096 B, features none
+        active slot A, writing slot B at 0x0001E000
+local  crc32 0x58C932F5 (100 B @ 0x00002000)
+device crc32 0x58C932F5
+verify OK
+--- stderr ---
+note: CH570 has no FEAT_CRC_LIVE — CRC over flash written this power cycle may read stale data (F26); the result is authoritative after a power cycle
+--- outcome ---
+exit 0

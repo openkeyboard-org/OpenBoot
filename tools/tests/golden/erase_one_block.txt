@@ -1,0 +1,12 @@
+--- stdout ---
+device: CH592 rev 0x92, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x00070000, erase block 4096 B, features CRC_LIVE
+        active slot A, writing slot B at 0x00039000
+plan:
+  erase           0x00039000..0x0003A000 (1 block x 4096 B)
+  note: the first erase invalidates the boot record; the device stays in the bootloader until a new image is committed
+erase OK (1 blocks)
+--- stderr ---
+<CR>erase:   0% (0/4096 B)<CR>erase: 100% (4096/4096 B)
+--- outcome ---
+exit 0

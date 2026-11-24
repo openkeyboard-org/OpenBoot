@@ -10,7 +10,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use hidapi::HidDevice;
 
-use super::hidsel::{self, UsageFilter};
+use super::hidsel::{self, HidCandidate, UsageFilter};
 use super::Transport;
 use crate::proto::consts::OB_MAX_FRAME;
 
@@ -27,6 +27,11 @@ pub const DEFAULT_PID: u16 = 0x0001;
 pub const OB_USAGE_PAGE: u16 = 0xFF00;
 pub const OB_USAGE: u16 = 0x0001;
 
+const BOOTLOADER_USAGE: UsageFilter = UsageFilter {
+    page: OB_USAGE_PAGE,
+    usage: OB_USAGE,
+};
+
 pub struct HidTransport {
     dev: HidDevice,
     /// Human-readable device path for logging.
@@ -38,12 +43,24 @@ impl HidTransport {
     /// USB serial number (the device's 16-hex ROM UID). Stale input reports
     /// are drained so the first xfer sees a fresh reply.
     pub fn open(vid: u16, pid: u16, serial: Option<&str>) -> Result<HidTransport> {
-        let filter = UsageFilter {
-            page: OB_USAGE_PAGE,
-            usage: OB_USAGE,
-        };
-        let (dev, path) = hidsel::open_hid(vid, pid, serial, filter, "bootloader")
+        let (dev, path) = hidsel::open_hid(vid, pid, serial, BOOTLOADER_USAGE, "bootloader")
             .context("is the device in the bootloader?")?;
+        Ok(HidTransport { dev, path })
+    }
+
+    /// Every bootloader interface on this VID/PID, without opening any.
+    pub fn list(vid: u16, pid: u16) -> Result<Vec<HidCandidate>> {
+        hidsel::list_hid(vid, pid, BOOTLOADER_USAGE)
+    }
+
+    /// Open the bootloader at exactly `path` — one [`HidTransport::list`]
+    /// returned, or one a caller watched arrive. The path is re-checked
+    /// against enumeration and against the bootloader's usage before it is
+    /// opened; see [`hidsel::open_hid_path`] for what that does and does not
+    /// establish about which device is on the other end.
+    pub fn open_path(vid: u16, pid: u16, path: &str) -> Result<HidTransport> {
+        let (dev, path) = hidsel::open_hid_path(vid, pid, BOOTLOADER_USAGE, path, "bootloader")
+            .context("is the device still in the bootloader?")?;
         Ok(HidTransport { dev, path })
     }
 }

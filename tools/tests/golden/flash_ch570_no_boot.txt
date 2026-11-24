@@ -1,0 +1,21 @@
+--- stdout ---
+device: CH570 rev 0x70, bootloader v0.11, uid 0123456789ABCDEF
+        app 0x00002000..0x0003B000, erase block 4096 B, features none
+        active slot A, writing slot B at 0x0001E000
+plan:
+  base address    0x0001E000
+  image length    100 bytes (0x64), padded to 4 B
+  erase           1 block x 4096 B = 4096 bytes
+  write           3 frames x <=48 B
+  image crc32     0x58C932F5
+  verify          COMMIT attestation only (no FEAT_CRC_LIVE on this chip)
+  boot after      NO (--no-boot)
+wrote 100 bytes in <elapsed> s
+commit OK (len 100, crc32 0x58C932F5)
+verify: no live CRC on CH570 (XIP may serve stale data this power cycle); COMMIT already attested the streamed image CRC
+boot: skipped (--no-boot); device stays in the bootloader
+--- stderr ---
+<CR>erase:   0% (0/4096 B)<CR>erase: 100% (4096/4096 B)
+<CR>write:   0% (0/100 B)<CR>write:  48% (48/100 B)<CR>write:  96% (96/100 B)<CR>write: 100% (100/100 B)
+--- outcome ---
+exit 0

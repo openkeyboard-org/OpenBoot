@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: --transport qmk requires --vid and --pid — the KEYBOARD's USB identity, not the bootloader's, so there is no default
+--- outcome ---
+exit 1

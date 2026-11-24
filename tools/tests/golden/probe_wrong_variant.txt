@@ -1,0 +1,17 @@
+--- stdout ---
+device:
+  protocol        OBP 0.2
+  bootloader      v0.11 (0x000B)
+  chip            CH592 (rev 0x09)
+  transport       usb
+  app region      0x00002000..0x00070000 (440 KiB)
+  erase block     4096 B
+  write           page 256 B, align 4, max 48 B/frame
+  features        CRC_LIVE
+  uid             0123456789ABCDEF
+  slots           2 (active none, writing A)
+  write window    none — this slot does not fit the silicon
+--- stderr ---
+WARNING: image is built for CH592 (expects chip id 0x92) but the silicon reports chip id 0x09 — you are probably flashing the wrong variant; the device has clamped its app region to what the part actually has
+--- outcome ---
+exit 0

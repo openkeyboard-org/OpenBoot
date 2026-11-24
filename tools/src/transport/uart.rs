@@ -26,8 +26,10 @@ use crate::proto::consts::{OB_UART_BAUD, OB_UART_INTERBYTE_MS};
 /// retries of the failing frame failed too. Writing in small chunks and
 /// letting each drain fixes it, reproducibly:
 ///
-///     pacing on (default)     3/3 PASS, 16384 B in 6-7 s
-///     OPENBOOT_UART_CHUNK=0   2/2 FAIL at 0x2240, 0x2000
+/// ```text
+/// pacing on (default)     3/3 PASS, 16384 B in 6-7 s
+/// OPENBOOT_UART_CHUNK=0   2/2 FAIL at 0x2240, 0x2000
+/// ```
 ///
 /// What is NOT established is where the bytes die. The obvious reading is
 /// that the bridge drops long bursts, but the bench evidence does not pin
@@ -95,6 +97,18 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 fn chunk_drain(n: usize) -> Duration {
     let micros = (n as u64 * 10 * 1_000_000) / u64::from(OB_UART_BAUD);
     Duration::from_micros(micros + micros / 2 + 200)
+}
+
+/// The serial ports this machine has, by the name `UartTransport::open`
+/// takes. Any of them might or might not have a bootloader behind it: nothing
+/// is opened or probed, because writing to an arbitrary serial device is not
+/// something to do on a guess.
+pub fn available_ports() -> Result<Vec<String>> {
+    Ok(serialport::available_ports()
+        .context("list serial ports")?
+        .into_iter()
+        .map(|p| p.port_name)
+        .collect())
 }
 
 pub struct UartTransport {

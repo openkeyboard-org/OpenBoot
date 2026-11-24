@@ -34,6 +34,8 @@ pub(crate) struct MockTransport {
     pub(crate) steps: VecDeque<Step>,
     pub(crate) rx: VecDeque<Vec<u8>>,
     pub(crate) log: Vec<Frame>,
+    /// What `holds_in_bootloader` answers; false imitates the QMK tunnel.
+    pub(crate) holds: bool,
 }
 
 impl MockTransport {
@@ -42,6 +44,7 @@ impl MockTransport {
             steps: VecDeque::new(),
             rx: VecDeque::new(),
             log: Vec::new(),
+            holds: true,
         }
     }
 
@@ -55,6 +58,10 @@ impl MockTransport {
 }
 
 impl Transport for MockTransport {
+    fn holds_in_bootloader(&self) -> bool {
+        self.holds
+    }
+
     fn send_frame(&mut self, frame: &[u8]) -> Result<()> {
         let f = Frame::decode(frame).expect("host sent an undecodable frame");
         self.log.push(f.clone());

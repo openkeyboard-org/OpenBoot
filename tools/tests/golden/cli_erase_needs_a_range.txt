@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: erase needs --all, or both --start and --length
+--- outcome ---
+exit 1

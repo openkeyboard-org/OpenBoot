@@ -1,0 +1,5 @@
+--- stdout ---
+--- stderr ---
+ERROR: --port selects the UART transport and conflicts with --transport usb
+--- outcome ---
+exit 1
