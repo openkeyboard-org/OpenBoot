@@ -534,6 +534,19 @@ impl Transport for QmkTransport {
     }
 }
 
+/// What a reply to BOOT says went wrong, if it is a reply to BOOT and says
+/// so. Anything else — nothing, noise from a module mid-reset, an answer to
+/// some earlier request — is not a refusal.
+fn boot_refusal(frame: &[u8]) -> Option<String> {
+    let reply = Frame::decode(frame).ok()?;
+    if reply.cmd != OB_CMD_BOOT | proto::consts::OB_CMD_RESP_BIT {
+        return None;
+    }
+    let status = *reply.payload.first()?;
+    (status != proto::consts::OB_OK)
+        .then(|| proto::describe_status(status, reply.payload.get(1).copied()))
+}
+
 impl QmkTransport {
     /// Put the module back and hand the keyboard back, once. Both steps are
     /// always attempted; the first failure is what is returned.
@@ -562,7 +575,18 @@ impl QmkTransport {
                 .send_frame(&frame.encode())
                 .context("could not send BOOT to relaunch the module's application");
             // BOOT's answer may legitimately never arrive: the device resets.
-            let _ = self.recv_frame(Instant::now() + Duration::from_millis(400));
+            // One that does arrive and says no is different. The bootloader
+            // refuses when it has nothing it can start, and then it has NOT
+            // reset: the module is still in its bootloader, and reporting a
+            // clean close would say the keyboard is back on the air.
+            let reply = self.recv_frame(Instant::now() + Duration::from_millis(400));
+            if boot.is_ok() {
+                if let Some(refusal) = reply.ok().flatten().and_then(|f| boot_refusal(&f)) {
+                    boot = Err(anyhow!(
+                        "the module refused to start its application: {refusal};                          it is still in its bootloader"
+                    ));
+                }
+            }
         }
 
         // The keyboard answers this from its own state machine, so it does not
@@ -1154,6 +1178,58 @@ mod tests {
             after_close,
             "nothing may be sent after the first close"
         );
+    }
+
+    /// A module with nothing it can start refuses BOOT and stays in its
+    /// bootloader. The keyboard still acknowledges EXIT, so without reading
+    /// BOOT's reply the close would look clean.
+    #[test]
+    fn closing_reports_a_module_that_refused_to_boot() {
+        let link = happy_link(ST_IDLE);
+        let mut t = open(&link).expect("handshake should succeed");
+        link.on_write(|report| {
+            if report[0] == TAG_CONTROL {
+                return match report[2] {
+                    OP_EXIT => vec![control(OP_EXIT, &[OBB_OK])],
+                    _ => vec![],
+                };
+            }
+            let frame = &report[2..2 + usize::from(report[1])];
+            if frame.len() > 4 && frame[2] == OB_CMD_BOOT {
+                let refusal = Frame::new(
+                    OB_CMD_BOOT | OB_CMD_RESP_BIT,
+                    frame[3],
+                    vec![crate::proto::consts::OB_E_VERIFY, 0],
+                );
+                return stream_reports(&framing::encode_sof(&refusal.encode()));
+            }
+            vec![]
+        });
+
+        let err = t.close().expect_err("a refused BOOT is not a clean close");
+        assert!(
+            format!("{err:#}").contains("refused to start its application"),
+            "unhelpful error: {err:#}"
+        );
+        assert_eq!(
+            *link.control_ops().last().unwrap(),
+            OP_EXIT,
+            "the keyboard is handed back all the same"
+        );
+    }
+
+    /// An acknowledged BOOT, or any other frame turning up in its place, is
+    /// not a refusal.
+    #[test]
+    fn only_a_reply_to_boot_that_says_no_counts_as_a_refusal() {
+        let reply = |cmd, payload: Vec<u8>| Frame::new(cmd, 0xF0, payload).encode();
+        let boot = OB_CMD_BOOT | OB_CMD_RESP_BIT;
+        assert!(boot_refusal(&reply(boot, vec![OB_OK])).is_none());
+        assert!(boot_refusal(&reply(OB_CMD_HELLO | OB_CMD_RESP_BIT, vec![0x09, 0])).is_none());
+        assert!(boot_refusal(&[0xFF, 0x00]).is_none(), "noise");
+        assert!(boot_refusal(&reply(boot, vec![])).is_none());
+        let said = boot_refusal(&reply(boot, vec![crate::proto::consts::OB_E_VERIFY, 0])).unwrap();
+        assert!(said.contains("E_VERIFY"), "{said}");
     }
 
     /// A keyboard that never acknowledges EXIT may still be off air; `close`
